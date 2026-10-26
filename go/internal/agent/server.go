@@ -27,6 +27,8 @@ type Power interface {
 type Server struct {
 	Version string
 	Power   Power // nil refuses power requests
+	// Updates runs the app's update and generation requests.
+	Updates *Updater
 
 	mu       sync.Mutex
 	path     string
@@ -40,7 +42,10 @@ func New(path string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{Version: "dev", path: path, cfg: cfg, controls: map[*lockedWriter]struct{}{}}, nil
+	s := &Server{Version: "dev", path: path, cfg: cfg, controls: map[*lockedWriter]struct{}{}, Updates: NewUpdater()}
+	s.Updates.Configure(cfg.Updates)
+	s.Updates.Changed = func() { s.push(s.Updates.State()) }
+	return s, nil
 }
 
 // Reload re-reads the config file and pushes it to every control stream. On
@@ -52,18 +57,25 @@ func (s *Server) Reload() error {
 	}
 	s.mu.Lock()
 	s.cfg = cfg
+	s.mu.Unlock()
+	s.push(configMessage(cfg))
+	s.Updates.Configure(cfg.Updates)
+	return nil
+}
+
+// push sends msg to every control stream.
+func (s *Server) push(msg any) {
+	s.mu.Lock()
 	controls := make([]*lockedWriter, 0, len(s.controls))
 	for w := range s.controls {
 		controls = append(controls, w)
 	}
 	s.mu.Unlock()
-	msg := configMessage(cfg)
 	for _, w := range controls {
 		if err := protocol.WriteJSON(w, msg); err != nil {
-			log.Printf("push config: %v", err)
+			log.Printf("push: %v", err)
 		}
 	}
-	return nil
 }
 
 func (s *Server) config() *File {
@@ -159,7 +171,8 @@ func (s *Server) serveControl(c net.Conn) {
 		delete(s.controls, w)
 		s.mu.Unlock()
 	}()
-	if protocol.WriteJSON(w, s.hello()) != nil || protocol.WriteJSON(w, configMessage(cfg)) != nil {
+	if protocol.WriteJSON(w, s.hello()) != nil || protocol.WriteJSON(w, configMessage(cfg)) != nil ||
+		protocol.WriteJSON(w, s.Updates.State()) != nil {
 		return
 	}
 	for {
@@ -170,25 +183,42 @@ func (s *Server) serveControl(c net.Conn) {
 			}
 			return
 		}
-		var env protocol.Envelope
-		if err := json.Unmarshal(line, &env); err != nil {
+		var req protocol.Request
+		if err := json.Unmarshal(line, &req); err != nil {
 			reject(w, "bad message: "+err.Error())
 			continue
 		}
-		switch env.Type {
-		case protocol.TypePing:
-			protocol.WriteJSON(w, protocol.Envelope{Type: protocol.TypePong})
-		case protocol.TypePoweroff, protocol.TypeReboot:
-			if err := s.power(env.Type); err != nil {
-				reject(w, err.Error())
-				continue
-			}
-			// The echo acknowledges; the VM stopping is the real answer.
-			protocol.WriteJSON(w, protocol.Envelope{Type: env.Type})
-		default:
-			// Newer apps may send what this agent doesn't know yet.
-			log.Printf("control: ignoring message type %q", env.Type)
+		if reply, err := s.request(req); err != nil {
+			reject(w, err.Error())
+		} else {
+			protocol.WriteJSON(w, reply)
 		}
+	}
+}
+
+// request runs one control request and returns its answer.
+func (s *Server) request(req protocol.Request) (any, error) {
+	ack := protocol.Envelope{Type: req.Type}
+	switch req.Type {
+	case protocol.TypePing:
+		return protocol.Envelope{Type: protocol.TypePong}, nil
+	case protocol.TypePoweroff, protocol.TypeReboot:
+		// The echo acknowledges; the VM stopping is the real answer.
+		return ack, s.power(req.Type)
+	case protocol.TypeUpdates:
+		return s.Updates.State(), nil
+	case protocol.TypeUpdateCheck:
+		return ack, s.Updates.Check()
+	case protocol.TypeUpdateApply:
+		return ack, s.Updates.Apply()
+	case protocol.TypeSwitchGeneration:
+		return ack, s.Updates.SwitchGeneration(req.Generation)
+	case protocol.TypeHistory:
+		entries, err := history(s.config(), req.Limit)
+		return protocol.History{Type: protocol.TypeHistory, Entries: entries}, err
+	default:
+		// Answered, so a newer app's later requests still pair with their replies.
+		return nil, fmt.Errorf("unknown request %q", req.Type)
 	}
 }
 

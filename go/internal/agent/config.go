@@ -4,10 +4,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"slices"
+	"strings"
+	"time"
 
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/protocol"
 )
@@ -20,6 +23,70 @@ type File struct {
 	User string `json:"user,omitempty"`
 	// Shell overrides the user's login shell from the passwd database.
 	Shell string `json:"shell,omitempty"`
+	// History overrides the shell history file the command palette reads;
+	// empty picks the login shell's default.
+	History string        `json:"history,omitempty"`
+	Updates UpdatesConfig `json:"updates"`
+}
+
+// UpdatesConfig names where updated systems come from (design.md, Updates
+// and recovery). A check tries BuildHost, then Published.
+type UpdatesConfig struct {
+	BuildHost *BuildHost `json:"buildHost,omitempty"`
+	Published *Published `json:"published,omitempty"`
+	// CheckInterval is a Go duration between background checks; empty or
+	// zero checks only when the app asks.
+	CheckInterval string `json:"checkInterval,omitempty"`
+
+	interval time.Duration
+}
+
+// BuildHost evaluates and builds the guest's system over ssh.
+type BuildHost struct {
+	// Host is the ssh destination ([user@]host); ssh_config supplies the rest.
+	Host string `json:"host"`
+	// Installable is what the build host builds: the toplevel of the guest's
+	// nixosConfiguration.
+	Installable string `json:"installable"`
+	// SSHKey is the identity file ssh uses; empty leaves it to ssh.
+	SSHKey string `json:"sshKey,omitempty"`
+}
+
+// Published is a URL whose body is a toplevel store path, which the guest
+// substitutes from its binary caches.
+type Published struct {
+	URL string `json:"url"`
+}
+
+func (u *UpdatesConfig) sources() []string {
+	var s []string
+	if u.BuildHost != nil {
+		s = append(s, protocol.SourceBuildHost)
+	}
+	if u.Published != nil {
+		s = append(s, protocol.SourcePublished)
+	}
+	return s
+}
+
+func (u *UpdatesConfig) normalize() error {
+	if b := u.BuildHost; b != nil && (b.Host == "" || b.Installable == "") {
+		return errors.New("updates.buildHost needs host and installable")
+	}
+	if p := u.Published; p != nil {
+		if !strings.HasPrefix(p.URL, "http://") && !strings.HasPrefix(p.URL, "https://") {
+			return fmt.Errorf("updates.published.url %q is not an http(s) URL", p.URL)
+		}
+	}
+	u.interval = 0
+	if u.CheckInterval != "" {
+		d, err := time.ParseDuration(u.CheckInterval)
+		if err != nil || d < 0 {
+			return fmt.Errorf("updates.checkInterval %q: want a duration such as 6h", u.CheckInterval)
+		}
+		u.interval = d
+	}
+	return nil
 }
 
 // LoadFile reads and validates a config file, filling Theme.FontSHA256 from
@@ -78,7 +145,10 @@ func (f *File) normalize() error {
 		}
 		t.Theme.FontSHA256 = sum
 	}
-	return nil
+	if t.Snippets == nil {
+		t.Snippets = []protocol.Snippet{}
+	}
+	return f.Updates.normalize()
 }
 
 func (f *File) profile(name string) (protocol.Profile, bool) {

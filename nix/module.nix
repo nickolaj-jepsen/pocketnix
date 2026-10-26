@@ -32,24 +32,41 @@
     };
   };
 
-  agentConfig = {
-    user = cfg.user;
-    hostname = config.networking.hostName;
-    forwards =
-      lib.mapAttrsToList (name: f: {
-        inherit name;
-        inherit (f) guestPort hostPort lan;
-      })
-      cfg.forwards;
-    terminal = {
-      profiles = lib.mapAttrsToList (name: p: {inherit name;} // lib.optionalAttrs (p.command != null) {inherit (p) command;}) cfg.terminal.profiles;
-      inherit (cfg.terminal) defaultProfile;
-      extraKeys = map (map (k: lib.filterAttrs (_: v: v != null) k)) cfg.terminal.extraKeys;
-      theme =
-        {inherit (cfg.terminal.theme) colors;}
-        // lib.optionalAttrs (cfg.terminal.theme.font != null) {font = "${cfg.terminal.theme.font}";};
-    };
-  };
+  agentConfig =
+    {
+      user = cfg.user;
+      hostname = config.networking.hostName;
+      forwards =
+        lib.mapAttrsToList (name: f: {
+          inherit name;
+          inherit (f) guestPort hostPort lan;
+        })
+        cfg.forwards;
+      terminal = {
+        profiles = lib.mapAttrsToList (name: p: {inherit name;} // lib.optionalAttrs (p.command != null) {inherit (p) command;}) cfg.terminal.profiles;
+        inherit (cfg.terminal) defaultProfile;
+        extraKeys = map (map (k: lib.filterAttrs (_: v: v != null) k)) cfg.terminal.extraKeys;
+        theme =
+          {inherit (cfg.terminal.theme) colors;}
+          // lib.optionalAttrs (cfg.terminal.theme.font != null) {font = "${cfg.terminal.theme.font}";};
+        snippets =
+          lib.mapAttrsToList (name: s: {
+            inherit name;
+            inherit (s) command submit;
+          })
+          cfg.terminal.snippets;
+      };
+      updates =
+        lib.optionalAttrs (upd.buildHost.host != null) {
+          buildHost =
+            {inherit (upd.buildHost) host installable;}
+            // lib.optionalAttrs (upd.buildHost.sshKey != null) {inherit (upd.buildHost) sshKey;};
+        }
+        // lib.optionalAttrs (upd.published.url != null) {published = {inherit (upd.published) url;};}
+        // lib.optionalAttrs (upd.checkInterval != null) {inherit (upd) checkInterval;};
+    }
+    // lib.optionalAttrs (cfg.terminal.historyFile != null) {history = cfg.terminal.historyFile;};
+  upd = cfg.updates;
   agentConfigFile = (pkgs.formats.json {}).generate "pocketnix-agent.json" agentConfig;
 
   # Mirrors systemd-boot-builder.py's copy_from_file naming, so the first
@@ -263,6 +280,94 @@ in {
           description = "TTF or OTF file the terminal renders with.";
         };
       };
+      snippets = mkOption {
+        default = {};
+        example = {
+          "Follow the journal" = "journalctl -f";
+          "Attach zellij" = {
+            command = "zellij attach --create main";
+            submit = true;
+          };
+        };
+        description = "Command-palette entries, listed above the shell history. A string is the command.";
+        type = types.attrsOf (types.coercedTo types.str (command: {inherit command;}) (types.submodule {
+          options = {
+            command = mkOption {
+              type = types.str;
+              description = "Text typed into the tab.";
+            };
+            submit = mkOption {
+              type = types.bool;
+              default = false;
+              description = "Press Enter after typing the command.";
+            };
+          };
+        }));
+      };
+      historyFile = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "/home/alice/.local/share/zsh/history";
+        description = ''
+          Shell history the command palette offers. Null reads the login
+          shell's default file (bash, zsh or fish); zsh files are recognized
+          by "zsh" in their name, fish files by ending in `fish_history`.
+        '';
+      };
+    };
+
+    updates = {
+      buildHost = {
+        host = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          example = "alice@desktop";
+          description = ''
+            ssh destination of a build host: a machine with Nix that evaluates
+            and builds this system, which the guest then copies (or
+            substitutes, when the host pushes to a cache the guest uses).
+            Port and the like belong in `programs.ssh.extraConfig`, and its
+            host key in `programs.ssh.knownHosts`: the agent never prompts.
+          '';
+        };
+        flake = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          example = "github:alice/nixos";
+          description = "Flake whose `nixosConfigurations.<hostName>` is this system; the build host refreshes it on every check.";
+        };
+        installable = mkOption {
+          type = types.nullOr types.str;
+          default =
+            if upd.buildHost.flake == null
+            then null
+            else "${upd.buildHost.flake}#nixosConfigurations.${config.networking.hostName}.config.system.build.toplevel";
+          defaultText = lib.literalExpression ''"''${flake}#nixosConfigurations.''${networking.hostName}.config.system.build.toplevel"'';
+          description = "What the build host builds (`nix build --refresh <installable>`).";
+        };
+        sshKey = mkOption {
+          type = types.nullOr types.str;
+          default = "/etc/ssh/ssh_host_ed25519_key";
+          description = "Identity the agent (as root) uses for the build host; null leaves it to ssh. The build host's user must trust its public key.";
+        };
+      };
+      published.url = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "https://ci.example.com/phone/toplevel";
+        description = ''
+          URL whose body is this system's toplevel store path, which CI
+          publishes after pushing the closure to a binary cache the guest
+          trusts. The guest only substitutes it. With a build host too, this
+          is the fallback while the build host can't be reached.
+        '';
+      };
+      checkInterval = mkOption {
+        type = types.nullOr types.str;
+        default = "6h";
+        example = "30m";
+        description = "How often the agent checks for a newer system in the background (a Go duration); null checks only when asked in the app.";
+      };
     };
 
     avf.enable = mkOption {
@@ -285,6 +390,10 @@ in {
           assertion = cfg.terminal.profiles ? ${cfg.terminal.defaultProfile};
           message = "pocketnix.guest.terminal.defaultProfile `${cfg.terminal.defaultProfile}` is not a profile";
         }
+        {
+          assertion = upd.buildHost.host != null -> upd.buildHost.installable != null;
+          message = "pocketnix.guest.updates.buildHost.host needs buildHost.flake (or buildHost.installable)";
+        }
       ];
 
       boot.kernelModules = ["vmw_vsock_virtio_transport"];
@@ -299,6 +408,8 @@ in {
         # changes reload instead, and reach the app live.
         restartIfChanged = false;
         reloadTriggers = [agentConfigFile];
+        # Updates: ssh to the build host, nix to fetch, systemd-run to switch.
+        path = [config.nix.package config.programs.ssh.package config.systemd.package];
         serviceConfig = {
           ExecStart = lib.escapeShellArgs ([(lib.getExe' cfg.package "pocketnix-agent")] ++ lib.concatMap (a: ["--listen" a]) cfg.agent.listen);
           ExecReload = "${lib.getExe' pkgs.coreutils "kill"} -HUP $MAINPID";

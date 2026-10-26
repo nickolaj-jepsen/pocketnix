@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"os"
@@ -57,6 +58,7 @@ func main() {
 		}
 	}()
 
+	go srv.Updates.Periodic(context.Background())
 	for _, addr := range listen {
 		go serve(srv, addr)
 	}

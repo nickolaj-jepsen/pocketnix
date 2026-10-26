@@ -37,6 +37,13 @@
         color15 = "#a6adc8";
       };
       theme.font = "${pkgs.jetbrains-mono}/share/fonts/truetype/JetBrainsMono-Regular.ttf";
+      snippets = {
+        "Follow the journal" = "journalctl -f";
+        "Disk usage" = {
+          command = "df -h /";
+          submit = true;
+        };
+      };
     };
   };
 

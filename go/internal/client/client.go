@@ -52,20 +52,28 @@ type Control struct {
 	configs chan protocol.Config
 	replies chan reply
 	wmu     sync.Mutex
+
+	umu     sync.Mutex
+	updates protocol.Updates
+	uchange chan struct{}
 }
 
 type reply struct {
-	typ string
-	err error
+	typ  string
+	line []byte
+	err  error
 }
 
-// Control opens the control stream and returns once the first config arrived.
+// Control opens the control stream.
 func (c *Client) Control() (*Control, error) {
 	conn, hello, err := c.open(protocol.Hello{Stream: protocol.StreamControl})
 	if err != nil {
 		return nil, err
 	}
-	ctl := &Control{conn: conn, Agent: hello.Agent, configs: make(chan protocol.Config, 16), replies: make(chan reply, 4)}
+	ctl := &Control{
+		conn: conn, Agent: hello.Agent,
+		configs: make(chan protocol.Config, 16), replies: make(chan reply, 4), uchange: make(chan struct{}),
+	}
 	go ctl.read()
 	return ctl, nil
 }
@@ -73,6 +81,11 @@ func (c *Client) Control() (*Control, error) {
 func (c *Control) read() {
 	defer close(c.configs)
 	defer close(c.replies)
+	defer func() {
+		c.umu.Lock()
+		close(c.uchange)
+		c.umu.Unlock()
+	}()
 	for {
 		line, err := protocol.ReadLine(c.conn)
 		if err != nil {
@@ -91,10 +104,20 @@ func (c *Control) read() {
 			if json.Unmarshal(line, &cfg) == nil {
 				c.configs <- cfg
 			}
+		case protocol.TypeUpdates:
+			// Pushed, and the answer to an updates request: both are the latest state.
+			var u protocol.Updates
+			if json.Unmarshal(line, &u) == nil {
+				c.umu.Lock()
+				c.updates = u
+				close(c.uchange)
+				c.uchange = make(chan struct{})
+				c.umu.Unlock()
+			}
 		case protocol.TypeError:
 			c.replies <- reply{err: &protocol.RemoteError{Message: env.Message}}
 		default:
-			c.replies <- reply{typ: env.Type}
+			c.replies <- reply{typ: env.Type, line: line}
 		}
 	}
 }
@@ -103,29 +126,112 @@ func (c *Control) read() {
 // closed when the stream ends.
 func (c *Control) Configs() <-chan protocol.Config { return c.configs }
 
-func (c *Control) request(typ, want string) error {
+// Updates returns the latest update state (zero before the first) and a
+// channel closed when it changes or the stream ends.
+func (c *Control) Updates() (protocol.Updates, <-chan struct{}) {
+	c.umu.Lock()
+	defer c.umu.Unlock()
+	return c.updates, c.uchange
+}
+
+// WaitUpdates returns the first update state for which done is true.
+func (c *Control) WaitUpdates(done func(protocol.Updates) bool) (protocol.Updates, error) {
+	for {
+		u, changed := c.Updates()
+		if u.Type != "" && done(u) {
+			return u, nil
+		}
+		<-changed
+		// A change replaces the channel; the stream's end only closes it.
+		c.umu.Lock()
+		ended := c.uchange == changed
+		c.umu.Unlock()
+		if ended {
+			return u, io.ErrUnexpectedEOF
+		}
+	}
+}
+
+// Run starts an update operation with start (UpdateCheck, UpdateApply, …)
+// and waits for it to finish, returning the final state; the operation's
+// failure is an error.
+func (c *Control) Run(start func() error) (protocol.Updates, error) {
+	before, err := c.WaitUpdates(func(protocol.Updates) bool { return true })
+	if err != nil {
+		return before, err
+	}
+	if err := start(); err != nil {
+		return before, err
+	}
+	u, err := c.WaitUpdates(func(u protocol.Updates) bool {
+		return u.Op > before.Op && u.State == protocol.UpdateIdle
+	})
+	if err == nil && u.Error != "" {
+		err = &protocol.RemoteError{Message: u.Error}
+	}
+	return u, err
+}
+
+func (c *Control) request(req protocol.Request) ([]byte, error) {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
-	if err := protocol.WriteJSON(c.conn, protocol.Envelope{Type: typ}); err != nil {
-		return err
+	if err := protocol.WriteJSON(c.conn, req); err != nil {
+		return nil, err
+	}
+	if req.Type == protocol.TypeUpdates {
+		// Its answer arrives as an Updates, outside the replies.
+		return nil, nil
 	}
 	r, ok := <-c.replies
 	if !ok {
-		return io.ErrUnexpectedEOF
+		return nil, io.ErrUnexpectedEOF
 	}
 	if r.err != nil {
-		return r.err
+		return nil, r.err
+	}
+	want := req.Type
+	if want == protocol.TypePing {
+		want = protocol.TypePong
 	}
 	if r.typ != want {
-		return fmt.Errorf("sent %s, agent answered %s", typ, r.typ)
+		return nil, fmt.Errorf("sent %s, agent answered %s", req.Type, r.typ)
 	}
-	return nil
+	return r.line, nil
 }
 
-func (c *Control) Ping() error     { return c.request(protocol.TypePing, protocol.TypePong) }
-func (c *Control) Poweroff() error { return c.request(protocol.TypePoweroff, protocol.TypePoweroff) }
-func (c *Control) Reboot() error   { return c.request(protocol.TypeReboot, protocol.TypeReboot) }
-func (c *Control) Close() error    { return c.conn.Close() }
+func (c *Control) simple(typ string) error {
+	_, err := c.request(protocol.Request{Type: typ})
+	return err
+}
+
+func (c *Control) Ping() error        { return c.simple(protocol.TypePing) }
+func (c *Control) Poweroff() error    { return c.simple(protocol.TypePoweroff) }
+func (c *Control) Reboot() error      { return c.simple(protocol.TypeReboot) }
+func (c *Control) UpdateCheck() error { return c.simple(protocol.TypeUpdateCheck) }
+func (c *Control) UpdateApply() error { return c.simple(protocol.TypeUpdateApply) }
+
+// RefreshUpdates asks for a fresh update state; it arrives through Updates.
+func (c *Control) RefreshUpdates() error { return c.simple(protocol.TypeUpdates) }
+
+func (c *Control) SwitchGeneration(n int) error {
+	_, err := c.request(protocol.Request{Type: protocol.TypeSwitchGeneration, Generation: n})
+	return err
+}
+
+// History returns up to limit shell history entries (0 for the agent's default).
+func (c *Control) History(limit int) ([]string, error) {
+	line, err := c.request(protocol.Request{Type: protocol.TypeHistory, Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+	var h protocol.History
+	if err := json.Unmarshal(line, &h); err != nil {
+		return nil, err
+	}
+	return h.Entries, nil
+}
+
+func (c *Control) Close() error { return c.conn.Close() }
 
 // PTY is an open terminal session.
 type PTY struct {

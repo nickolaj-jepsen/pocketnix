@@ -17,6 +17,7 @@ const usage = `usage: pocketnix <command> [args]
 commands:
   provision   install the app, grant AVF permissions, push and boot an image
   agent       talk to a guest agent directly (debugging; see pocketnix agent -h)
+  ssh-proxy   an ssh ProxyCommand to the guest's sshd over adb
   version     print the CLI and protocol versions
 `
 
@@ -35,6 +36,8 @@ func main() {
 		err = runProvision(os.Args[2:])
 	case "agent":
 		err = runAgent(os.Args[2:])
+	case "ssh-proxy":
+		err = runSSHProxy(os.Args[2:])
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)

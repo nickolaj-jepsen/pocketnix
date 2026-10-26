@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/client"
+	"github.com/nickolaj-jepsen/pocketnix/go/internal/protocol"
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/transport"
 )
 
@@ -32,6 +33,11 @@ commands:
   forward <port>         splice stdin/stdout to a guest TCP port (an ssh ProxyCommand)
   font <file>            save the configured font
   ping | poweroff | reboot
+  updates                print the update state and generations
+  update-check           look for a newer system; prints the state after
+  update                 check, fetch and switch to a newer system
+  switch-generation <n>  switch to generation <n> (a rollback, or forward again)
+  history [limit]        print the user's shell history, newest first
 `
 
 func runAgent(args []string) error {
@@ -78,6 +84,13 @@ func runAgent(args []string) error {
 		default:
 			return ctl.Reboot()
 		}
+	case "updates", "update-check", "update", "switch-generation", "history":
+		ctl, err := c.Control()
+		if err != nil {
+			return err
+		}
+		defer ctl.Close()
+		return agentUpdates(ctl, cmd, rest)
 	case "exec":
 		return agentExec(c, rest)
 	case "forward":
@@ -106,6 +119,56 @@ func runAgent(args []string) error {
 		fs.Usage()
 		return errUsage
 	}
+}
+
+func agentUpdates(ctl *client.Control, cmd string, args []string) error {
+	var start func() error
+	switch cmd {
+	case "updates":
+		u, err := ctl.WaitUpdates(func(protocol.Updates) bool { return true })
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(u)
+	case "history":
+		limit := 0
+		if len(args) == 1 {
+			n, err := strconv.Atoi(args[0])
+			if err != nil {
+				return err
+			}
+			limit = n
+		}
+		entries, err := ctl.History(limit)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			fmt.Println(e)
+		}
+		return nil
+	case "update-check":
+		start = ctl.UpdateCheck
+	case "update":
+		start = ctl.UpdateApply
+	case "switch-generation":
+		if len(args) != 1 {
+			return errUsage
+		}
+		n, err := strconv.Atoi(args[0])
+		if err != nil {
+			return err
+		}
+		start = func() error { return ctl.SwitchGeneration(n) }
+	}
+	u, err := ctl.Run(start)
+	for _, l := range u.Log {
+		fmt.Fprintln(os.Stderr, l)
+	}
+	if encErr := json.NewEncoder(os.Stdout).Encode(u); err == nil {
+		err = encErr
+	}
+	return err
 }
 
 func parseSize(s string) (rows, cols int, err error) {

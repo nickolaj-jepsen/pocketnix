@@ -6,7 +6,10 @@
 // with its own [Hello] or an [Error] before the stream's own traffic starts:
 //
 //   - control: newline-delimited JSON messages both ways for the app's
-//     lifetime; the agent pushes [Config] first and again on every reload.
+//     lifetime; the agent pushes [Config] and [Updates] first, then [Config]
+//     again on every reload and [Updates] whenever the update state changes.
+//     Requests are answered in order, with a message of the request's own
+//     type or an [Error].
 //   - pty: binary frames (see frame.go) carrying one terminal session.
 //   - forward: raw bytes spliced to a TCP port on the guest's loopback.
 //   - font: the configured font file's bytes, then EOF.
@@ -37,7 +40,30 @@ const (
 	TypePong     = "pong"
 	TypePoweroff = "poweroff"
 	TypeReboot   = "reboot"
+
+	// TypeUpdates is the agent's push of [Updates], and the app's request for
+	// a fresh one (a desktop's `switch` changes generations under the app).
+	TypeUpdates = "updates"
+	// TypeUpdateCheck looks for a newer system now.
+	TypeUpdateCheck = "update-check"
+	// TypeUpdateApply fetches and switches to the newest system, checking
+	// first when no check has found one.
+	TypeUpdateApply = "update-apply"
+	// TypeSwitchGeneration switches to [Request.Generation]: a rollback, or
+	// forward again.
+	TypeSwitchGeneration = "switch-generation"
+	// TypeHistory asks for the user's shell history, answered with [History].
+	TypeHistory = "history"
 )
+
+// Request is an app request on the control stream; fields past Type belong
+// to particular types. Long operations are acknowledged once started; their
+// progress and outcome arrive as [Updates].
+type Request struct {
+	Type       string `json:"type"`
+	Generation int    `json:"generation,omitempty"`
+	Limit      int    `json:"limit,omitempty"`
+}
 
 // Envelope is the part of every JSON message a receiver reads first.
 type Envelope struct {
@@ -96,6 +122,16 @@ type Terminal struct {
 	DefaultProfile string       `json:"defaultProfile"`
 	ExtraKeys      [][]ExtraKey `json:"extraKeys"`
 	Theme          Theme        `json:"theme"`
+	// Snippets are the command palette's module-defined entries.
+	Snippets []Snippet `json:"snippets"`
+}
+
+// Snippet is one command-palette entry.
+type Snippet struct {
+	Name    string `json:"name"`
+	Command string `json:"command"`
+	// Submit presses Enter after inserting Command.
+	Submit bool `json:"submit,omitempty"`
 }
 
 // Profile is one kind of terminal tab.
