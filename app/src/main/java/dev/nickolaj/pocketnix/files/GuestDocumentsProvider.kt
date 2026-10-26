@@ -34,9 +34,15 @@ class GuestDocumentsProvider : DocumentsProvider() {
     // openDocument's close callbacks (the upload of a written file) run here.
     private val io by lazy { Handler(HandlerThread("guest-documents").apply { start() }.looper) }
 
-    override fun onCreate() = true
+    override fun onCreate(): Boolean {
+        // Copies a previous process left: their descriptors died with it.
+        documentsDir().deleteRecursively()
+        return true
+    }
 
     private val ctx: Context get() = context!!
+
+    private fun documentsDir() = File(ctx.cacheDir, "documents")
 
     private fun files(): GuestFiles = ctx.vm.files() ?: throw FileNotFoundException("the VM isn't running; start it in pocketnix")
 
@@ -91,22 +97,34 @@ class GuestDocumentsProvider : DocumentsProvider() {
         val pfdMode = ParcelFileDescriptor.parseMode(mode)
         // A local copy, uploaded when a writer closes it: apps want seekable
         // descriptors, which a stream from the agent isn't.
-        val tmp = File.createTempFile("doc", null, File(ctx.cacheDir, "documents").apply { mkdirs() })
+        val tmp = File.createTempFile("doc", null, documentsDir().apply { mkdirs() })
         // "w" and "wt" start empty; reading and appending need what's there.
-        if (mode.contains('r') || mode.contains('a')) {
-            call { f.read(p).use { input -> tmp.outputStream().use { input.copyTo(it) } } }
+        val copied = mode.contains('r') || mode.contains('a')
+        if (copied) {
+            try {
+                call { f.read(p).use { input -> tmp.outputStream().use { input.copyTo(it, GuestFiles.COPY_BUFFER) } } }
+            } catch (e: Exception) {
+                tmp.delete()
+                throw e
+            }
         }
         if (!mode.contains('w')) {
             return ParcelFileDescriptor.open(tmp, pfdMode).also { tmp.delete() }
         }
+        // An "rw" open that wrote nothing needn't upload the whole file again.
+        val unchanged = if (copied) tmp.length() to tmp.lastModified() else null
         return ParcelFileDescriptor.open(tmp, pfdMode, io) { e ->
             if (e != null) {
                 Log.w(TAG, "$documentId: writer failed, not uploading", e)
                 tmp.delete()
                 return@open
             }
+            if (unchanged == tmp.length() to tmp.lastModified()) {
+                tmp.delete()
+                return@open
+            }
             try {
-                tmp.inputStream().use { input -> f.write(p, tmp.length()).use { input.copyTo(it) } }
+                tmp.inputStream().use { input -> f.write(p, tmp.length()).use { input.copyTo(it, GuestFiles.COPY_BUFFER) } }
                 tmp.delete()
                 notifyChanged(parentOf(documentId))
             } catch (t: Exception) {

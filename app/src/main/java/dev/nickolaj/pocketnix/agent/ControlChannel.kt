@@ -26,7 +26,12 @@ import java.io.IOException
  * the guest has booted, and comes back after a restart. [config] keeps the
  * last config across a reconnect.
  */
-class ControlChannel(private val scope: CoroutineScope, private val appVersion: String) {
+class ControlChannel(
+    private val scope: CoroutineScope,
+    private val appVersion: String,
+    /** How long the agent may be quiet before a ping; three times this without a word drops the stream. */
+    private val keepaliveMs: Long = 15_000,
+) {
     sealed interface Link {
         data object Down : Link
         data class Up(val agentVersion: String) : Link
@@ -66,15 +71,26 @@ class ControlChannel(private val scope: CoroutineScope, private val appVersion: 
     fun start(dialer: AgentDialer) {
         stop()
         job = scope.launch(Dispatchers.IO) {
-            var backoff = 250L
+            var backoff = MIN_BACKOFF_MS
+            var downSince = System.currentTimeMillis()
             while (isActive) {
+                var s: AgentStream? = null
                 try {
-                    val (s, hello) = dialer.open(Protocol.hello("control", appVersion))
+                    val (opened, hello) = dialer.open(Protocol.hello("control", appVersion))
+                    s = opened
+                    // stop() ran while this dialed: the stream is no one's.
+                    if (!isActive) break
                     stream = s
                     _link.value = Link.Up(hello.optString("agent"))
                     Log.i(TAG, "control stream up (agent ${hello.optString("agent")})")
-                    backoff = 250L
-                    readLoop(s)
+                    backoff = MIN_BACKOFF_MS
+                    val keepalive = launch { keepalive(s) }
+                    try {
+                        readLoop(s)
+                    } finally {
+                        keepalive.cancel()
+                        downSince = System.currentTimeMillis()
+                    }
                 } catch (e: AgentException) {
                     Log.w(TAG, "agent refused the control stream: ${e.message}")
                     _link.value = Link.Refused(e.message ?: "refused")
@@ -84,33 +100,73 @@ class ControlChannel(private val scope: CoroutineScope, private val appVersion: 
                 } catch (e: Exception) {
                     Log.w(TAG, "control stream failed", e)
                 } finally {
-                    stream?.let { runCatching { it.close() } }
-                    stream = null
-                    pending?.answer?.complete(Result.failure(IOException("control stream closed")))
-                    if (_link.value is Link.Up) _link.value = Link.Down
+                    s?.let { runCatching { it.close() } }
+                    if (stream === s) stream = null
+                    // A cancelled job's cleanup mustn't touch the link its successor owns.
+                    if (isActive) {
+                        pending?.answer?.complete(Result.failure(IOException("control stream closed")))
+                        if (_link.value is Link.Up) _link.value = Link.Down
+                    }
                 }
                 delay(backoff)
-                backoff = (backoff * 2).coerceAtMost(2_000L)
+                // An agent that hasn't come in two minutes isn't booting: stop asking virtmgr every 2 s.
+                val cap = if (System.currentTimeMillis() - downSince > SLOW_AFTER_MS) MAX_SLOW_BACKOFF_MS else MAX_BACKOFF_MS
+                backoff = (backoff * 2).coerceAtMost(cap)
+            }
+        }
+    }
+
+    @Volatile private var lastHeard = 0L
+
+    /**
+     * Pings a quiet agent and drops a stream that stays silent: vsock reads
+     * have no timeout, so a hung guest would otherwise look connected forever.
+     */
+    private suspend fun keepalive(s: AgentStream) {
+        lastHeard = System.currentTimeMillis()
+        while (true) {
+            delay(keepaliveMs)
+            val quiet = System.currentTimeMillis() - lastHeard
+            if (quiet >= keepaliveMs * KEEPALIVE_MISSES) {
+                Log.w(TAG, "agent silent for ${quiet / 1000}s; reconnecting")
+                runCatching { s.close() }
+                return
+            }
+            // No id: whichever pong comes back only shows the agent is alive.
+            if (quiet >= keepaliveMs) scope.launch(Dispatchers.IO) {
+                runCatching { synchronized(s) { Protocol.writeJson(s.output, JSONObject().put("type", "ping")) } }
             }
         }
     }
 
     private fun readLoop(s: AgentStream) {
         while (true) {
-            val msg = JSONObject(Protocol.readLine(s.input))
-            val type = msg.optString("type")
-            val p = pending
-            when {
-                type == "config" -> _config.value = GuestConfig.parse(msg)
-                // Pushed, and the answer to [refreshUpdates]; never a pending request's reply.
-                type == "updates" -> _updates.value = Updates.parse(msg)
-                type == "error" -> p?.takeIf { it.answers(msg) }?.answer?.complete(Result.failure(AgentException(msg.optString("message"))))
-                    ?: Log.w(TAG, "agent error: ${msg.optString("message")}")
-                p != null && type == p.type && p.answers(msg) -> p.answer.complete(Result.success(msg))
-                // The late answer to a request that already timed out.
-                msg.has("id") -> Log.w(TAG, "late answer: $type")
-                else -> _events.tryEmit(msg)
+            val line = Protocol.readLine(s.input)
+            lastHeard = System.currentTimeMillis()
+            // One message the app can't read mustn't drop the link (and reconnect in a loop).
+            try {
+                handle(JSONObject(line))
+            } catch (e: Exception) {
+                Log.w(TAG, "unreadable message from the agent: ${e.message}")
             }
+        }
+    }
+
+    private fun handle(msg: JSONObject) {
+        val type = msg.optString("type")
+        val p = pending
+        when {
+            type == "config" -> _config.value = GuestConfig.parse(msg)
+            // Pushed, and the answer to [refreshUpdates]; never a pending request's reply.
+            type == "updates" -> _updates.value = Updates.parse(msg)
+            type == "error" -> p?.takeIf { it.answers(msg) }?.answer?.complete(Result.failure(AgentException(msg.optString("message"))))
+                ?: Log.w(TAG, "agent error: ${msg.optString("message")}")
+            p != null && type == p.type && p.answers(msg) -> p.answer.complete(Result.success(msg))
+            // The late answer to a request that already timed out.
+            msg.has("id") -> Log.w(TAG, "late answer: $type")
+            // The keepalive's.
+            type == "pong" -> {}
+            else -> _events.tryEmit(msg)
         }
     }
 
@@ -156,6 +212,8 @@ class ControlChannel(private val scope: CoroutineScope, private val appVersion: 
         job?.cancel()
         job = null
         stream?.let { runCatching { it.close() } }
+        stream = null
+        pending?.answer?.complete(Result.failure(IOException("control stream closed")))
         _link.value = Link.Down
     }
 
@@ -167,5 +225,10 @@ class ControlChannel(private val scope: CoroutineScope, private val appVersion: 
 
     private companion object {
         const val TAG = "ControlChannel"
+        const val MIN_BACKOFF_MS = 250L
+        const val MAX_BACKOFF_MS = 2_000L
+        const val MAX_SLOW_BACKOFF_MS = 30_000L
+        const val SLOW_AFTER_MS = 120_000L
+        const val KEEPALIVE_MISSES = 3
     }
 }

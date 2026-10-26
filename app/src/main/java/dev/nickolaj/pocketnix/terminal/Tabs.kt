@@ -54,7 +54,11 @@ class Tabs(private val context: Context, consoleBackend: TerminalBackend, privat
     var visible = false
         set(v) {
             field = v
-            if (v) seen(current())
+            if (v) {
+                seen(current())
+                // Output that arrived while hidden wasn't drawn.
+                view?.onTextChanged(current().session)
+            }
         }
 
     private var nextId = 0
@@ -123,7 +127,8 @@ class Tabs(private val context: Context, consoleBackend: TerminalBackend, privat
 
     private inner class Client : TerminalSessionClient {
         override fun onTextChanged(changedSession: TerminalSession) {
-            view?.onTextChanged(changedSession)
+            // Hidden or locked, a redraw per output batch is battery for nothing.
+            if (visible) view?.onTextChanged(changedSession)
         }
 
         override fun onTitleChanged(changedSession: TerminalSession) {

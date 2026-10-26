@@ -82,9 +82,16 @@ private fun UpdatesBody(u: Updates, refused: String?, onSwitch: (Int) -> Unit, o
         refused?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         u.error?.takeIf { !u.busy }?.let { Text("Failed: $it", color = MaterialTheme.colorScheme.error) }
         if (u.rebootPending) {
+            // A reboot ends every tab: the first tap only asks.
+            var confirmingReboot by remember { mutableStateOf(false) }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Running a generation it didn't boot; a reboot boots it fully.", Modifier.weight(1f), fontSize = 13.sp)
-                TextButton(onClick = onReboot) { Text("Reboot") }
+                Text(
+                    if (confirmingReboot) "Reboot now? Every tab ends." else "Running a generation it didn't boot; a reboot boots it fully.",
+                    Modifier.weight(1f), fontSize = 13.sp,
+                )
+                TextButton(onClick = { if (confirmingReboot) onReboot() else confirmingReboot = true }) {
+                    Text(if (confirmingReboot) "Confirm" else "Reboot")
+                }
             }
         }
         if (u.log.isNotEmpty() && (u.busy || u.error != null)) {

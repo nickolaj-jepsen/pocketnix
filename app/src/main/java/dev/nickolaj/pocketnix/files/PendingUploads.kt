@@ -38,7 +38,7 @@ object PendingUploads {
             val data = File(target.path.removeSuffix(".path"))
             val path = target.readText()
             try {
-                data.inputStream().use { input -> files.write(path, data.length()).use { input.copyTo(it) } }
+                data.inputStream().use { input -> files.write(path, data.length()).use { input.copyTo(it, GuestFiles.COPY_BUFFER) } }
                 data.delete()
                 target.delete()
                 done++

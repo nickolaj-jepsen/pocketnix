@@ -23,12 +23,36 @@ class ConsoleLog(private val capacity: Int = 256 * 1024) {
      */
     fun append(b: ByteArray, off: Int, n: Int) {
         synchronized(this) {
-            for (i in 0 until n) {
-                ring[(start + size) % capacity] = b[off + i]
-                if (size < capacity) size++ else start = (start + 1) % capacity
-            }
+            record(b, off, n)
             for (l in listeners) if (!l.onOutput(b, off, n)) listeners.remove(l)
         }
+    }
+
+    private fun record(b: ByteArray, off: Int, n: Int) {
+        // Only the last [capacity] bytes of a big write survive anyway.
+        val skip = (n - capacity).coerceAtLeast(0)
+        var from = off + skip
+        var left = n - skip
+        while (left > 0) {
+            val end = (start + size) % capacity
+            val chunk = minOf(left, capacity - end)
+            System.arraycopy(b, from, ring, end, chunk)
+            from += chunk
+            left -= chunk
+            val overflow = (size + chunk - capacity).coerceAtLeast(0)
+            size = minOf(size + chunk, capacity)
+            start = (start + overflow) % capacity
+        }
+    }
+
+    /** The recorded output, oldest first. */
+    @Synchronized
+    fun snapshot(): ByteArray {
+        val out = ByteArray(size)
+        val first = minOf(size, capacity - start)
+        System.arraycopy(ring, start, out, 0, first)
+        System.arraycopy(ring, 0, out, first, size - first)
+        return out
     }
 
     fun append(s: String) = s.toByteArray(Charsets.UTF_8).let { append(it, 0, it.size) }
@@ -36,8 +60,7 @@ class ConsoleLog(private val capacity: Int = 256 * 1024) {
     /** Replays recent output to [sink], then keeps it attached. Blocks while the sink is behind. */
     fun attach(sink: TerminalBackend.Sink) {
         synchronized(this) {
-            val snapshot = ByteArray(size)
-            for (i in 0 until size) snapshot[i] = ring[(start + i) % capacity]
+            val snapshot = snapshot()
             if (snapshot.isEmpty() || sink.onOutput(snapshot, 0, snapshot.size)) listeners.add(sink)
         }
     }

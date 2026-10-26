@@ -84,4 +84,16 @@ class KeysTest {
         m.hold(Modifier.CTRL, false)
         assertFalse(m.consume(Modifier.CTRL))
     }
+
+    @Test
+    fun aHeldKeyWhoseKeyUpWentElsewhereIsReleased() {
+        val m = Modifiers()
+        m.tap(Modifier.ALT)
+        m.tap(Modifier.ALT)
+        m.hold(Modifier.CTRL, true)
+        m.releaseHeld()
+        assertFalse(m.consume(Modifier.CTRL))
+        // A locked tap is the user's own, not a lost key-up.
+        assertTrue(m.consume(Modifier.ALT))
+    }
 }

@@ -28,6 +28,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -44,6 +45,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import dev.nickolaj.pocketnix.Vm
 import dev.nickolaj.pocketnix.agent.ControlChannel
 import dev.nickolaj.pocketnix.agent.ExtraKey
@@ -84,7 +86,16 @@ fun MainScreen(vm: Vm) {
         TerminalController(context, vm.tabs, vm.settings, Modifiers()) { modifierRevision++ }
     }
 
-    val missing = remember(state, showSettings) { missingRequirements(context, vm) }
+    DisposableEffect(controller) { onDispose { controller.release() } }
+    var keepScreenOn by remember { mutableStateOf(vm.settings.keepScreenOn) }
+
+    // Resumes count: `pocketnix provision` grants and pushes while the app is open.
+    var resumes by remember { mutableIntStateOf(0) }
+    LifecycleResumeEffect(Unit) {
+        resumes++
+        onPauseOrDispose {}
+    }
+    val missing = remember(state, showSettings, resumes) { missingRequirements(context, vm) }
     // Recomputed on theme changes: the module's background frames the terminal.
     val background = remember(themeRevision) { Color(TerminalTheme.background) }
     val foreground = remember(themeRevision) { Color(TerminalTheme.foreground) }
@@ -125,7 +136,7 @@ fun MainScreen(vm: Vm) {
             canStart = missing.isEmpty(),
             foreground = foreground,
             onStart = { vm.start() },
-            onStop = vm::stop,
+            onStop = { confirm = "Stop the VM? The guest shuts down and every tab ends." to vm::stop },
             composerOpen = composerOpen,
             onComposer = { composerOpen = !composerOpen },
             updateAvailable = updates?.available != null,
@@ -134,8 +145,16 @@ fun MainScreen(vm: Vm) {
             MenuItem("Commands", enabled = agentUp) { dismiss(); showPalette = true }
             MenuItem("System and updates", enabled = agentUp) { dismiss(); showUpdates = true }
             MenuItem("Settings") { dismiss(); showSettings = true }
+            MenuItem(if (keepScreenOn) "✓ Keep screen on" else "Keep screen on") {
+                dismiss()
+                keepScreenOn = !keepScreenOn
+                controller.setKeepScreenOn(keepScreenOn)
+            }
             if (running) {
-                MenuItem("Reboot", enabled = agentUp) { dismiss(); vm.reboot() }
+                MenuItem("Reboot", enabled = agentUp) {
+                    dismiss()
+                    confirm = "Reboot the guest? Every tab ends." to vm::reboot
+                }
                 if (ownsGuest) {
                     MenuItem("Restart with boot menu") {
                         dismiss()

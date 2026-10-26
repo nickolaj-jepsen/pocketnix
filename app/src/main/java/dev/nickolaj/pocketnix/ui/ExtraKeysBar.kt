@@ -84,16 +84,20 @@ private fun ExtraKeyButton(key: ExtraKey, modifiers: Modifiers, revision: Int, f
                             }
                         }
                     }
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        if (down.position.y - change.position.y > swipe && key.popup != null) {
-                            swiped = true
-                            repeat?.cancel()
+                    // The gesture is cancelled when the key changes under the finger (a live config push).
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (down.position.y - change.position.y > swipe && key.popup != null) {
+                                swiped = true
+                                repeat?.cancel()
+                            }
+                            if (!change.pressed) break
                         }
-                        if (!change.pressed) break
+                    } finally {
+                        repeat?.cancel()
                     }
-                    repeat?.cancel()
                     when {
                         swiped -> onKey(key.popup!!)
                         !repeated -> onKey(key.key)
@@ -121,9 +125,9 @@ private fun ExtraKeyButton(key: ExtraKey, modifiers: Modifiers, revision: Int, f
 @Composable
 fun Composer(controller: TerminalController, foreground: Color) {
     var text by rememberSaveable { mutableStateOf("") }
+    // Kept when no running tab took it, so a dictated paragraph isn't lost to an ended tab.
     fun send(submit: Boolean) {
-        controller.paste(text, submit)
-        text = ""
+        if (controller.paste(text, submit)) text = ""
     }
     Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(

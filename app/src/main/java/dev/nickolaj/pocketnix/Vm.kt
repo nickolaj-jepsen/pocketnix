@@ -20,6 +20,7 @@ import dev.nickolaj.pocketnix.engine.VmEngine
 import dev.nickolaj.pocketnix.engine.VmState
 import dev.nickolaj.pocketnix.forward.PortForwards
 import dev.nickolaj.pocketnix.service.VmService
+import dev.nickolaj.pocketnix.terminal.Tab
 import dev.nickolaj.pocketnix.terminal.TabAlerts
 import dev.nickolaj.pocketnix.terminal.Tabs
 import dev.nickolaj.pocketnix.terminal.TerminalTheme
@@ -106,6 +107,8 @@ class Vm(private val app: Context) {
         scope.launch {
             control.link.map { it is ControlChannel.Link.Up }.distinctUntilChanged().collect { up ->
                 GuestDocumentsProvider.rootsChanged(app)
+                // A boot lands in a shell, not the console; a reconnect keeps the tabs it has.
+                if (up && tabs.all().none { it.kind is Tab.Kind.Pty && it.session.isRunning }) openTab()
                 // Saves that missed the guest go in now.
                 val f = if (up) files() else null
                 if (f != null) withContext(Dispatchers.IO) { PendingUploads.retry(app, f) }
@@ -141,9 +144,11 @@ class Vm(private val app: Context) {
                 .collectLatest { (fw, running) ->
                     val dialer = if (running) _engine.value.dialer else null
                     _forwardErrors.value = withContext(Dispatchers.IO) { forwards.apply(fw, dialer) }
-                    // A port another app holds may come free (that app stopped): keep trying.
+                    // A port another app holds may come free (that app stopped): keep trying, less and less often.
+                    var wait = FORWARD_RETRY_MS
                     while (_forwardErrors.value.isNotEmpty() && dialer != null) {
-                        delay(FORWARD_RETRY_MS)
+                        delay(wait)
+                        wait = (wait * 2).coerceAtMost(FORWARD_RETRY_MAX_MS)
                         _forwardErrors.value = withContext(Dispatchers.IO) { forwards.apply(fw, dialer) }
                     }
                 }
@@ -337,6 +342,7 @@ class Vm(private val app: Context) {
         const val GRACEFUL_STOP_MS = 30_000L
         const val AGENT_LATE_MS = 120_000L
         const val FORWARD_RETRY_MS = 30_000L
+        const val FORWARD_RETRY_MAX_MS = 600_000L
         const val HISTORY_LIMIT = 1000
     }
 }

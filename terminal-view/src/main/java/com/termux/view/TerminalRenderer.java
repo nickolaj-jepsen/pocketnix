@@ -8,6 +8,7 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.os.Build;
+import android.util.SparseIntArray;
 
 import com.termux.terminal.TerminalBuffer;
 import com.termux.terminal.TerminalEmulator;
@@ -36,6 +37,11 @@ public final class TerminalRenderer {
     final int mFontLineSpacingAndAscent;
 
     private final float[] asciiMeasures = new float[127];
+
+    // Widths of the other code points as first measured: box drawing, TUI bars and prompt
+    // glyphs otherwise cost a measureText per cell per frame. Lives as long as this font.
+    private final SparseIntArray mCodePointMeasures = new SparseIntArray();
+    private static final int MAX_CODE_POINT_MEASURES = 4096;
 
     // Podroid: hoisted out of the per-cell hot path. Image-heavy frames (chafa,
     // gnuplot) draw one Sixel bitmap per cell — allocating a fresh RectF each
@@ -158,7 +164,7 @@ public final class TerminalRenderer {
                 // This could happen for some fonts which are not truly monospace, or for more exotic characters such as
                 // smileys which android font renders as wide.
                 // If this is detected, we draw this code point scaled to match what wcwidth() expects.
-                final float measuredCodePointWidth = (codePoint < asciiMeasures.length) ? asciiMeasures[codePoint] : mTextPaint.measureText(line,
+                final float measuredCodePointWidth = (codePoint < asciiMeasures.length) ? asciiMeasures[codePoint] : measure(codePoint, line,
                     currentCharIndex, charsForCodePoint);
                 final boolean fontWidthMismatch = Math.abs(measuredCodePointWidth / mFontWidth - codePointWcWidth) > 0.01;
 
@@ -205,6 +211,15 @@ public final class TerminalRenderer {
             drawTextRun(canvas, line, palette, heightOffset, lastRunStartColumn, columnWidthSinceLastRun, lastRunStartIndex, charsSinceLastRun,
                 measuredWidthForRun, cursorColor, cursorShape, lastRunStyle, reverseVideo || invertCursorTextColor || lastRunInsideSelection);
         }
+    }
+
+    private float measure(int codePoint, char[] line, int index, int chars) {
+        int i = mCodePointMeasures.indexOfKey(codePoint);
+        if (i >= 0) return Float.intBitsToFloat(mCodePointMeasures.valueAt(i));
+        float width = mTextPaint.measureText(line, index, chars);
+        if (mCodePointMeasures.size() >= MAX_CODE_POINT_MEASURES) mCodePointMeasures.clear();
+        mCodePointMeasures.put(codePoint, Float.floatToRawIntBits(width));
+        return width;
     }
 
     private void drawTextRun(Canvas canvas, char[] text, int[] palette, float y, int startColumn, int runWidthColumns,

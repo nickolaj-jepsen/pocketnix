@@ -40,6 +40,11 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("startOnBoot", false)
         set(v) = prefs.edit { putBoolean("startOnBoot", v) }
 
+    /** Off by default: the screen is the phone's biggest battery draw. */
+    var keepScreenOn: Boolean
+        get() = prefs.getBoolean("keepScreenOn", false)
+        set(v) = prefs.edit { putBoolean("keepScreenOn", v) }
+
     var textSize: Int
         get() = prefs.getInt("textSize", 0)
         set(v) = prefs.edit { putInt("textSize", v) }

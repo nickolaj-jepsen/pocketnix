@@ -308,7 +308,11 @@ public class TerminalSession extends TerminalOutput {
                 Exit exit = (Exit) msg.obj;
                 // Output delivered before the exit may still be queued.
                 while ((bytesRead = mProcessToTerminalIOQueue.read(mReceiveBuffer, false)) > 0) {
-                    mEmulator.append(mReceiveBuffer, bytesRead);
+                    try {
+                        mEmulator.append(mReceiveBuffer, bytesRead);
+                    } catch (RuntimeException e) {
+                        Logger.logStackTraceWithMessage(mClient, LOG_TAG, "terminal output the emulator couldn't handle", e);
+                    }
                 }
                 cleanupResources(exit.status);
 

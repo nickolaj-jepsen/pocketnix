@@ -1,6 +1,7 @@
 package dev.nickolaj.pocketnix.agent
 
 import org.json.JSONObject
+import java.io.BufferedInputStream
 import java.io.Closeable
 import java.io.InputStream
 import java.io.OutputStream
@@ -21,9 +22,13 @@ fun interface AgentDialer {
     fun dial(): AgentStream
 }
 
-/** Dials and exchanges Hellos; returns the stream ready for its own traffic and the agent's Hello. */
+/**
+ * Dials and exchanges Hellos; returns the stream ready for its own traffic and
+ * the agent's Hello. Its input is buffered from the first byte, so reading
+ * lines and frames costs no syscall per byte.
+ */
 fun AgentDialer.open(hello: JSONObject): Pair<AgentStream, JSONObject> {
-    val s = dial()
+    val s = BufferedStream(dial())
     try {
         Protocol.writeJson(s.output, hello)
         return s to Protocol.readHello(s.input)
@@ -31,6 +36,10 @@ fun AgentDialer.open(hello: JSONObject): Pair<AgentStream, JSONObject> {
         s.close()
         throw e
     }
+}
+
+private class BufferedStream(s: AgentStream) : AgentStream by s {
+    override val input: InputStream = BufferedInputStream(s.input, 64 * 1024)
 }
 
 class TcpDialer(private val host: String, private val port: Int) : AgentDialer {

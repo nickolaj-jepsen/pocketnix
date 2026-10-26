@@ -38,7 +38,11 @@ class PtyBackend(
             )
             stream = s
             connected.countDown()
-            if (closed.get()) return
+            // Closed while dialing: close() found no stream to close.
+            if (closed.get()) {
+                runCatching { s.close() }
+                return
+            }
             while (true) {
                 val f = Frames.read(s.input) ?: break
                 when (f.type) {

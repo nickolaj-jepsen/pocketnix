@@ -148,6 +148,12 @@ class Modifiers {
         if (down) held.add(m) else held.remove(m)
     }
 
+    /** Lets go of held keys whose key-up will go elsewhere (a dialog, the lock screen took focus). */
+    @Synchronized
+    fun releaseHeld() {
+        held.clear()
+    }
+
     /** Whether [m] would apply to the next key, without using up a one-shot modifier. */
     @Synchronized
     fun active(m: Modifier): Boolean = m in held || states.getValue(m) != State.OFF

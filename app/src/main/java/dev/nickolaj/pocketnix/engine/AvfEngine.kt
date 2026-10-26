@@ -39,6 +39,8 @@ class AvfEngine(private val context: Context) : VmEngine {
     private var generation = 0L
     @Volatile private var stopRequested = false
     private var consoleStreams: Pair<InputStream, OutputStream>? = null
+    // The last launch's, for a stop that gets no onStopped to clean up after.
+    private var console: ConsoleLog? = null
     private var lastError: String? = null
 
     override val dialer: AgentDialer?
@@ -70,6 +72,7 @@ class AvfEngine(private val context: Context) : VmEngine {
         val settings = settingsOf()
         val gen = ++generation
         lastError = null
+        this.console = console
         try {
             val disk = DiskImage.file(context)
             if (!disk.exists()) throw IllegalStateException("No disk image yet: run `pocketnix provision`")
@@ -190,7 +193,7 @@ class AvfEngine(private val context: Context) : VmEngine {
                 if (gen == generation && vm != null) {
                     Log.w(TAG, "no onStopped after stop(); assuming stopped")
                     generation++
-                    vm = null
+                    console?.let { cleanup(it) }
                     _state.value = VmState.Stopped
                 }
             }, 10, TimeUnit.SECONDS)

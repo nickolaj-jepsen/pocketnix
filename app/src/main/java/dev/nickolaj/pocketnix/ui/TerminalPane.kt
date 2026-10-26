@@ -37,14 +37,19 @@ class TerminalController(
     private var textSize = settings.textSize.takeIf { it > 0 }
         ?: (DEFAULT_TEXT_DP * context.resources.displayMetrics.density).toInt()
 
+    private var tabsView: Tabs.View? = null
+
     fun create(): TerminalView = TerminalView(context, null).also { v ->
         view = v
         v.setTerminalViewClient(Client())
         v.setTextSize(textSize)
         v.isFocusable = true
         v.isFocusableInTouchMode = true
-        v.keepScreenOn = true
-        tabs.view = object : Tabs.View {
+        v.keepScreenOn = settings.keepScreenOn
+        // A held volume key's key-up goes wherever focus went (a dialog, the lock screen).
+        v.setOnFocusChangeListener { _, focused -> if (!focused) releaseHeld() }
+        v.viewTreeObserver.addOnWindowFocusChangeListener { focused -> if (!focused) releaseHeld() }
+        val tv = object : Tabs.View {
             override fun onTextChanged(session: TerminalSession) {
                 if (v.currentSession === session) v.onScreenUpdated()
             }
@@ -52,6 +57,36 @@ class TerminalController(
             override fun onColorsChanged() = v.invalidate()
             override fun onCursorStateChange(visible: Boolean) = v.setTerminalCursorBlinkerState(visible, true).let {}
         }
+        tabsView = tv
+        tabs.view = tv
+    }
+
+    /** Detaches the view, which [Tabs] outlives along with the activity it belongs to. */
+    fun release() {
+        if (tabs.view === tabsView) tabs.view = null
+        tabsView = null
+        view?.removeCallbacks(applyTextSize)
+        if (textSizePending) settings.textSize = textSize
+        textSizePending = false
+        view = null
+    }
+
+    fun setKeepScreenOn(on: Boolean) {
+        settings.keepScreenOn = on
+        view?.keepScreenOn = on
+    }
+
+    private fun releaseHeld() {
+        modifiers.releaseHeld()
+        onModifiersChanged()
+    }
+
+    // A size change reflows the whole scrollback: apply a pinch's at most every [TEXT_SIZE_DELAY_MS].
+    private var textSizePending = false
+    private val applyTextSize = Runnable {
+        textSizePending = false
+        settings.textSize = textSize
+        view?.setTextSize(textSize)
     }
 
     fun show(tab: Tab) {
@@ -92,12 +127,17 @@ class TerminalController(
         view?.currentSession?.write(text)
     }
 
-    /** Types [text] into the current tab as a paste (bracketed when the app asked); [submit] presses Enter. */
-    fun paste(text: String, submit: Boolean) {
-        val session = view?.currentSession ?: return
-        val emulator = session.emulator ?: return
-        if (text.isEmpty() && !submit) return
+    /**
+     * Types [text] into the current tab as a paste (bracketed when the app
+     * asked); [submit] presses Enter. False when no running session took it.
+     */
+    fun paste(text: String, submit: Boolean): Boolean {
+        val session = view?.currentSession ?: return false
+        val emulator = session.emulator ?: return false
+        if (!session.isRunning) return false
+        if (text.isEmpty() && !submit) return true
         session.write(Paste.encode(text, emulator.isBracketedPasteMode, submit))
+        return true
     }
 
     private inner class Client : TerminalViewClient {
@@ -106,8 +146,11 @@ class TerminalController(
                 val px = (textSize * scale).toInt().coerceIn(MIN_TEXT_PX, MAX_TEXT_PX)
                 if (px != textSize) {
                     textSize = px
-                    settings.textSize = px
-                    view?.setTextSize(px)
+                    val v = view
+                    if (v != null && !textSizePending) {
+                        textSizePending = true
+                        v.postDelayed(applyTextSize, TEXT_SIZE_DELAY_MS)
+                    }
                 }
                 return 1.0f
             }
@@ -201,5 +244,6 @@ class TerminalController(
         const val DEFAULT_TEXT_DP = 12
         const val MIN_TEXT_PX = 12
         const val MAX_TEXT_PX = 96
+        const val TEXT_SIZE_DELAY_MS = 150L
     }
 }

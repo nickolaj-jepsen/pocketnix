@@ -1,6 +1,5 @@
 package dev.nickolaj.pocketnix.agent
 
-import java.io.DataInputStream
 import java.io.EOFException
 import java.io.IOException
 import java.io.InputStream
@@ -31,15 +30,21 @@ object Frames {
     fun read(input: InputStream): Frame? {
         val type = input.read()
         if (type < 0) return null
-        val din = DataInputStream(input)
-        try {
-            val n = din.readInt()
-            if (n < 0 || n > MAX_PAYLOAD) throw IOException("frame length $n")
-            val payload = ByteArray(n)
-            din.readFully(payload)
-            return Frame(type, payload)
-        } catch (e: EOFException) {
-            throw IOException("stream ended inside a frame", e)
+        val header = ByteArray(4)
+        readFully(input, header)
+        val n = ByteBuffer.wrap(header).int
+        if (n < 0 || n > MAX_PAYLOAD) throw IOException("frame length $n")
+        val payload = ByteArray(n)
+        readFully(input, payload)
+        return Frame(type, payload)
+    }
+
+    private fun readFully(input: InputStream, b: ByteArray) {
+        var off = 0
+        while (off < b.size) {
+            val r = input.read(b, off, b.size - off)
+            if (r < 0) throw IOException("stream ended inside a frame", EOFException())
+            off += r
         }
     }
 

@@ -39,6 +39,16 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
     var tcp by remember { mutableStateOf(s.tcpBackend) }
     var tcpAddress by remember { mutableStateOf(s.tcpAddress) }
     val stopped = vm.state.value == VmState.Stopped || vm.state.value is VmState.Failed
+    val maxDisk = remember { DiskImage.maxGb(context) }
+    val memoryError = memory.toIntOrNull().let { if (it == null || it !in MIN_MEMORY_MB..Settings.MAX_MEMORY_MB) "$MIN_MEMORY_MB–${Settings.MAX_MEMORY_MB} MB" else null }
+    // The saved value stays valid even when free space has shrunk below it since.
+    val diskError = disk.toIntOrNull().let {
+        when {
+            it == null || it < MIN_DISK_GB -> "At least $MIN_DISK_GB GB"
+            it > maxDisk && it != s.diskGb -> "At most $maxDisk GB: that's the free space"
+            else -> null
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -46,8 +56,8 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!stopped) Text("Changes apply when the VM next starts or the guest reboots.")
-                NumberField("Memory (MB)", memory) { memory = it }
-                NumberField("Disk (GB, only grows)", disk) { disk = it }
+                NumberField("Memory (MB)", memory, memoryError) { memory = it }
+                NumberField("Disk (GB, only grows)", disk, diskError) { disk = it }
                 Toggle("One vCPU per host core", allCpus) { allCpus = it }
                 Toggle("Network", network) { network = it }
                 Toggle("Start when the phone boots", onBoot) { onBoot = it }
@@ -60,9 +70,9 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                memory.toIntOrNull()?.takeIf { it in 512..Settings.MAX_MEMORY_MB }?.let { s.memoryMb = it }
-                disk.toIntOrNull()?.takeIf { it in 4..DiskImage.maxGb(context) }?.let { s.diskGb = it }
+            TextButton(enabled = memoryError == null && diskError == null, onClick = {
+                s.memoryMb = memory.toInt()
+                s.diskGb = disk.toInt()
                 s.cpus = if (allCpus) 0 else 1
                 s.network = network
                 s.startOnBoot = onBoot
@@ -76,12 +86,17 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
     )
 }
 
+private const val MIN_MEMORY_MB = 512
+private const val MIN_DISK_GB = 4
+
 @Composable
-private fun NumberField(label: String, value: String, onChange: (String) -> Unit) {
+private fun NumberField(label: String, value: String, error: String?, onChange: (String) -> Unit) {
     OutlinedTextField(
-        value, { v -> onChange(v.filter(Char::isDigit)) },
+        value, { v -> onChange(v.filter(Char::isDigit).take(9)) },
         label = { Text(label) },
         singleLine = true,
+        isError = error != null,
+        supportingText = error?.let { { Text(it) } },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
     )
 }

@@ -1,6 +1,7 @@
 package dev.nickolaj.pocketnix.agent
 
 import org.json.JSONObject
+import java.io.EOFException
 import java.io.FilterInputStream
 import java.io.IOException
 import java.io.InputStream
@@ -95,7 +96,7 @@ class GuestFiles(private val dialer: AgentDialer, private val appVersion: String
     fun share(name: String, size: Long, input: InputStream): String {
         val (s, _) = dialer.open(Protocol.hello("share", appVersion) { put("name", name); put("size", size) })
         return s.use {
-            val copied = input.copyTo(s.output)
+            val copied = input.copyTo(s.output, COPY_BUFFER)
             if (copied != size) throw IOException("read $copied of $size bytes")
             s.output.flush()
             s.shutdownOutput()
@@ -109,18 +110,31 @@ class GuestFiles(private val dialer: AgentDialer, private val appVersion: String
         if (msg.optString("type") == "error") throw AgentException(msg.optString("message"))
         return msg.optString("path")
     }
+
+    companion object {
+        /** For copies to and from file streams: vsock moves big writes far cheaper than copyTo's 8 KiB. */
+        const val COPY_BUFFER = 64 * 1024
+    }
 }
 
-private class LimitedInput(input: InputStream, private var left: Long) : FilterInputStream(input) {
+/** The [left] bytes the agent announced; a stream that ends sooner is an error, not a short file. */
+internal class LimitedInput(input: InputStream, private var left: Long) : FilterInputStream(input) {
     override fun read(): Int {
         if (left <= 0) return -1
-        return super.read().also { if (it >= 0) left-- }
+        val b = super.read()
+        if (b < 0) throw truncated()
+        left--
+        return b
     }
 
     override fun read(b: ByteArray, off: Int, len: Int): Int {
         if (left <= 0) return -1
+        if (len == 0) return 0
         val n = super.read(b, off, minOf(len.toLong(), left).toInt())
-        if (n > 0) left -= n
+        if (n < 0) throw truncated()
+        left -= n
         return n
     }
+
+    private fun truncated() = EOFException("the guest's file stream ended $left bytes early")
 }
