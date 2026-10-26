@@ -632,6 +632,12 @@ in {
         enable = mkDefault true;
         algorithm = mkDefault "zstd";
       };
+      # Persistent (a failed boot stays readable) but small, and fewer flash
+      # syncs; a config's own extraConfig replaces these.
+      services.journald.extraConfig = mkDefault ''
+        SystemMaxUse=256M
+        SyncIntervalSec=15m
+      '';
       # No display: a login on tty1 is a session nobody sees.
       systemd.services."getty@tty1".enable = false;
       systemd.services."autovt@tty1".enable = false;

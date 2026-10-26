@@ -11,6 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+        with:
+          use-flakehub: false
       # The package's checkPhase runs the Go tests, the --inject ones included.
       - run: nix build .#pocketnix .#pocketnix-cli -L
 
@@ -26,6 +29,9 @@ jobs:
       - uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: system-features = nixos-test benchmark big-parallel kvm
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+        with:
+          use-flakehub: false
       - run: nix build .#checks.x86_64-linux.agent -L
 
   android:
@@ -33,6 +39,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+        with:
+          use-flakehub: false
       - run: nix build .#pocketnix --out-link pocketnix
       # POCKETNIX_AGENT runs the app's agent client against the real agent.
       # assembleRelease (unsigned here) runs R8, whose rules only a release build exercises.
@@ -49,6 +58,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+        with:
+          use-flakehub: false
       - run: nix build .#checks.aarch64-linux.avf-boot -L
 
   # The x86_64 desktop path: its natively assembled image still evaluates.
@@ -57,6 +69,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+        with:
+          use-flakehub: false
       - run: nix flake check --no-build --all-systems
 
   fmt:
@@ -64,5 +79,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+        with:
+          use-flakehub: false
       - run: nix fmt -- --check .
       - run: test -z "$(nix develop --command gofmt -l go)"

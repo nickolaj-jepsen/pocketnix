@@ -83,7 +83,8 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 - The VM is cattle: rebuildable from the flake and a binary cache. Consumers
   back up their own state (e.g. /home) from inside the guest.
 - One stable release signing key: a signature change forces an uninstall, and
-  uninstalling deletes the disk image.
+  uninstalling deletes the disk image. The CLI pins its certificate: provision
+  refuses a downloaded release any other v2/v3 signer signed.
 
 ## Updates and recovery
 
@@ -97,6 +98,9 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
     evaluates and builds the configured flake ref there and prints the toplevel
     path. The agent then copies the closure (`nix copy --from ssh-ng://<host>`,
     or substitutes it when the host pushes to a cache the guest uses).
+    `nixosModules.buildHost` is that host's half: an untrusted user whose
+    forced command per guest key builds one pinned installable or runs
+    `nix-daemon --stdio`, and nothing else.
   - **Published path (cache).** CI evaluates and builds, pushes to a binary
     cache, and publishes the toplevel path as one line of text at a URL. The
     agent fetches the path and realises it with `--max-jobs 0`, substituting only.

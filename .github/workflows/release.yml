@@ -17,6 +17,9 @@ jobs:
       - name: The tag names VERSION
         run: test "${GITHUB_REF_NAME}" = "v$(cat VERSION)" || { echo "tag ${GITHUB_REF_NAME} but VERSION is $(cat VERSION)"; exit 1; }
       - uses: cachix/install-nix-action@v31
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+        with:
+          use-flakehub: false
       - name: Release key
         env:
           KEYSTORE: ${{ secrets.POCKETNIX_RELEASE_KEYSTORE }}
@@ -37,6 +40,8 @@ jobs:
           mkdir dist
           cp app/build/outputs/apk/release/app-release.apk "dist/pocketnix-$ver.apk"
           nix develop --command sh -c "\$ANDROID_HOME/build-tools/*/apksigner verify --print-certs dist/pocketnix-$ver.apk"
+          # The certificate provision pins (go/cmd/pocketnix/apksig.go), or provision would refuse this release.
+          POCKETNIX_RELEASE_APK=$PWD/dist/pocketnix-$ver.apk nix develop --command go -C go test -run TestReleaseSignerRealAPK -v ./cmd/pocketnix/ | grep -- '--- PASS'
           (cd dist && sha256sum "pocketnix-$ver.apk" > "pocketnix-$ver.apk.sha256")
       - name: Publish
         env:

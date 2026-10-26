@@ -47,6 +47,8 @@
 
     nixosModules.guest = import ./nix/module.nix {inherit self;};
     nixosModules.default = self.nixosModules.guest;
+    # For the desktop the guests update from (`pocketnix.guest.updates.buildHost`).
+    nixosModules.buildHost = ./nix/build-host.nix;
 
     nixosConfigurations.example = nixpkgs.lib.nixosSystem {
       modules = [

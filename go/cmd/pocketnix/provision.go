@@ -397,7 +397,14 @@ func downloadRelease(version, dst string) error {
 		f.Close()
 		return err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		return err
+	}
+	// On a fresh phone, adb would install anything; the pin is what makes it ours.
+	if err := checkReleaseSigner(dst, releaseCertSHA256); err != nil {
+		return fmt.Errorf("refusing %s: %w", url, err)
+	}
+	return nil
 }
 
 // upload sends the image in chunks, skipping all-zero ones: the app sizes

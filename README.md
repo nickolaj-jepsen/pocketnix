@@ -40,11 +40,26 @@ updates, rolls back and lists generations:
 ```nix
 pocketnix.guest.updates = {
   # Builds `<flake>#nixosConfigurations.<hostName>`; trusts the guest's host key.
-  buildHost = { host = "alice@desktop"; flake = "github:alice/nixos"; };
+  buildHost = { host = "pocketnix-build@desktop"; flake = "github:alice/nixos"; };
   # Fallback: a URL whose body is the toplevel path, in a cache the guest trusts.
   published.url = "https://ci.example.com/phone/toplevel";
 };
 programs.ssh.knownHosts.desktop.publicKey = "ssh-ed25519 …";
+```
+
+On the desktop, `nixosModules.buildHost` gives the guest a user whose key does
+nothing but build that system and serve the copy, so a stolen phone gets no
+shell there:
+
+```nix
+imports = [pocketnix.nixosModules.buildHost];
+pocketnix.buildHost = {
+  enable = true;
+  guests.phone = {
+    publicKey = "ssh-ed25519 …"; # the guest's /etc/ssh/ssh_host_ed25519_key.pub
+    installable = "github:alice/nixos#nixosConfigurations.phone.config.system.build.toplevel";
+  };
+};
 ```
 
 To push from a desktop over USB instead, use `pocketnix ssh-proxy` as an ssh

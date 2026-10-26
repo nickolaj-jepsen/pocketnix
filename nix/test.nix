@@ -37,7 +37,7 @@ in
         };
         updates = {
           buildHost = {
-            host = "nix@builder";
+            host = "pocketnix-build@builder";
             # A symlink to a store path is an installable too.
             installable = "/etc/pocketnix-next";
             sshKey = "/etc/pocketnix-test/id_ed25519";
@@ -73,6 +73,15 @@ in
     nodes.builder = {nodes, ...}: let
       inherit (nodes.phone.system.build) next;
     in {
+      imports = [self.nixosModules.buildHost];
+      # The phone's key only builds /etc/pocketnix-next and serves the copy.
+      pocketnix.buildHost = {
+        enable = true;
+        guests.phone = {
+          publicKey = snakeOilEd25519PublicKey;
+          installable = "/etc/pocketnix-next";
+        };
+      };
       # A fixed host key, which the phone lists in its known hosts.
       services.openssh = {
         enable = true;
@@ -86,10 +95,6 @@ in
       environment.etc."ssh/ssh_host_ed25519_key" = {
         source = snakeOilEd25519PrivateKey;
         mode = "0600";
-      };
-      users.users.nix = {
-        isNormalUser = true;
-        openssh.authorizedKeys.keys = [snakeOilEd25519PublicKey];
       };
       environment.etc."pocketnix-next".source = next."1";
       virtualisation.additionalPaths = [next."1" next."2"];
@@ -213,9 +218,18 @@ in
           assert u["available"] == "${next."1"}" and u["source"] == "buildHost", u
           u = json.loads(client.succeed(f"{A} update"))
           assert u["current"] == "${next."1"}" and "available" not in u, u
-          assert any("copying from nix@builder" in l for l in u["log"]), u["log"]
+          assert any("copying from pocketnix-build@builder" in l for l in u["log"]), u["log"]
           phone.succeed("grep -qx 1 /etc/pocketnix-test-generation")
           assert phone.succeed("systemctl show -P MainPID pocketnix-agent") == pid
+
+      with subtest("the build host's key runs nothing but the build and the copy"):
+          ssh = "timeout 120 ssh -o BatchMode=yes -i /etc/pocketnix-test/id_ed25519 pocketnix-build@builder"
+          out = phone.fail(f"{ssh} id </dev/null 2>&1")
+          assert "refusing: id" in out, out
+          phone.fail(f"{ssh} -W localhost:5000 </dev/null")
+          # Whatever installable it asks for, it gets the pinned one.
+          out = phone.succeed(f"{ssh} nix build --print-out-paths /nix/store/nonexistent </dev/null 2>&1")
+          assert out.strip().splitlines()[-1] == "${next."1"}", out
 
       with subtest("with the build host down, the published path is substituted"):
           builder.succeed("systemctl start nix-serve.service")
