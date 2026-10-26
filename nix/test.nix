@@ -11,6 +11,19 @@
   cacheSecret = pkgs.writeText "cache.sec" "pocketnix-test-builder:cNCiLJRJKtj/NYr6HKMIB0f0JS0K51uY8Boefn15NtUdEVxl8P73M2yibOJqDDCQxM7dSd+4OSUHzjzwmf6O5A==";
   cachePublic = "pocketnix-test-builder:HRFcZfD+9zNsomziagwwkMTO3UnfuDklB8488Jn+juQ=";
   # The published path is https only: a self-signed certificate for the builder's address, trusted by the phone.
+  # Calls the FileChooser backend as xdg-desktop-portal would, as the user.
+  portalCall = pkgs.writeShellScript "portal-call" ''
+    exec ${pkgs.util-linux}/bin/runuser -u nixos -- ${pkgs.coreutils}/bin/env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+      ${pkgs.systemd}/bin/busctl --user --json=short --timeout=120 call \
+      org.freedesktop.impl.portal.desktop.pocketnix /org/freedesktop/portal/desktop org.freedesktop.impl.portal.FileChooser "$@"
+  '';
+  # Runs a guest command as the user in the background, its stdout in /tmp/<unit>.out and status in /tmp/<unit>.status.
+  guestBg = pkgs.writeShellScript "guest-bg" ''
+    unit=$1
+    shift
+    exec ${pkgs.systemd}/bin/systemd-run --unit="$unit" -p User=nixos -E PATH=/run/current-system/sw/bin \
+      ${pkgs.bash}/bin/sh -c '"$@" > /tmp/'"$unit"'.out; echo $? > /tmp/'"$unit"'.status' sh "$@"
+  '';
   tlsFor = ip:
     pkgs.runCommand "pocketnix-test-tls" {nativeBuildInputs = [pkgs.openssl];} ''
       mkdir $out
@@ -80,6 +93,9 @@ in
           (extendModules {modules = [{environment.etc."pocketnix-test-generation".text = n;}];}).config.system.build.toplevel);
       networking.firewall.allowedTCPPorts = [9100];
       users.users.nixos.openssh.authorizedKeys.keys = [snakeOilPublicKey];
+      # The FileChooser portal is a user service on the session bus.
+      xdg.portal.enable = true;
+      users.users.nixos.linger = true;
       specialisation.retheme.configuration.pocketnix.guest.terminal.theme.colors.background = pkgs.lib.mkForce "#123456";
     };
 
@@ -141,6 +157,9 @@ in
       inherit (nodes.phone.system.build) next;
     in ''
       import json
+      import shlex
+      import time
+      import urllib.parse
 
       # Absolute: the systemd-run unit below doesn't get the system PATH.
       A = "${cli}/bin/pocketnix agent --connect tcp:${nodes.phone.networking.primaryIPAddress}:9100"
@@ -179,6 +198,7 @@ in
           assert status == 3, status
 
       with subtest("a forward reaches the guest's sshd"):
+          phone.wait_for_open_port(22)
           client.succeed("install -m 600 ${snakeOilPrivateKey} /tmp/key")
           out = client.succeed(
               "ssh -i /tmp/key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
@@ -255,6 +275,107 @@ in
           phone.succeed("test \"$(stat -c %U /home/nixos/notes.txt)\" = nixos")
           phone.succeed("test -z \"$(ls -A /var/lib/pocketnix/file-temps)\"")
           phone.fail("ls -A /home/nixos | grep -q pocketnix-")
+
+      # Transfers: the CLI's `events` (still running) shows each request, and the CLI answers it as the app would.
+      seen = [len(client.succeed("cat /tmp/events").splitlines())]
+
+      def await_event(kind):
+          for _ in range(120):
+              lines = client.succeed("cat /tmp/events").splitlines()
+              for i in range(seen[0], len(lines)):
+                  e = json.loads(lines[i])
+                  if e["type"] == kind:
+                      seen[0] = i + 1
+                      return e
+              time.sleep(0.5)
+          raise Exception(f"no {kind} event")
+
+      def guest_bg(unit, *cmd):
+          phone.succeed("${guestBg} " + unit + " " + " ".join(shlex.quote(c) for c in cmd))
+
+      def guest_status(unit):
+          phone.wait_until_succeeds(f"test -s /tmp/{unit}.status", timeout=60)
+          return int(phone.succeed(f"cat /tmp/{unit}.status"))
+
+      with subtest("guest programs share files and text through the app"):
+          phone.succeed("runuser -u nixos -- pocketnix-guest share /home/nixos/notes.txt")
+          assert await_event("share")["paths"] == ["notes.txt"]
+          phone.fail("runuser -u nixos -- pocketnix-guest share /etc/hostname")
+          phone.succeed("runuser -u nixos -- pocketnix-guest share --text hello there")
+          assert await_event("share")["text"] == "hello there"
+
+      with subtest("a pick lands the app's files where the guest asked"):
+          phone.succeed("runuser -u nixos -- mkdir /home/nixos/picked")
+          guest_bg("pick", "pocketnix-guest", "pick", "--multiple", "--type", "image/*", "--dest", "/home/nixos/picked")
+          e = await_event("pick")
+          assert e["multiple"] and e["types"] == ["image/*"], e
+          client.succeed("echo second > /tmp/two.jpg")
+          client.succeed(f"{A} pick-answer {e['ref']} /tmp/pic.jpg /tmp/two.jpg")
+          assert guest_status("pick") == 0
+          assert phone.succeed("cat /tmp/pick.out").split() == ["/home/nixos/picked/pic.jpg", "/home/nixos/picked/two.jpg"]
+          phone.succeed("grep -qx picture /home/nixos/picked/pic.jpg")
+          phone.succeed("test \"$(stat -c %U /home/nixos/picked/two.jpg)\" = nixos")
+          guest_bg("pick2", "pocketnix-guest", "pick")
+          client.succeed(f"{A} pick-answer {await_event('pick')['ref']}")
+          assert guest_status("pick2") == 1
+
+      with subtest("a save sends a file the user can read, from anywhere"):
+          phone.succeed("runuser -u nixos -- sh -c 'echo report > /tmp/report.txt'")
+          guest_bg("save", "pocketnix-guest", "save", "--name", "r.txt", "/tmp/report.txt")
+          e = await_event("save")
+          assert e["name"] == "r.txt" and e["size"] == 7, e
+          client.succeed(f"{A} save-answer {e['ref']} /tmp/saved.txt")
+          assert client.succeed("cat /tmp/saved.txt") == "report\n"
+          assert guest_status("save") == 0
+          # The user opens the file, so the root agent never reads one for them.
+          phone.fail("runuser -u nixos -- pocketnix-guest save /etc/shadow")
+
+      with subtest("typed clipboard data crosses only when asked for"):
+          phone.succeed("printf 'PNG-data' > /tmp/img.png")
+          guest_bg("copy", "sh", "-c", "pocketnix-guest copy --type image/png < /tmp/img.png")
+          e = await_event("guest-clipboard-data")
+          assert e["mime"] == "image/png" and e["size"] == 8, e
+          client.succeed(f"{A} save-answer {e['ref']} /tmp/clip.png")
+          assert client.succeed("cat /tmp/clip.png") == "PNG-data"
+          assert guest_status("copy") == 0
+          assert phone.succeed("runuser -u nixos -- pocketnix-guest paste --list-types") == "image/png\n"
+          client.succeed(f"{A} set-clipboard --type image/jpeg --type text/plain caption")
+          assert phone.succeed("runuser -u nixos -- pocketnix-guest paste --list-types").split() == ["image/jpeg", "text/plain"]
+          assert phone.succeed("runuser -u nixos -- pocketnix-guest paste") == "caption"
+          client.succeed("printf jpeg-bytes > /tmp/a.jpg")
+          guest_bg("paste", "pocketnix-guest", "paste", "--type", "image/jpeg")
+          e = await_event("clipboard-request")
+          assert e["mime"] == "image/jpeg", e
+          client.succeed(f"{A} paste-answer {e['ref']} /tmp/a.jpg")
+          assert guest_status("paste") == 0
+          assert phone.succeed("cat /tmp/paste.out") == "jpeg-bytes"
+
+      with subtest("the FileChooser portal backend picks and saves through the app"):
+          phone.wait_for_unit("user@1000.service")
+          phone.succeed("systemd-run --unit=portal-open sh -c '${portalCall} OpenFile osssa{sv} /org/freedesktop/portal/desktop/request/1_1/a test \"\" Open 1 multiple b true > /tmp/open.json'")
+          e = await_event("pick")
+          assert e["multiple"], e
+          client.succeed("echo doc > /tmp/doc.pdf")
+          client.succeed(f"{A} pick-answer {e['ref']} /tmp/doc.pdf")
+          phone.wait_until_succeeds("grep -q uris /tmp/open.json", timeout=60)
+          out = json.loads(phone.succeed("cat /tmp/open.json"))
+          assert out["data"][0] == 0 and out["data"][1]["uris"]["data"] == ["file:///home/nixos/Inbox/doc.pdf"], out
+          phone.succeed("systemd-run --unit=portal-cancel sh -c '${portalCall} OpenFile osssa{sv} /org/freedesktop/portal/desktop/request/1_1/b test \"\" Open 0 > /tmp/cancel.json'")
+          client.succeed(f"{A} pick-answer {await_event('pick')['ref']}")
+          phone.wait_until_succeeds("test -s /tmp/cancel.json", timeout=60)
+          assert json.loads(phone.succeed("cat /tmp/cancel.json"))["data"][0] == 1
+          # Android's picker comes first; the app writes the file the portal named, which then goes there.
+          phone.succeed("systemd-run --unit=portal-save sh -c '${portalCall} SaveFile osssa{sv} /org/freedesktop/portal/desktop/request/1_1/c test \"\" Save 1 current_name s out.txt > /tmp/save.json'")
+          e = await_event("save")
+          assert e["name"] == "out.txt" and "size" not in e, e
+          client.succeed(f"systemd-run --unit=save-answer {A} save-answer {e['ref']} /tmp/portal-saved.txt")
+          phone.wait_until_succeeds("grep -q uris /tmp/save.json", timeout=60)
+          out = json.loads(phone.succeed("cat /tmp/save.json"))
+          path = urllib.parse.unquote(out["data"][1]["uris"]["data"][0].removeprefix("file://"))
+          assert path.startswith("/home/nixos/.cache/pocketnix/saves/") and path.endswith("/out.txt"), path
+          phone.succeed(f"runuser -u nixos -- sh -c 'echo saved-by-app > {path}'")
+          client.wait_until_succeeds("grep -qx saved-by-app /tmp/portal-saved.txt", timeout=60)
+          phone.wait_until_succeeds(f"! test -e {path}", timeout=30)
 
       with subtest("an update from the build host arrives over ssh and switches"):
           # Test VMs boot without a system profile; a real guest has one from its first boot.

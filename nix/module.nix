@@ -115,6 +115,23 @@
   '';
   agentConfigFile = (pkgs.formats.json {}).generate "pocketnix-agent.json" agentConfig;
 
+  portalBusName = "org.freedesktop.impl.portal.desktop.pocketnix";
+  # The portal definition and its D-Bus activation, which goes through the user unit below.
+  portalPackage = pkgs.runCommand "pocketnix-portal" {} ''
+    mkdir -p $out/share/xdg-desktop-portal/portals $out/share/dbus-1/services
+    cat > $out/share/xdg-desktop-portal/portals/pocketnix.portal <<EOF
+    [portal]
+    DBusName=${portalBusName}
+    Interfaces=org.freedesktop.impl.portal.FileChooser
+    EOF
+    cat > $out/share/dbus-1/services/${portalBusName}.service <<EOF
+    [D-BUS Service]
+    Name=${portalBusName}
+    Exec=${lib.getExe' cfg.package "pocketnix-guest"} portal
+    SystemdService=pocketnix-portal.service
+    EOF
+  '';
+
   # Mirrors systemd-boot-builder.py's copy_from_file naming, so the first
   # `switch` adopts generation 1's files instead of leaving strays behind.
   efiName = path: builtins.unsafeDiscardStringContext "/EFI/nixos/${baseNameOf (dirOf path)}-${baseNameOf path}.efi";
@@ -492,6 +509,17 @@ in {
           root and system units, which have no session bus.
         '';
       };
+      portal = mkOption {
+        type = types.bool;
+        default = config.xdg.portal.enable;
+        defaultText = lib.literalExpression "config.xdg.portal.enable";
+        description = ''
+          Serve xdg-desktop-portal's FileChooser with Android's document
+          pickers (`pocketnix-guest pick` and `save`), and make it the
+          FileChooser in `xdg.portal.config.common`. Only GUI and Flatpak
+          apps ask the portal.
+        '';
+      };
     };
 
     share = {
@@ -605,6 +633,19 @@ in {
         };
       };
     }
+
+    (mkIf cfg.integrations.portal {
+      xdg.portal.extraPortals = [portalPackage];
+      xdg.portal.config.common."org.freedesktop.impl.portal.FileChooser" = mkDefault "pocketnix";
+      systemd.user.services.pocketnix-portal = {
+        description = "pocketnix FileChooser portal";
+        serviceConfig = {
+          Type = "dbus";
+          BusName = portalBusName;
+          ExecStart = "${lib.getExe' cfg.package "pocketnix-guest"} portal";
+        };
+      };
+    })
 
     (mkIf cfg.avf.enable {
       system.build.pocketnixImage = lib.genAttrs ["aarch64-linux" "x86_64-linux"] imageBuiltOn;
