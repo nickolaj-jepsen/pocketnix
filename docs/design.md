@@ -23,12 +23,27 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
   per PTY session, per port forward, per file operation.
 - The protocol is versioned (`go/internal/protocol`) and negotiated in Hello, so
   app and module versions may drift a little.
+- Every connection opens with the app's Hello naming its stream (control, pty,
+  forward, font); the agent answers with its own Hello or an Error. PTY streams
+  carry small binary frames (data, resize, exit status), so a tab needs nothing
+  from the control stream; forwards are raw bytes.
+- The agent serves any listener: vsock in the guest, which only admits the
+  host (CID 2), and TCP or a unix socket for tests and the debug TCP backend.
+- Tabs run `$SHELL -l [-c <profile command>]` as `pocketnix.guest.user`, the
+  agent switching credentials itself (no PAM session; the console autologin and
+  lingering provide the user manager).
+- A switch reloads the agent (SIGHUP) instead of restarting it: tabs are its
+  children, and a switch usually runs in one. Config changes reach the app live;
+  a new agent binary takes over at the next boot.
 
 ## The NixOS module owns the guest's whole contract
 
 - Kernel: Google's prebuilt AVF guest kernel by default, overridable.
 - Image: a repart raw disk (ESP + ext4 root) that u-boot → systemd-boot boots.
 - Agent service, hvc0 console login, first-boot setup.
+- `pocketnix.guest.avf.enable` (on by default) holds the platform half: kernel,
+  image, boot loader, first boot, hvc0. Off, the agent half runs under any
+  hypervisor, which is how the NixOS test boots it.
 
 ## Configuration
 
@@ -37,6 +52,10 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
   notification rules, command-palette snippets, the file-provider root. The
   agent sends them on connect and they apply live.
 - The app UI owns set-once hardware needed before boot: RAM, vCPUs, disk size, image.
+- The font file is served over its own stream and cached by the app by hash;
+  colors use Termux's property names.
+- Debug builds can run against an agent over TCP instead of AVF, so the terminal
+  UI works on the Android emulator against a desktop agent.
 
 ## Provisioning
 
@@ -46,6 +65,11 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 - Secrets: `--inject <guest path>=<file|-> --mode <octal>` writes files into
   the ext4 root of a copy of the image (debugfs, unprivileged, never in the
   store) before pushing it, so e.g. agenix has its host key on the first boot.
+- The image reaches app-private storage through the app's provision provider
+  (`adb shell content call` / `content write`, admitting only the shell user),
+  so release builds work without `run-as`. It goes in chunks, skipping all-zero
+  ones, and never replaces an existing disk without `--replace`, nor while the
+  VM runs.
 
 ## Durability
 
@@ -88,8 +112,8 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 ## Lifecycle
 
 - Runs until stopped: started from the app, tile or a terminal; a foreground
-  service keeps it up. Stop is graceful via the agent (`systemctl poweroff`)
-  with a hard stop after a timeout. Opt-in start on phone boot. A memory
+  service keeps it up (no wake lock). Stop is graceful via the agent (`systemctl poweroff`)
+  with a hard stop after a timeout (30 s). Opt-in start on phone boot. A memory
   balloon returns free guest RAM to Android.
 
 ## Integrations and UX

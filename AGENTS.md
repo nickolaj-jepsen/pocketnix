@@ -14,12 +14,21 @@ Read `docs/design.md` first: the decisions there are settled.
 ## Commands
 
 ```bash
-nix develop                      # JDK, Android SDK/NDK, adb, Go
+nix develop                      # JDK, Android SDK/NDK, adb, Go, e2fsprogs
 ./gradlew assembleDebug          # → app/build/outputs/apk/debug/app-debug.apk
+./gradlew testDebugUnitTest      # JVM tests; POCKETNIX_AGENT=<…/bin/pocketnix-agent> adds the ones against a real agent
 nix build .#pocketnix            # agent + CLI; bump vendorHash in nix/go.nix after go.mod changes
 go -C go vet ./... && go -C go test ./...
-nix fmt                          # alejandra, before committing Nix
+nix build .#checks.x86_64-linux.agent   # NixOS VM test: the example guest's agent, over TCP
+nix build .#example-image        # the AVF disk image (aarch64 through binfmt, assembled natively)
+nix run .#boot-example           # that image under qemu-system-aarch64, agent on vsock:4242:9100
+nix fmt .                        # alejandra, before committing Nix
 ```
+
+`pocketnix agent --connect <tcp:…|unix:…|vsock:<cid>:9100> config|exec|forward|…`
+talks to an agent the way the app does. A desktop agent for the app's debug TCP
+backend: `pocketnix-agent --config <file> --listen tcp:0.0.0.0:9100 --no-power`,
+then start the app with `--es tcp 10.0.2.2:9100` (the emulator's host).
 
 Grant a debug install its AVF permissions (`provision` will do this):
 `adb shell pm grant dev.nickolaj.pocketnix.debug android.permission.MANAGE_VIRTUAL_MACHINE`
@@ -73,3 +82,17 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
   `sysinit.target`), or it cycles with `nix-daemon.socket`.
 - A guest `reboot` stops crosvm with `STOP_REASON_REBOOT`; the app must start the
   VM again then, and leave it stopped on `poweroff`.
+
+## Traps (verified on the desktop)
+
+- Google's AVF kernel has no ACPI: under QEMU it needs `-M virt,acpi=off`, or
+  edk2 boots it with an empty device tree and it hangs silently.
+- The Nix build sandbox has no `/dev/vhost-vsock`, so the NixOS test reaches the
+  agent over TCP; `nix run .#boot-example` (outside the sandbox) covers vsock.
+- Go defers closing a PTY master while another goroutine is blocked reading it,
+  so closing it doesn't hang the session up: the agent signals SIGHUP itself.
+- The CLI's pure-Go resolver asks DNS before /etc/hosts under NixOS's nsswitch
+  order: in NixOS tests, connect by IP.
+- Android creates content providers before `Application.onCreate`: anything the
+  provision provider reaches must not depend on onCreate having run.
+- `nix fmt` with no path formats stdin; pass `.`.

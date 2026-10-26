@@ -119,6 +119,8 @@ public class TerminalSession extends TerminalOutput {
         mBackend.start(columns, rows, cellWidthPixels, cellHeightPixels, new TerminalBackend.Sink() {
             @Override
             public boolean onOutput(byte[] data, int offset, int count) {
+                // ByteQueue rejects empty writes.
+                if (count == 0) return isRunning();
                 if (!mProcessToTerminalIOQueue.write(data, offset, count)) return false;
                 // One pending message is enough: the main thread drains up to 64 KB at a time.
                 if (!mMainThreadHandler.hasMessages(MSG_NEW_INPUT)) {

@@ -5,8 +5,20 @@ under the Android Virtualization Framework (pKVM), with no root: an Android app
 to run it and use its terminal, a NixOS module for the guest side, and a CLI
 that provisions a phone over adb.
 
-Early work in progress; nothing boots yet. See [docs/design.md](docs/design.md)
-for what it will be.
+Early work in progress. See [docs/design.md](docs/design.md) for what it will
+be, and [example/configuration.nix](example/configuration.nix) for a guest.
+
+## Use
+
+Add `pocketnix.nixosModules.default` to an `aarch64-linux` NixOS configuration
+and set `pocketnix.guest.enable = true` (see the module for the terminal's
+profiles, extra keys, theme and port forwards). Then, with the phone on adb:
+
+```bash
+nix run github:nickolaj-jepsen/pocketnix#provision -- \
+  --image .#nixosConfigurations.<host>.config.system.build.pocketnixImage.x86_64-linux \
+  --inject /etc/ssh/ssh_host_ed25519_key=./host_key
+```
 
 ## Requirements
 

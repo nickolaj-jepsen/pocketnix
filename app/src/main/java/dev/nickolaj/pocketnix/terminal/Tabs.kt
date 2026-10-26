@@ -39,7 +39,12 @@ class Tabs(private val context: Context, consoleBackend: TerminalBackend, privat
 
     private var nextId = 0
     private val client = Client()
-    val console = Tab(nextId++, Tab.Kind.Console, TerminalSession(consoleBackend, TRANSCRIPT_ROWS, client))
+    val console = Tab(nextId++, Tab.Kind.Console, session(consoleBackend))
+
+    // Started at a default size rather than at the view's first layout, which a
+    // hidden activity never gets; attaching to the view resizes it.
+    private fun session(backend: TerminalBackend) =
+        TerminalSession(backend, TRANSCRIPT_ROWS, client).apply { updateSize(80, 24, 1, 1) }
 
     private val _tabs = MutableStateFlow(listOf(console))
     val tabs: StateFlow<List<Tab>> = _tabs.asStateFlow()
@@ -52,7 +57,7 @@ class Tabs(private val context: Context, consoleBackend: TerminalBackend, privat
     val revision: StateFlow<Int> = _revision.asStateFlow()
 
     fun open(profile: String, backend: TerminalBackend): Tab {
-        val tab = Tab(nextId++, Tab.Kind.Pty(profile), TerminalSession(backend, TRANSCRIPT_ROWS, client))
+        val tab = Tab(nextId++, Tab.Kind.Pty(profile), session(backend))
         _tabs.update { it + tab }
         _selected.value = tab.id
         return tab

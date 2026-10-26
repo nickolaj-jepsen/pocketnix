@@ -116,7 +116,10 @@ class Vm(private val app: Context) {
     fun start() {
         reloadEngine()
         if (state.value == VmState.Running || state.value == VmState.Starting) return
-        app.startForegroundService(Intent(app, VmService::class.java))
+        // Refused when the app isn't in the foreground (e.g. started over adb on a locked
+        // phone); the VM still runs, just without the service keeping the process alive.
+        runCatching { app.startForegroundService(Intent(app, VmService::class.java)) }
+            .onFailure { Log.w(TAG, "foreground service refused: ${it.message}") }
         _engine.value.start(settings.vm(), console)
     }
 
@@ -152,6 +155,25 @@ class Vm(private val app: Context) {
     }
 
     val config: StateFlow<GuestConfig?> get() = control.config
+
+    /** Debug builds, over adb: opens a tab once the agent is up, and types [input] into it. */
+    fun debugOpenTab(profile: String?, input: String?) {
+        scope.launch {
+            control.link.first { it is ControlChannel.Link.Up }
+            openTab(profile?.takeIf { it.isNotEmpty() })
+            if (input != null) tabs.current().session.write(input.replace("\\r", "\r"))
+        }
+    }
+
+    /** Debug builds, over adb: logs every tab's transcript, for checks on a locked phone. */
+    fun debugDumpTabs() {
+        Log.i(TAG, "dump: state=${state.value} link=${control.link.value} host=${control.config.value?.hostname}")
+        for (tab in tabs.all()) {
+            val text = tab.session.emulator?.screen?.transcriptText ?: "(no emulator yet)"
+            Log.i(TAG, "dump: tab ${tab.id} ${tab.kind} '${tab.title}' running=${tab.session.isRunning}")
+            for (line in text.lines().takeLast(40)) Log.i(TAG, "dump|${tab.id}| $line")
+        }
+    }
 
     private fun applyColors(colors: Map<String, String>) {
         TerminalTheme.apply(colors)

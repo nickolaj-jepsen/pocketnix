@@ -5,8 +5,8 @@ import android.util.Log
 import org.lsposed.hiddenapibypass.HiddenApiBypass
 
 class PocketnixApp : Application() {
-    lateinit var vm: Vm
-        private set
+    // Lazy: the provision provider can be called before onCreate runs.
+    val vm: Vm by lazy { Vm(this) }
 
     override fun onCreate() {
         super.onCreate()
@@ -15,7 +15,6 @@ class PocketnixApp : Application() {
         runCatching {
             HiddenApiBypass.addHiddenApiExemptions("Landroid/system/virtualmachine/", "Landroid/system/virtualizationservice/")
         }.onFailure { Log.w("PocketnixApp", "hidden API exemption failed", it) }
-        vm = Vm(this)
     }
 }
 

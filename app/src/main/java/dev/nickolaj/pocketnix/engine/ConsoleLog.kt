@@ -38,7 +38,7 @@ class ConsoleLog(private val capacity: Int = 256 * 1024) {
         synchronized(this) {
             val snapshot = ByteArray(size)
             for (i in 0 until size) snapshot[i] = ring[(start + i) % capacity]
-            if (sink.onOutput(snapshot, 0, snapshot.size)) listeners.add(sink)
+            if (snapshot.isEmpty() || sink.onOutput(snapshot, 0, snapshot.size)) listeners.add(sink)
         }
     }
 

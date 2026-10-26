@@ -50,6 +50,7 @@ class ControlChannel(private val scope: CoroutineScope, private val appVersion: 
                     val (s, hello) = dialer.open(Protocol.hello("control", appVersion))
                     stream = s
                     _link.value = Link.Up(hello.optString("agent"))
+                    Log.i(TAG, "control stream up (agent ${hello.optString("agent")})")
                     backoff = 250L
                     readLoop(s)
                 } catch (e: AgentException) {

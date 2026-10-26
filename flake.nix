@@ -25,10 +25,16 @@
         avf-kernel = pkgs.callPackage ./nix/avf-kernel/package.nix {};
       });
 
-    apps = forAll (pkgs: {
+    apps = forAll (pkgs: let
+      own = self.packages.${pkgs.stdenv.hostPlatform.system};
+    in {
       provision = {
         type = "app";
-        program = "${self.packages.${pkgs.stdenv.hostPlatform.system}.pocketnix-cli}/bin/pocketnix";
+        program = "${own.pocketnix-cli}/bin/pocketnix";
+      };
+      boot-example = {
+        type = "app";
+        program = "${pkgs.callPackage ./nix/qemu-boot.nix {image = own.example-image;}}/bin/boot-example";
       };
     });
 
