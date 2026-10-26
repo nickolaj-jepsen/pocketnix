@@ -48,7 +48,7 @@
         extraKeys = map (map (k: lib.filterAttrs (_: v: v != null) k)) cfg.terminal.extraKeys;
         theme =
           {inherit (cfg.terminal.theme) colors;}
-          // lib.optionalAttrs (cfg.terminal.theme.font != null) {font = "${cfg.terminal.theme.font}";};
+          // lib.optionalAttrs (fontFile != null) {font = "${fontFile}";};
         snippets =
           lib.mapAttrsToList (name: s: {
             inherit name;
@@ -69,6 +69,21 @@
     // lib.optionalAttrs (cfg.terminal.historyFile != null) {history = cfg.terminal.historyFile;}
     // lib.optionalAttrs (cfg.files.root != null) {filesRoot = cfg.files.root;};
   upd = cfg.updates;
+
+  theme = cfg.terminal.theme;
+  # The app takes one file; a family resolves to its file in the package.
+  fontFile =
+    if theme.font != null
+    then theme.font
+    else if theme.fontFamily == null
+    then null
+    else
+      pkgs.runCommand "pocketnix-terminal-font" {nativeBuildInputs = [pkgs.fontconfig];} ''
+        export FONTCONFIG_FILE=${pkgs.makeFontsConf {fontDirectories = [theme.fontFamily.package];}} HOME=$TMPDIR
+        file=$(fc-match -f '%{file}' ${lib.escapeShellArg "${theme.fontFamily.family}:style=${theme.fontFamily.style}"})
+        case $file in ${theme.fontFamily.package}/*) ;; *) echo "no ${lib.escapeShellArg theme.fontFamily.family} in ${theme.fontFamily.package} (fontconfig offered $file)" >&2; exit 1 ;; esac
+        cp "$file" $out
+      '';
 
   # Only the guest command on PATH, not the agent or the host CLI.
   guestTools = pkgs.runCommand "pocketnix-guest-tools" {} ''
@@ -289,6 +304,28 @@ in {
           example = lib.literalExpression ''"''${pkgs.jetbrains-mono}/share/fonts/truetype/JetBrainsMono-Regular.ttf"'';
           description = "TTF or OTF file the terminal renders with.";
         };
+        fontFamily = mkOption {
+          default = null;
+          example = lib.literalExpression ''{ package = pkgs.nerd-fonts.jetbrains-mono; family = "JetBrainsMono Nerd Font Mono"; }'';
+          description = "A font by family, found in its package with fontconfig; for `font` when you think in families.";
+          type = types.nullOr (types.submodule {
+            options = {
+              package = mkOption {
+                type = types.package;
+                description = "Package holding the family's files.";
+              };
+              family = mkOption {
+                type = types.str;
+                description = "fontconfig family name.";
+              };
+              style = mkOption {
+                type = types.str;
+                default = "Regular";
+                description = "fontconfig style.";
+              };
+            };
+          });
+        };
       };
       snippets = mkOption {
         default = {};
@@ -441,6 +478,10 @@ in {
         {
           assertion = cfg.terminal.profiles ? ${cfg.terminal.defaultProfile};
           message = "pocketnix.guest.terminal.defaultProfile `${cfg.terminal.defaultProfile}` is not a profile";
+        }
+        {
+          assertion = theme.font == null || theme.fontFamily == null;
+          message = "pocketnix.guest.terminal.theme: set font or fontFamily, not both";
         }
         {
           assertion = upd.buildHost.host != null -> upd.buildHost.installable != null;

@@ -332,6 +332,30 @@ func TestPTYHangupEndsSession(t *testing.T) {
 	}
 }
 
+// A session that ignores the hangup is killed once its grace is up.
+func TestPTYIgnoringHangupIsKilled(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	h := start(t, ptyConfig(`trap '' HUP; echo $$ > `+pidFile+`; echo started; while :; do sleep 1; done`), unixAddr)
+	p, err := h.client.PTY("", 24, 80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readUntil(t, p, "started")
+	b, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	p.Close()
+	deadline := time.Now().Add(20 * time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			t.Fatalf("session process %d ignoring SIGHUP outlived its tab", pid)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func TestForward(t *testing.T) {
 	echo, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

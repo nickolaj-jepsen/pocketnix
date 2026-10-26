@@ -10,7 +10,9 @@ import java.io.InputStream
 import java.io.OutputStream
 
 object Protocol {
+    /** The app speaks MIN_VERSION..VERSION; the agent picks one (go/internal/protocol Negotiate). */
     const val VERSION = 1
+    const val MIN_VERSION = 1
     const val PORT = 9100L
     private const val MAX_LINE = 1 shl 20
 
@@ -19,6 +21,7 @@ object Protocol {
         JSONObject().apply {
             put("type", "hello")
             put("version", VERSION)
+            put("minVersion", MIN_VERSION)
             put("app", app)
             put("stream", stream)
             extra()
@@ -48,7 +51,7 @@ object Protocol {
         when (msg.optString("type")) {
             "hello" -> {
                 val v = msg.optInt("version")
-                if (v != VERSION) throw AgentException("agent speaks protocol $v, app speaks $VERSION")
+                if (v !in MIN_VERSION..VERSION) throw AgentException("the agent chose protocol $v; the app speaks $MIN_VERSION–$VERSION")
                 return msg
             }
             "error" -> throw AgentException(msg.optString("message"))

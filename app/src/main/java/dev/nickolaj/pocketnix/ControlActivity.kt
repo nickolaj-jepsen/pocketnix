@@ -37,6 +37,8 @@ class ControlActivity : Activity() {
         intent.getIntExtra(EXTRA_MEMORY, 0).takeIf { it in 512..Settings.MAX_MEMORY_MB }?.let { s.memoryMb = it }
         // The guest grows into the disk: past the phone's free space, /data fills up.
         intent.getIntExtra(EXTRA_DISK, 0).takeIf { it in 4..DiskImage.maxGb(this) }?.let { s.diskGb = it }
+        // provision's image size: a smaller disk setting would leave the root no room to grow.
+        intent.getIntExtra(EXTRA_MIN_DISK, 0).takeIf { it > s.diskGb && it <= DiskImage.maxGb(this) }?.let { s.diskGb = it }
         if (intent.hasExtra(EXTRA_CPUS)) s.cpus = if (intent.getIntExtra(EXTRA_CPUS, 0) == 1) 1 else 0
         // Debug builds: `--es tcp <host:port>` runs against a desktop agent, `--es tcp ""` back to AVF.
         if (BuildConfig.DEBUG && intent.hasExtra(EXTRA_TCP)) {
@@ -58,6 +60,7 @@ class ControlActivity : Activity() {
         const val EXTRA_TCP = "tcp"
         const val EXTRA_MEMORY = "memoryMb"
         const val EXTRA_DISK = "diskGb"
+        const val EXTRA_MIN_DISK = "minDiskGb"
         const val EXTRA_CPUS = "cpus"
         const val EXTRA_PROFILE = "profile"
         const val EXTRA_INPUT = "input"

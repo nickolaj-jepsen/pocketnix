@@ -9,10 +9,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/adb"
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/image"
@@ -25,13 +28,16 @@ app's storage and starts the VM.
 
 flags:
   --image <file|installable>  the disk image, or a Nix installable that builds it
-                              (e.g. .#nixosConfigurations.phone.config.system.build.pocketnixImage.x86_64-linux)
+                              (e.g. .#nixosConfigurations.phone: this machine's pocketnixImage.<system>)
   --apk <file>                APK to install (default: the release APK of this CLI's version)
   --debug                     target the debug build (dev.nickolaj.pocketnix.debug)
   --inject <guest>=<file|->   write a file into the image's root filesystem; repeatable
   --mode <octal>              mode of the preceding --inject (default 0600)
   --replace                   replace the phone's existing disk image, destroying the guest's disk
   --no-network                start the VM without networking
+  --memory <MiB>              the VM's memory (the app's Settings otherwise)
+  --cpus <one|all>            one vCPU, or one per host core
+  --disk <GiB>                disk size; the guest's root grows into it (at least the image's size)
   --no-start                  don't start the VM
   --serial <serial>           adb device to use (default: adb's only device)
 `
@@ -55,6 +61,8 @@ type provisionOpts struct {
 	image, apk, serial        string
 	debug, replace, noNetwork bool
 	noStart                   bool
+	memoryMB, diskGB          int
+	cpus                      string
 	injects                   []image.Injection
 	stdin                     io.Reader
 	log                       io.Writer
@@ -73,6 +81,9 @@ func parseProvision(args []string) (*provisionOpts, error) {
 	fs.BoolVar(&o.replace, "replace", false, "")
 	fs.BoolVar(&o.noNetwork, "no-network", false, "")
 	fs.BoolVar(&o.noStart, "no-start", false, "")
+	fs.IntVar(&o.memoryMB, "memory", 0, "")
+	fs.IntVar(&o.diskGB, "disk", 0, "")
+	fs.StringVar(&o.cpus, "cpus", "", "")
 	fs.Func("inject", "", func(v string) error {
 		guest, src, ok := strings.Cut(v, "=")
 		if !ok || guest == "" || src == "" {
@@ -98,6 +109,12 @@ func parseProvision(args []string) (*provisionOpts, error) {
 	if o.image == "" || fs.NArg() > 0 {
 		fs.Usage()
 		return nil, errUsage
+	}
+	if o.cpus != "" && o.cpus != "one" && o.cpus != "all" {
+		return nil, fmt.Errorf("--cpus %q: want one or all", o.cpus)
+	}
+	if o.memoryMB != 0 && o.memoryMB < 512 {
+		return nil, fmt.Errorf("--memory %d: at least 512", o.memoryMB)
 	}
 	stdinUses := 0
 	for _, in := range o.injects {
@@ -141,6 +158,18 @@ func (o *provisionOpts) run() error {
 		return err
 	}
 	defer cleanup()
+	// The edited copy holds injected secrets (a host key): Ctrl-C mustn't leave it behind.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sig)
+	go func() {
+		if _, ok := <-sig; ok {
+			o.logf("interrupted; removing the image copy and the phone's chunk")
+			cleanup()
+			dev.Shell("rm -f " + deviceChunk)
+			os.Exit(130)
+		}
+	}()
 
 	apk := o.apk
 	if apk == "" {
@@ -191,7 +220,14 @@ func (o *provisionOpts) run() error {
 	if o.replace {
 		commitArg = "replace"
 	}
-	if _, err := prov.call("commit", commitArg); err != nil {
+	// `content write` can exit 0 when the provider failed (a full /data): the
+	// provider checks the whole image against this before it becomes the disk.
+	sum, err := fileSHA256(img)
+	if err != nil {
+		return err
+	}
+	o.logf("verifying the image on the phone")
+	if _, err := prov.call("commit", commitArg, "sha256", sum); err != nil {
 		return err
 	}
 	o.logf("disk image in place")
@@ -199,11 +235,30 @@ func (o *provisionOpts) run() error {
 	if o.noStart {
 		return nil
 	}
-	_, err = dev.Shell(fmt.Sprintf("am start -n %s/%s -a %s --ez network %t", o.pkg(), activityClass, actionStart, !o.noNetwork))
+	_, err = dev.Shell(o.startCommand(img))
 	if err == nil {
 		o.logf("started the VM (network %t)", !o.noNetwork)
 	}
 	return err
+}
+
+// startCommand starts the VM with the hardware flags, and a disk no smaller
+// than the image: a smaller setting would leave the root no room to grow.
+func (o *provisionOpts) startCommand(img string) string {
+	cmd := fmt.Sprintf("am start -n %s/%s -a %s --ez network %t", o.pkg(), activityClass, actionStart, !o.noNetwork)
+	if o.memoryMB != 0 {
+		cmd += fmt.Sprintf(" --ei memoryMb %d", o.memoryMB)
+	}
+	if o.cpus != "" {
+		cmd += fmt.Sprintf(" --ei cpus %d", map[string]int{"one": 1, "all": 0}[o.cpus])
+	}
+	if o.diskGB != 0 {
+		cmd += fmt.Sprintf(" --ei diskGb %d", o.diskGB)
+	}
+	if fi, err := os.Stat(img); err == nil {
+		cmd += fmt.Sprintf(" --ei minDiskGb %d", (fi.Size()+(1<<30)-1)>>30)
+	}
+	return cmd
 }
 
 // prepareImage resolves the image and, with injections, makes an edited copy.
@@ -235,9 +290,26 @@ func (o *provisionOpts) prepareImage() (string, func(), error) {
 
 // resolveImage accepts an image file, a directory holding one (a Nix build
 // result), or an installable to build.
+var bareConfiguration = regexp.MustCompile(`#nixosConfigurations\.("[^"]+"|[^."]+)$`)
+
+// imageInstallable turns `<flake>#nixosConfigurations.<host>` into that
+// host's image as this machine assembles it: the guest's own system's
+// assembly fails under binfmt, which made picking the key by hand a trap.
+func imageInstallable(p string) string {
+	if !bareConfiguration.MatchString(p) {
+		return p
+	}
+	arch := map[string]string{"amd64": "x86_64", "arm64": "aarch64"}[runtime.GOARCH]
+	if arch == "" {
+		return p
+	}
+	return p + ".config.system.build.pocketnixImage." + arch + "-" + runtime.GOOS
+}
+
 func (o *provisionOpts) resolveImage() (string, error) {
 	p := o.image
 	if _, err := os.Stat(p); err != nil {
+		p = imageInstallable(p)
 		o.logf("building %s", p)
 		if p, err = o.resolveInstallable(p); err != nil {
 			return "", err
@@ -357,10 +429,14 @@ var bundleField = regexp.MustCompile(`(\w+)=([^,}]*)`)
 
 // call runs a provider method and returns its result bundle; a bundle with
 // an "error" key is returned as an error.
-func (p provider) call(method, arg string) (map[string]string, error) {
+func (p provider) call(method, arg string, extras ...string) (map[string]string, error) {
 	cmd := fmt.Sprintf("content call --uri content://%s --method %s", p.authority, method)
 	if arg != "" {
 		cmd += " --arg " + adb.ShellQuote(arg)
+	}
+	// extras are key, value pairs of strings.
+	for i := 0; i+1 < len(extras); i += 2 {
+		cmd += " --extra " + adb.ShellQuote(extras[i]+":s:"+extras[i+1])
 	}
 	out, err := p.dev.Shell(cmd)
 	if err != nil {

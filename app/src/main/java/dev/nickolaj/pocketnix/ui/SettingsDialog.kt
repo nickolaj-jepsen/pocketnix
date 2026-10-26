@@ -35,6 +35,7 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
     var disk by remember { mutableStateOf(s.diskGb.toString()) }
     var allCpus by remember { mutableStateOf(s.cpus != 1) }
     var network by remember { mutableStateOf(s.network) }
+    var onBoot by remember { mutableStateOf(s.startOnBoot) }
     var tcp by remember { mutableStateOf(s.tcpBackend) }
     var tcpAddress by remember { mutableStateOf(s.tcpAddress) }
     val stopped = vm.state.value == VmState.Stopped || vm.state.value is VmState.Failed
@@ -44,11 +45,12 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
         title = { Text("VM settings") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (!stopped) Text("Changes apply at the next start.")
+                if (!stopped) Text("Changes apply when the VM next starts or the guest reboots.")
                 NumberField("Memory (MB)", memory) { memory = it }
                 NumberField("Disk (GB, only grows)", disk) { disk = it }
                 Toggle("One vCPU per host core", allCpus) { allCpus = it }
                 Toggle("Network", network) { network = it }
+                Toggle("Start when the phone boots", onBoot) { onBoot = it }
                 if (BuildConfig.DEBUG) {
                     Toggle("TCP agent backend (debug)", tcp) { tcp = it }
                     if (tcp) {
@@ -63,6 +65,7 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
                 disk.toIntOrNull()?.takeIf { it in 4..DiskImage.maxGb(context) }?.let { s.diskGb = it }
                 s.cpus = if (allCpus) 0 else 1
                 s.network = network
+                s.startOnBoot = onBoot
                 s.tcpBackend = tcp
                 s.tcpAddress = tcpAddress.trim()
                 vm.reloadEngine()

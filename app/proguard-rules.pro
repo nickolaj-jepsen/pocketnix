@@ -1,2 +1,2 @@
-# The AVF classes are reached by reflection; keep them unobfuscated.
--keep class dev.nickolaj.pocketnix.avf.** { *; }
+# Nothing of the app's own needs keeping: AvfReflect reflects only on
+# framework classes (android.system.virtualmachine), which R8 leaves alone.

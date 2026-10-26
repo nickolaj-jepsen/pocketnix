@@ -36,6 +36,10 @@ class Settings(context: Context) {
         get() = prefs.getString("tcpAddress", "10.0.2.2:9100")!!
         set(v) = prefs.edit { putString("tcpAddress", v) }
 
+    var startOnBoot: Boolean
+        get() = prefs.getBoolean("startOnBoot", false)
+        set(v) = prefs.edit { putBoolean("startOnBoot", v) }
+
     var textSize: Int
         get() = prefs.getInt("textSize", 0)
         set(v) = prefs.edit { putInt("textSize", v) }

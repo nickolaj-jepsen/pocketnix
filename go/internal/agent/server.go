@@ -122,8 +122,10 @@ func (s *Server) handle(c net.Conn) {
 		return
 	}
 	c.SetReadDeadline(time.Time{})
-	if hello.Version != protocol.Version {
-		reject(c, fmt.Sprintf("protocol version %d, agent speaks %d", hello.Version, protocol.Version))
+	// While 1 is the only version, the replies' Version is the negotiated one;
+	// a second version would hand v to the stream handlers.
+	if _, ok := protocol.Negotiate(hello.MinVersion, hello.Version); !ok {
+		reject(c, fmt.Sprintf("the app speaks protocol %d–%d, the agent %d–%d", max(hello.MinVersion, 1), hello.Version, protocol.MinVersion, protocol.Version))
 		return
 	}
 	switch hello.Stream {
@@ -157,16 +159,31 @@ func reject(w io.Writer, msg string) {
 type lockedWriter struct {
 	mu sync.Mutex
 	w  io.Writer
+	// deadline bounds each write (control streams; PTY output may wait on a busy app).
+	deadline bool
 }
 
 func (l *lockedWriter) Write(b []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.w.Write(b)
+	c, ok := l.w.(net.Conn)
+	if !ok || !l.deadline {
+		return l.w.Write(b)
+	}
+	// A reader that stopped reading (a frozen app) mustn't stall pushes to
+	// everyone else: give up on it, and the stream ends.
+	c.SetWriteDeadline(time.Now().Add(controlWriteTimeout))
+	n, err := c.Write(b)
+	if err != nil {
+		c.Close()
+	}
+	return n, err
 }
 
+const controlWriteTimeout = 10 * time.Second
+
 func (s *Server) serveControl(c net.Conn) {
-	w := &lockedWriter{w: c}
+	w := &lockedWriter{w: c, deadline: true}
 	// Register before sending the config, so a reload in between can't be missed.
 	s.mu.Lock()
 	s.controls[w] = struct{}{}
@@ -195,11 +212,25 @@ func (s *Server) serveControl(c net.Conn) {
 			continue
 		}
 		if reply, err := s.request(req); err != nil {
-			reject(w, err.Error())
+			protocol.WriteJSON(w, protocol.Error{Type: protocol.TypeError, Message: err.Error(), ID: req.ID})
 		} else {
-			protocol.WriteJSON(w, reply)
+			protocol.WriteJSON(w, withID(reply, req.ID))
 		}
 	}
+}
+
+// withID adds the request's id to its answer.
+func withID(reply any, id int) any {
+	if id == 0 {
+		return reply
+	}
+	b, err := json.Marshal(reply)
+	var m map[string]any
+	if err != nil || json.Unmarshal(b, &m) != nil {
+		return reply
+	}
+	m["id"] = id
+	return m
 }
 
 // request runs one control request and returns its answer.

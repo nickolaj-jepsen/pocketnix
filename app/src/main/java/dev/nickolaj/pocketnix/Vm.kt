@@ -112,7 +112,8 @@ class Vm(private val app: Context) {
             }
         }
         scope.launch {
-            combine(state, control.link) { s, link -> s == VmState.Running && link !is ControlChannel.Link.Up }
+            // Down, not Refused: an agent that answers (a version mismatch) booted fine.
+            combine(state, control.link) { s, link -> s == VmState.Running && link is ControlChannel.Link.Down }
                 .distinctUntilChanged()
                 .collectLatest { waiting ->
                     _agentLate.value = false
@@ -137,9 +138,14 @@ class Vm(private val app: Context) {
         scope.launch {
             combine(control.config, state) { cfg, s -> cfg?.forwards.orEmpty() to (s == VmState.Running) }
                 .distinctUntilChanged()
-                .collect { (fw, running) ->
+                .collectLatest { (fw, running) ->
                     val dialer = if (running) _engine.value.dialer else null
                     _forwardErrors.value = withContext(Dispatchers.IO) { forwards.apply(fw, dialer) }
+                    // A port another app holds may come free (that app stopped): keep trying.
+                    while (_forwardErrors.value.isNotEmpty() && dialer != null) {
+                        delay(FORWARD_RETRY_MS)
+                        _forwardErrors.value = withContext(Dispatchers.IO) { forwards.apply(fw, dialer) }
+                    }
                 }
         }
         scope.launch {
@@ -330,6 +336,7 @@ class Vm(private val app: Context) {
         const val TAG = "Vm"
         const val GRACEFUL_STOP_MS = 30_000L
         const val AGENT_LATE_MS = 120_000L
+        const val FORWARD_RETRY_MS = 30_000L
         const val HISTORY_LIMIT = 1000
     }
 }

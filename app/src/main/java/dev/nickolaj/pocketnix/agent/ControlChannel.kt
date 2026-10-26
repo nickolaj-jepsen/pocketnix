@@ -52,9 +52,16 @@ class ControlChannel(private val scope: CoroutineScope, private val appVersion: 
     @Volatile private var stream: AgentStream? = null
     private val requests = Mutex()
 
-    /** The request waiting for its answer, which has [type]'s type (pong for ping) or is an error. */
-    private class Pending(val type: String, val answer: CompletableDeferred<Result<JSONObject>>)
+    /**
+     * The request waiting for its answer, which has [type]'s type (pong for
+     * ping) or is an error, and carries [id] from agents that echo it: a late
+     * answer to a request that timed out mustn't settle the next one.
+     */
+    private class Pending(val type: String, val id: Int, val answer: CompletableDeferred<Result<JSONObject>>)
     @Volatile private var pending: Pending? = null
+    private var nextId = 0
+
+    private fun Pending.answers(msg: JSONObject): Boolean = !msg.has("id") || msg.optInt("id") == id
 
     fun start(dialer: AgentDialer) {
         stop()
@@ -97,9 +104,11 @@ class ControlChannel(private val scope: CoroutineScope, private val appVersion: 
                 type == "config" -> _config.value = GuestConfig.parse(msg)
                 // Pushed, and the answer to [refreshUpdates]; never a pending request's reply.
                 type == "updates" -> _updates.value = Updates.parse(msg)
-                type == "error" -> p?.answer?.complete(Result.failure(AgentException(msg.optString("message"))))
+                type == "error" -> p?.takeIf { it.answers(msg) }?.answer?.complete(Result.failure(AgentException(msg.optString("message"))))
                     ?: Log.w(TAG, "agent error: ${msg.optString("message")}")
-                p != null && type == p.type -> p.answer.complete(Result.success(msg))
+                p != null && type == p.type && p.answers(msg) -> p.answer.complete(Result.success(msg))
+                // The late answer to a request that already timed out.
+                msg.has("id") -> Log.w(TAG, "late answer: $type")
                 else -> _events.tryEmit(msg)
             }
         }
@@ -114,7 +123,9 @@ class ControlChannel(private val scope: CoroutineScope, private val appVersion: 
         val s = stream ?: throw IOException("the agent isn't connected")
         val type = req.getString("type")
         val answer = CompletableDeferred<Result<JSONObject>>()
-        pending = Pending(if (type == "ping") "pong" else type, answer)
+        val id = ++nextId
+        req.put("id", id)
+        pending = Pending(if (type == "ping") "pong" else type, id, answer)
         try {
             scope.launch(Dispatchers.IO) {
                 runCatching { synchronized(s) { Protocol.writeJson(s.output, req) } }

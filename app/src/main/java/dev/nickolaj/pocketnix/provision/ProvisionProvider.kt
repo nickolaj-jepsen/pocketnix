@@ -65,6 +65,11 @@ class ProvisionProvider : ContentProvider() {
                     if (running()) error("the VM is running")
                     if (!part.exists()) error("nothing to commit; call begin first")
                     if (disk.exists() && arg != "replace") error("a disk image exists; commit with replace to destroy it")
+                    // A write that failed on the phone (a full /data) may not have reached provision.
+                    extras?.getString("sha256")?.let { want ->
+                        val got = sha256(part)
+                        if (got != want) error("the image on the phone doesn't match what was sent (sha256 $got); provision again")
+                    }
                     if (!part.renameTo(disk)) error("couldn't move the image into place")
                 }
                 else -> error("unknown method $method")
@@ -94,4 +99,17 @@ class ProvisionProvider : ContentProvider() {
     override fun insert(uri: Uri, values: ContentValues?): Uri? = null
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
     override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
+}
+
+private fun sha256(f: File): String {
+    val md = java.security.MessageDigest.getInstance("SHA-256")
+    f.inputStream().use { input ->
+        val buf = ByteArray(1 shl 20)
+        while (true) {
+            val n = input.read(buf)
+            if (n < 0) break
+            md.update(buf, 0, n)
+        }
+    }
+    return md.digest().joinToString("") { "%02x".format(it) }
 }

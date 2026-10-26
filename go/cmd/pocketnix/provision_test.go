@@ -106,6 +106,13 @@ func fakeShell(state, line string, logEvent func(string, ...any)) (string, int) 
 			if _, err := os.Stat(disk); err == nil && arg != "replace" {
 				return "Result: Bundle[{error=a disk image exists, pass replace}]\n", 0
 			}
+			for i, w := range f {
+				if v, ok := strings.CutPrefix(unquote(w), "sha256:s:"); ok && i > 0 && f[i-1] == "--extra" {
+					if got, _ := fileSHA256(part); got != v {
+						return "Result: Bundle[{error=the image doesn't match (sha256 " + got + ")}]\n", 0
+					}
+				}
+			}
 			os.Rename(part, disk)
 		}
 		return "Result: Bundle[{ok=true}]\n", 0
@@ -189,7 +196,7 @@ func TestProvision(t *testing.T) {
 	apk := filepath.Join(t.TempDir(), "app-debug.apk")
 	os.WriteFile(apk, []byte("apk"), 0o644)
 
-	err := provisionFor(t, "--image", img, "--apk", apk, "--debug", "--no-network")
+	err := provisionFor(t, "--image", img, "--apk", apk, "--debug", "--no-network", "--memory", "1024", "--cpus", "one", "--disk", "8")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +208,7 @@ func TestProvision(t *testing.T) {
 		"install app-debug.apk",
 		"grant dev.nickolaj.pocketnix.debug android.permission.MANAGE_VIRTUAL_MACHINE",
 		"grant dev.nickolaj.pocketnix.debug android.permission.USE_CUSTOM_VIRTUAL_MACHINE",
-		"am start -n dev.nickolaj.pocketnix.debug/dev.nickolaj.pocketnix.ControlActivity -a dev.nickolaj.pocketnix.action.START --ez network false",
+		"am start -n dev.nickolaj.pocketnix.debug/dev.nickolaj.pocketnix.ControlActivity -a dev.nickolaj.pocketnix.action.START --ez network false --ei memoryMb 1024 --ei cpus 1 --ei diskGb 8 --ei minDiskGb 1",
 	} {
 		if !strings.Contains(ev, line+"\n") {
 			t.Errorf("device never saw %q; events:\n%s", line, ev)

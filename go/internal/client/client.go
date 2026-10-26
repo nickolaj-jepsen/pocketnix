@@ -28,6 +28,7 @@ func (c *Client) open(h protocol.Hello) (net.Conn, protocol.Hello, error) {
 	}
 	h.Type = protocol.TypeHello
 	h.Version = protocol.Version
+	h.MinVersion = protocol.MinVersion
 	h.App = c.App
 	if err := protocol.WriteJSON(conn, h); err != nil {
 		conn.Close()
@@ -38,9 +39,9 @@ func (c *Client) open(h protocol.Hello) (net.Conn, protocol.Hello, error) {
 		conn.Close()
 		return nil, protocol.Hello{}, err
 	}
-	if reply.Version != protocol.Version {
+	if reply.Version < protocol.MinVersion || reply.Version > protocol.Version {
 		conn.Close()
-		return nil, protocol.Hello{}, fmt.Errorf("agent speaks protocol %d, want %d", reply.Version, protocol.Version)
+		return nil, protocol.Hello{}, fmt.Errorf("agent chose protocol %d, this client speaks %d–%d", reply.Version, protocol.MinVersion, protocol.Version)
 	}
 	return conn, reply, nil
 }

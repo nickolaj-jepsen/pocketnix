@@ -24,6 +24,9 @@ import (
 // tab alive.
 const exitDrain = 500 * time.Millisecond
 
+// hangupGrace is how long a hung-up session gets to exit before it's killed.
+const hangupGrace = 10 * time.Second
+
 func (s *Server) servePTY(c net.Conn, hello protocol.Hello) {
 	cfg := s.config()
 	prof, ok := cfg.profile(hello.Profile)
@@ -68,11 +71,19 @@ func (s *Server) servePTY(c net.Conn, hello protocol.Hello) {
 
 	// App → guest. Ends when the app closes the stream, or when the session
 	// ends and the connection is closed below.
+	exited := make(chan struct{})
 	go func() {
 		for {
 			typ, payload, err := protocol.ReadFrame(c)
 			if err != nil {
 				hangup(cmd.Process.Pid)
+				// A shell that ignores SIGHUP would keep the session (and this
+				// goroutine's pty) alive with no tab left to end it.
+				select {
+				case <-exited:
+				case <-time.After(hangupGrace):
+					syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+				}
 				return
 			}
 			switch typ {
@@ -92,6 +103,7 @@ func (s *Server) servePTY(c net.Conn, hello protocol.Hello) {
 	}()
 
 	status := waitStatus(cmd.Wait())
+	close(exited)
 	select {
 	case <-outDone:
 	case <-time.After(exitDrain):

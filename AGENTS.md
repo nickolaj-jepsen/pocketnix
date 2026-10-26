@@ -123,3 +123,9 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
   into `system.build`, and put it on another node.
 - With a substituter that doesn't answer, Nix retries 5 times with backoff
   (~5 s) before giving up; the update log shows the warnings.
+- The agent is root and touches user-owned paths (history, the share
+  directory, the file provider): go through an `os.Root`, which also refuses
+  absolute symlinks even when they point back inside.
+- Any uncaught exception on an app thread kills the process and so the VM;
+  `PocketnixApp` logs worker-thread ones instead, and guest output goes
+  through a fuzzed emulator (`FuzzTest`).

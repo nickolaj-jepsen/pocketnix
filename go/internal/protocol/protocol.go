@@ -15,10 +15,29 @@
 //   - font: the configured font file's bytes, then EOF.
 package protocol
 
-// Version is bumped on any incompatible change; both sides send it in Hello
-// and refuse a mismatch. Additive changes (new optional fields, new message
-// types, which receivers ignore when unknown) keep it.
-const Version = 1
+// Version is bumped on any incompatible change. Additive changes (new
+// optional fields, new message types, which receivers ignore when unknown)
+// keep it. A side speaks every version from MinVersion to Version: the app's
+// Hello sends its range, the agent answers with the highest version both
+// speak (see [Negotiate]), so a newer app can still reach an older guest, say
+// to update it.
+const (
+	Version    = 1
+	MinVersion = 1
+)
+
+// Negotiate returns the version a peer speaking [min, max] (min 0: just max)
+// and this side share, or false when there is none.
+func Negotiate(min, max int) (int, bool) {
+	if min == 0 {
+		min = max
+	}
+	v := Version
+	if max < v {
+		v = max
+	}
+	return v, v >= min && v >= MinVersion
+}
 
 // ControlPort is the vsock port the agent listens on for every stream.
 const ControlPort = 9100
@@ -66,6 +85,9 @@ type Request struct {
 	Generation int    `json:"generation,omitempty"`
 	Limit      int    `json:"limit,omitempty"`
 	Text       string `json:"text,omitempty"`
+	// ID, when set, comes back in the answer's "id": requests are answered in
+	// order, but a requester that gave up on one can tell its late answer apart.
+	ID int `json:"id,omitempty"`
 }
 
 // Envelope is the part of every JSON message a receiver reads first.
@@ -78,6 +100,9 @@ type Envelope struct {
 type Hello struct {
 	Type    string `json:"type"` // always "hello"
 	Version int    `json:"version"`
+	// MinVersion is the oldest version the app speaks; 0 means just Version.
+	// The agent's Version is the negotiated one.
+	MinVersion int `json:"minVersion,omitempty"`
 	// Agent or App is the sender's build version, for display and bug reports only.
 	Agent string `json:"agent,omitempty"`
 	App   string `json:"app,omitempty"`
@@ -106,6 +131,8 @@ type Hello struct {
 type Error struct {
 	Type    string `json:"type"` // always "error"
 	Message string `json:"message"`
+	// ID is the failed request's.
+	ID int `json:"id,omitempty"`
 }
 
 // Config is what the NixOS module declares for the app; the agent sends it on

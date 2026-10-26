@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -92,6 +93,17 @@ fun MainScreen(vm: Vm) {
     LaunchedEffect(typeface) { controller.setTypeface(typeface) }
     LaunchedEffect(themeRevision) { controller.redraw() }
 
+    // A destructive tap asks first: the question, and what a yes does.
+    var confirm by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
+    confirm?.let { (question, action) ->
+        AlertDialog(
+            onDismissRequest = { confirm = null },
+            text = { Text(question) },
+            confirmButton = { TextButton(onClick = { confirm = null; action() }) { Text("Yes") } },
+            dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel") } },
+        )
+    }
+
     if (showSettings) SettingsDialog(vm) { showSettings = false }
     if (showUpdates) UpdatesDialog(vm) { showUpdates = false }
     if (showPalette) PaletteDialog(vm, controller) { showPalette = false }
@@ -124,7 +136,12 @@ fun MainScreen(vm: Vm) {
             MenuItem("Settings") { dismiss(); showSettings = true }
             if (running) {
                 MenuItem("Reboot", enabled = agentUp) { dismiss(); vm.reboot() }
-                if (ownsGuest) MenuItem("Restart with boot menu") { dismiss(); vm.restartWithBootMenu() }
+                if (ownsGuest) {
+                    MenuItem("Restart with boot menu") {
+                        dismiss()
+                        confirm = "Restart into the boot menu? This stops the guest at once, without shutting it down." to vm::restartWithBootMenu
+                    }
+                }
             } else if (ownsGuest) {
                 MenuItem("Start with boot menu", enabled = missing.isEmpty()) { dismiss(); vm.start(bootMenu = true) }
             }
@@ -159,7 +176,10 @@ fun MainScreen(vm: Vm) {
             canOpen = link is ControlChannel.Link.Up,
             foreground = foreground,
             onSelect = vm.tabs::select,
-            onClose = vm.tabs::close,
+            onClose = { id ->
+                val tab = tabs.firstOrNull { it.id == id }
+                if (tab != null && tab.session.isRunning) confirm = "Close ${tab.title}? What runs in it gets a hangup." to { vm.tabs.close(id) } else vm.tabs.close(id)
+            },
             onOpen = vm::openTab,
         )
         AndroidView(
@@ -261,7 +281,8 @@ private fun TabRow(
                     maxLines = 1,
                 )
                 if (tab.kind != Tab.Kind.Console) {
-                    Text("  ×", color = foreground.copy(alpha = 0.7f), fontSize = 13.sp, modifier = Modifier.clickable { onClose(tab.id) })
+                    // A finger-sized target, not a 13sp glyph.
+                    Text("×", color = foreground.copy(alpha = 0.7f), fontSize = 18.sp, modifier = Modifier.clickable { onClose(tab.id) }.padding(start = 10.dp, end = 4.dp))
                 }
             }
         }
