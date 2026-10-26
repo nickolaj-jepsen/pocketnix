@@ -75,6 +75,13 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
 - Raw VM configs need `bootloader` = `/apex/com.android.virt/etc/u-boot.bin`.
 - virtmgr can't open files on FUSE (`/sdcard`): disk images live in app-private storage.
 - Bulk adb transfers over USB drop the device after ~100–200 MB: push in chunks.
+  An uncompressed `adb exec-in` drops it even at 64 MiB (`UsbFfs: Error while
+  reading USB block`), and a reconnect loses every `adb forward`.
+- Taking a guest vCPU offline works, but bringing it back can fail under pKVM
+  ("CPU4: died during early boot") until the VM restarts.
+- The balloon needs `useAutoMemoryBalloon` in the custom-image config;
+  virtmgr also requires `hypervisor.memory_reclaim.supported` (the test
+  phone has it), and logs "Memory balloon not enabled" otherwise.
 - The `pm grant`s are per Android user and lost on uninstall.
 - The AVF API is `@SystemApi` and `VirtualMachineCustomImageConfig` is `@hide`:
   reach them by reflection with in-process HiddenApiBypass.

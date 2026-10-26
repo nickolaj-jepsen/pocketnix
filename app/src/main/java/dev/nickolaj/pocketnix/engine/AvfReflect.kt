@@ -81,6 +81,16 @@ object AvfReflect {
         runCatching { invoke(b, "setVmConsoleInputSupported", Boolean::class.javaPrimitiveType!! to value) }
     }
 
+    /**
+     * A virtio-balloon with free page reporting, plus AVF's own inflation on
+     * onTrimMemory. virtmgr still drops it unless the device sets
+     * `hypervisor.memory_reclaim.supported`. Returns whether the API has it.
+     */
+    fun useAutoMemoryBalloon(b: Any, value: Boolean): Boolean =
+        runCatching { invoke(b, "useAutoMemoryBalloon", Boolean::class.javaPrimitiveType!! to value) }
+            .onFailure { Log.w(TAG, "no useAutoMemoryBalloon on this AVF API") }
+            .isSuccess
+
     fun setCustomImageConfig(b: Any, cfg: Any) = invoke(b, "setCustomImageConfig", CUSTOM to cfg).let {}
     fun build(b: Any): Any = invoke(b, "build")!!
 

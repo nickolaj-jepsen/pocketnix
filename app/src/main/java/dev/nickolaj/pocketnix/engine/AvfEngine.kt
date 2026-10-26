@@ -132,6 +132,8 @@ class AvfEngine(private val context: Context) : VmEngine {
         AvfReflect.setNetworkSupported(custom, settings.network)
         // Only the networked VM needs full crosvm (see setGpuConfig).
         if (settings.network) AvfReflect.setGpuConfig(custom)
+        // Hands the guest's free pages back to Android while the VM runs.
+        AvfReflect.useAutoMemoryBalloon(custom, true)
 
         val b = AvfReflect.newVmConfigBuilder(context)
         AvfReflect.setProtectedVm(b, false)

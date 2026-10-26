@@ -76,8 +76,10 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 - The image reaches app-private storage through the app's provision provider
   (`adb shell content call` / `content write`, admitting only the shell user),
   so release builds work without `run-as`. It goes in zstd-compressed chunks
-  (`adb push -z`), skipping all-zero ones, and never replaces an existing disk without `--replace`, nor while the
-  VM runs.
+  (`adb push -z`), skipping all-zero ones, and never replaces an existing disk
+  without `--replace`, nor while the VM runs. Pushing to a temp file and then
+  writing beats streaming with `adb exec-in`, which drops the USB link on
+  64 MiB writes and is slower in pieces small enough to survive.
 
 ## Durability
 
@@ -154,7 +156,9 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 - Runs until stopped: started from the app, tile or a terminal; a foreground
   service keeps it up (no wake lock). Stop is graceful via the agent (`systemctl poweroff`)
   with a hard stop after a timeout (30 s). Stop and Reboot ask first. Opt-in
-  start on phone boot. A memory balloon returns free guest RAM to Android.
+  start on phone boot. A memory balloon returns free guest RAM to Android:
+  AVF's auto balloon, which is free page reporting plus inflation on the app's
+  onTrimMemory (deflated again on guest OOM).
 - The app pings a quiet control stream every 15 s and drops it after 45 s of
   silence, so a hung guest shows as an absent agent (and so the boot-menu
   banner), never as Running. Control requests must answer well within that.
