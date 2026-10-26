@@ -54,6 +54,9 @@ class PtyBackend(
             reason = "The agent refused the session: ${e.message}"
         } catch (e: IOException) {
             if (!closed.get()) reason = if (stream == null) "Couldn't reach the agent: ${e.message}" else "Connection to the guest lost"
+        } catch (e: Exception) {
+            // A garbled Hello (JSONException), an engine error: end the tab, not the app.
+            reason = "Session failed: ${e.message ?: e.javaClass.simpleName}"
         } finally {
             connected.countDown()
             close()

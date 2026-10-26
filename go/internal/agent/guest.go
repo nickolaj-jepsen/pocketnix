@@ -16,7 +16,7 @@ import (
 )
 
 // maxClipboard bounds clipboard text both ways; Android's binder can't carry much more.
-const maxClipboard = 512 << 10
+const maxClipboard = 128 << 10
 
 // ServeGuest serves guest programs on l, a unix socket inside the guest:
 // notifications, opening URLs and files, and the clipboard, all through the

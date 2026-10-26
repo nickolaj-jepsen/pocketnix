@@ -43,7 +43,8 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
             "notify" -> notify(msg.optString("title"), msg.optString("body"), null)
             "open" -> open(msg, appVisible)
             "guest-clipboard" -> {
-                val text = msg.optString("text")
+                // A clip goes through one binder transaction (~1 MB, UTF-16): more throws.
+                val text = msg.optString("text").take(MAX_CLIP_CHARS)
                 lastGuestCopy = text
                 clipboard.setPrimaryClip(ClipData.newPlainText(hostname() ?: "pocketnix", text))
             }
@@ -89,6 +90,7 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
         // Clear of the VM service's (1) and the tabs' (1000 + tab).
         private const val NOTIFICATION_BASE = 100_000
         private const val MAX_NOTIFICATIONS = 50
+        private const val MAX_CLIP_CHARS = 100_000
 
         fun mimeType(path: String): String =
             MimeTypeMap.getSingleton().getMimeTypeFromExtension(path.substringAfterLast('.', "").lowercase()) ?: "application/octet-stream"

@@ -46,6 +46,8 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         vm.tabs.visible = true
+        // A VM started from the background (adb, a locked phone) may run without its service.
+        if (vm.serviceRefused.value) vm.startService()
     }
 
     override fun onStop() {

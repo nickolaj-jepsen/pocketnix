@@ -69,6 +69,10 @@ class PortForwards(private val appVersion: String) {
                 Thread({
                     try {
                         relay(client)
+                    } catch (e: Exception) {
+                        // A client that reset before we got to it.
+                        Log.w(TAG, "forward ${f.name}: ${e.message}")
+                        runCatching { client.close() }
                     } finally {
                         slots.release()
                     }

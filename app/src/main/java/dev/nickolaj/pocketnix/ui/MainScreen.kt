@@ -73,6 +73,7 @@ fun MainScreen(vm: Vm) {
     val forwardErrors by vm.forwardErrors.collectAsState()
     val updates by vm.updates.collectAsState()
     val agentLate by vm.agentLate.collectAsState()
+    val serviceRefused by vm.serviceRefused.collectAsState()
     var showSettings by remember { mutableStateOf(false) }
     var showUpdates by remember { mutableStateOf(false) }
     var showPalette by remember { mutableStateOf(false) }
@@ -130,6 +131,12 @@ fun MainScreen(vm: Vm) {
         }
         for (e in forwardErrors) {
             Text(e, color = foreground.copy(alpha = 0.8f), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 8.dp))
+        }
+        if (serviceRefused && running) {
+            Text(
+                "Android refused the foreground service, so it may kill the VM with the app. Reopening the app retries.",
+                color = foreground.copy(alpha = 0.8f), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 8.dp),
+            )
         }
         if (agentLate) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {

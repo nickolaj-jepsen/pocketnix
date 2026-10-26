@@ -22,6 +22,7 @@ import dev.nickolaj.pocketnix.service.VmService
 import dev.nickolaj.pocketnix.terminal.TabAlerts
 import dev.nickolaj.pocketnix.terminal.Tabs
 import dev.nickolaj.pocketnix.terminal.TerminalTheme
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -52,7 +53,10 @@ import java.io.File
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class Vm(private val app: Context) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    // A failed coroutine logs instead of crashing the app, and with it the VM.
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, e -> Log.e(TAG, "coroutine failed", e) },
+    )
     val settings = Settings(app)
     val console = ConsoleLog()
     private val appVersion = "pocketnix ${BuildConfig.VERSION_NAME}"
@@ -92,7 +96,11 @@ class Vm(private val app: Context) {
 
     init {
         tabs.alerts = TabAlerts(app) { control.config.value?.hostname }
-        scope.launch { control.events.collect { bridge.onEvent(it, tabs.visible) } }
+        scope.launch {
+            control.events.collect { ev ->
+                runCatching { bridge.onEvent(ev, tabs.visible) }.onFailure { Log.e(TAG, "agent push ${ev.optString("type")}", it) }
+            }
+        }
         // The Files app lists the root either way, but says when it can't be opened.
         scope.launch { control.link.map { it is ControlChannel.Link.Up }.distinctUntilChanged().collect { GuestDocumentsProvider.rootsChanged(app) } }
         scope.launch {
@@ -157,16 +165,31 @@ class Vm(private val app: Context) {
     fun start(bootMenu: Boolean = false) {
         reloadEngine()
         if (state.value == VmState.Running || state.value == VmState.Starting) return
-        // Refused when the app isn't in the foreground (e.g. started over adb on a locked
-        // phone); the VM still runs, just without the service keeping the process alive.
-        runCatching { app.startForegroundService(Intent(app, VmService::class.java)) }
-            .onFailure { Log.w(TAG, "foreground service refused: ${it.message}") }
         val e = _engine.value
         if (bootMenu && e.ownsGuest) {
             tabs.select(tabs.console.id)
             BootMenu(console, scope).tap()
         }
+        // The engine claims Starting first, so the service never starts into a Stopped state and quits.
         e.start(settings.vm(), console)
+        startService()
+    }
+
+    private val _serviceRefused = MutableStateFlow(false)
+    /** The VM runs without its foreground service, so Android may kill it with the app at any time. */
+    val serviceRefused: StateFlow<Boolean> = _serviceRefused.asStateFlow()
+
+    /** (Re)starts the foreground service while the VM runs; Android refuses it from the background. */
+    fun startService() {
+        if (state.value != VmState.Running && state.value != VmState.Starting && _engine.value.state.value != VmState.Starting) return
+        _serviceRefused.value = runCatching { app.startForegroundService(Intent(app, VmService::class.java)) }
+            .onFailure { Log.w(TAG, "foreground service refused: ${it.message}") }
+            .isFailure
+    }
+
+    /** The service reports that it runs in the foreground. */
+    fun serviceStarted() {
+        _serviceRefused.value = false
     }
 
     /** Stops the VM at once (its agent may be what's broken) and boots it into the boot menu. */

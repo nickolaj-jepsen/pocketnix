@@ -3027,20 +3027,13 @@ public final class TerminalEmulator {
                     mColors.reset();
                     mSession.onColorsChanged();
                 } else {
-                    int lastIndex = 0;
-                    for (int charIndex = 0; ; charIndex++) {
-                        boolean endOfInput = charIndex == textParameter.length();
-                        if (endOfInput || textParameter.charAt(charIndex) == ';') {
-                            try {
-                                int colorToReset = Integer.parseInt(textParameter.substring(lastIndex, charIndex));
-                                mColors.reset(colorToReset);
-                                mSession.onColorsChanged();
-                                if (endOfInput) break;
-                                charIndex++;
-                                lastIndex = charIndex;
-                            } catch (NumberFormatException e) {
-                                // Ignore.
-                            }
+                    // Termux's loop here threw on a malformed index at the end of input; one bad OSC killed the app.
+                    for (String part : textParameter.split(";")) {
+                        try {
+                            mColors.reset(Integer.parseInt(part));
+                            mSession.onColorsChanged();
+                        } catch (NumberFormatException e) {
+                            // Ignore.
                         }
                     }
                 }
@@ -3602,6 +3595,8 @@ public final class TerminalEmulator {
         // so was mCursorCol changed after the offsetDueToCombiningChar conditional by another thread?
         // TODO: Check if there are thread synchronization issues with mCursorCol and mCursorRow, possibly causing others bugs too.
         if (column < 0) column = 0;
+        // Even after a wrap a wide character can't fit a one-column screen or margin; setChar would throw.
+        if (displayWidth == 2 && (column >= mColumns - 1 || column >= mRightMargin - 1)) return;
         mScreen.setChar(column, mCursorRow, codePoint, getStyle());
 
         if (autoWrap && displayWidth > 0)

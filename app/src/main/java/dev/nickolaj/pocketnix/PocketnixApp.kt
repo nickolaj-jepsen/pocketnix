@@ -10,6 +10,13 @@ class PocketnixApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // The VM dies with this process, so a stray exception on a worker
+        // thread (a relay, a stream reader) must not take it down: log it, and
+        // only let the main thread's, after which the UI is gone anyway, crash.
+        val crash = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            if (t === mainLooper.thread) crash?.uncaughtException(t, e) else Log.e("PocketnixApp", "uncaught in ${t.name}; the thread ends, the app stays", e)
+        }
         // The AVF API is @SystemApi and VirtualMachineCustomImageConfig @hide;
         // this exempts them for this process only.
         runCatching {

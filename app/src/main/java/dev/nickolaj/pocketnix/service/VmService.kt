@@ -24,6 +24,7 @@ import kotlinx.coroutines.launch
 class VmService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var watch: Job? = null
+    private var lastStartId = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -37,6 +38,8 @@ class VmService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Every start must reach startForeground, or the system kills the app.
         startForeground(NOTIFICATION, notification("Starting"), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        lastStartId = startId
+        vm.serviceStarted()
         if (intent?.action == ACTION_STOP) vm.stop()
         if (watch == null) {
             watch = scope.launch {
@@ -44,8 +47,8 @@ class VmService : Service() {
                     .collect { (s, link, stopping) ->
                         when {
                             s == VmState.Stopped || s is VmState.Failed -> {
-                                stopForeground(STOP_FOREGROUND_REMOVE)
-                                stopSelf()
+                                // Only for the latest start: a restart's start may be on its way.
+                                if (stopSelfResult(lastStartId)) stopForeground(STOP_FOREGROUND_REMOVE)
                             }
                             else -> {
                                 val text = when {

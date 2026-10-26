@@ -7,7 +7,10 @@ import android.os.Message;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.UUID;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * A terminal session: a {@link TerminalBackend} coupled to a terminal emulator.
@@ -35,11 +38,15 @@ public class TerminalSession extends TerminalOutput {
      */
     final ByteQueue mProcessToTerminalIOQueue = new ByteQueue(64 * 1024);
     /**
-     * A queue written to from the main thread due to user interaction, and read by another thread which forwards
-     * it to the backend.
+     * Input from the main thread (keys, pastes, emulator replies) for the writer thread to hand to the backend.
+     * Unbounded up to {@link #MAX_PENDING_INPUT}, so the main thread never blocks on a backend that doesn't read
+     * (a console before the guest's tty is up, a PTY tab before its Hello): a bounded queue blocked it into an ANR.
      */
-    final ByteQueue mTerminalToProcessIOQueue = new ByteQueue(4096);
-    /** Buffer to write translate code points into utf8 before writing to mTerminalToProcessIOQueue */
+    private final LinkedBlockingQueue<byte[]> mInputQueue = new LinkedBlockingQueue<>();
+    private final AtomicLong mPendingInput = new AtomicLong();
+    private static final byte[] END_OF_INPUT = new byte[0];
+    private static final long MAX_PENDING_INPUT = 16 << 20;
+    /** Buffer to write translate code points into utf8 before writing them */
     private final byte[] mUtf8InputBuffer = new byte[5];
 
     /** Callback which gets notified when a session finishes or changes title. */
@@ -103,14 +110,14 @@ public class TerminalSession extends TerminalOutput {
         new Thread("TermSessionOutputWriter[" + mHandle + "]") {
             @Override
             public void run() {
-                final byte[] buffer = new byte[4096];
                 try {
                     while (true) {
-                        int bytesToWrite = mTerminalToProcessIOQueue.read(buffer, true);
-                        if (bytesToWrite == -1) return;
-                        mBackend.write(buffer, 0, bytesToWrite);
+                        byte[] chunk = mInputQueue.take();
+                        if (chunk == END_OF_INPUT) return;
+                        mPendingInput.addAndGet(-chunk.length);
+                        mBackend.write(chunk, 0, chunk.length);
                     }
-                } catch (IOException e) {
+                } catch (IOException | InterruptedException e) {
                     // The backend reports the end through onExit.
                 }
             }
@@ -149,8 +156,13 @@ public class TerminalSession extends TerminalOutput {
     /** Write data to the backend. */
     @Override
     public void write(byte[] data, int offset, int count) {
-        // ByteQueue rejects empty writes.
-        if (count > 0 && isRunning()) mTerminalToProcessIOQueue.write(data, offset, count);
+        if (count <= 0 || !isRunning()) return;
+        if (mPendingInput.addAndGet(count) > MAX_PENDING_INPUT) {
+            mPendingInput.addAndGet(-count);
+            Logger.logWarn(mClient, LOG_TAG, "dropping " + count + " bytes of input: the session isn't reading");
+            return;
+        }
+        mInputQueue.offer(Arrays.copyOfRange(data, offset, offset + count));
     }
 
     /** Write the Unicode code point to the terminal encoded in UTF-8. */
@@ -218,7 +230,7 @@ public class TerminalSession extends TerminalOutput {
         }
 
         // Stop the writer thread and wake a backend blocked on output.
-        mTerminalToProcessIOQueue.close();
+        mInputQueue.offer(END_OF_INPUT);
         mProcessToTerminalIOQueue.close();
         mBackend.close();
     }
@@ -275,7 +287,13 @@ public class TerminalSession extends TerminalOutput {
         public void handleMessage(Message msg) {
             int bytesRead = mProcessToTerminalIOQueue.read(mReceiveBuffer, false);
             if (bytesRead > 0) {
-                mEmulator.append(mReceiveBuffer, bytesRead);
+                // Guest output is untrusted: an emulator bug must cost a garbled batch, not the
+                // app, whose death is a hard power-off of the VM.
+                try {
+                    mEmulator.append(mReceiveBuffer, bytesRead);
+                } catch (RuntimeException e) {
+                    Logger.logStackTraceWithMessage(mClient, LOG_TAG, "terminal output the emulator couldn't handle", e);
+                }
                 // Podroid: DECSET 2026 — if the app is mid-frame (e.g. btop's atomic
                 // update), skip the invalidate. Cells are still mutated in the buffer;
                 // the close bracket arriving in a later batch will clear the flag and

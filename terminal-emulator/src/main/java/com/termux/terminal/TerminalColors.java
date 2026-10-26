@@ -21,6 +21,8 @@ public final class TerminalColors {
 
     /** Reset a particular indexed color with the default color from the color theme. */
     public void reset(int index) {
+        // The index comes from guest output (OSC 104); ignore what isn't a color.
+        if (index < 0 || index >= TextStyle.NUM_INDEXED_COLORS) return;
         mCurrentColors[index] = COLOR_SCHEME.mDefaultColors[index];
     }
 
