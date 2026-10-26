@@ -25,8 +25,9 @@ nix run .#boot-example           # that image under qemu-system-aarch64, agent o
 nix fmt .                        # alejandra, before committing Nix
 ```
 
-`pocketnix agent --connect <tcp:…|unix:…|vsock:<cid>:9100> config|exec|forward|…`
-talks to an agent the way the app does. A desktop agent for the app's debug TCP
+`pocketnix agent --connect <tcp:…|unix:…|vsock:<cid>:9100> config|exec|forward|update|switch-generation|history|…`
+talks to an agent the way the app does; the update commands wait for the
+operation and print its log and final state. A desktop agent for the app's debug TCP
 backend: `pocketnix-agent --config <file> --listen tcp:0.0.0.0:9100 --no-power`,
 then start the app with `--es tcp 10.0.2.2:9100` (the emulator's host).
 
@@ -111,3 +112,11 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
   binfmt and so the whole example image: budget ~15 minutes.
 - The Nix-built QEMU breaks if the shell leaks an `LD_LIBRARY_PATH` from a
   newer glibc; `boot-example` unsets it.
+- A NixOS test node that really switches (`switch`, not `test`) needs
+  `boot.loader.grub.enable = false`: the test VM's GRUB can't install. Test
+  VMs also boot without a system profile; create one before testing generations.
+- A guest system for a test's later generation can't be named in that guest's
+  own config (its path would depend on itself): build it with `extendModules`
+  into `system.build`, and put it on another node.
+- With a substituter that doesn't answer, Nix retries 5 times with backoff
+  (~5 s) before giving up; the update log shows the warnings.

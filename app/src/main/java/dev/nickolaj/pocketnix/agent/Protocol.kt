@@ -68,6 +68,9 @@ data class ExtraKey(val key: String, val popup: String?, val label: String?)
 
 data class Theme(val colors: Map<String, String>, val font: String?, val fontSha256: String?)
 
+/** A command-palette entry; [submit] presses Enter after typing [command]. */
+data class Snippet(val name: String, val command: String, val submit: Boolean)
+
 /** What the NixOS module declares for the app; arrives on the control stream. */
 data class GuestConfig(
     val hostname: String,
@@ -76,6 +79,7 @@ data class GuestConfig(
     val defaultProfile: String,
     val extraKeys: List<List<ExtraKey>>,
     val theme: Theme,
+    val snippets: List<Snippet> = emptyList(),
 ) {
     companion object {
         fun parse(json: String): GuestConfig = parse(JSONObject(json))
@@ -100,10 +104,75 @@ data class GuestConfig(
                     font = theme.optStringOrNull("font"),
                     fontSha256 = theme.optStringOrNull("fontSha256"),
                 ),
+                snippets = t.optJSONArray("snippets").objects().map {
+                    Snippet(it.getString("name"), it.getString("command"), it.optBoolean("submit"))
+                },
             )
         }
     }
 }
+
+/** One system profile generation. */
+data class Generation(
+    val number: Int,
+    val path: String,
+    /** Unix seconds. */
+    val date: Long,
+    val label: String?,
+    val current: Boolean,
+    val booted: Boolean,
+)
+
+/** The guest's update state, pushed by the agent (go/internal/protocol/updates.go). */
+data class Updates(
+    val sources: List<String>,
+    /** idle, checking, fetching or switching. */
+    val state: String,
+    val op: Int,
+    val current: String,
+    val booted: String,
+    val available: String?,
+    val source: String?,
+    /** Unix seconds of the last finished check, or 0. */
+    val checkedAt: Long,
+    val error: String?,
+    val log: List<String>,
+    /** Newest first. */
+    val generations: List<Generation>,
+) {
+    val busy: Boolean get() = state != "idle"
+
+    /** The running system isn't the booted one: a reboot boots what a switch only activated. */
+    val rebootPending: Boolean get() = booted.isNotEmpty() && current.isNotEmpty() && booted != current
+
+    companion object {
+        fun parse(o: JSONObject) = Updates(
+            sources = o.optJSONArray("sources").strings(),
+            state = o.optString("state", "idle"),
+            op = o.optInt("op"),
+            current = o.optString("current"),
+            booted = o.optString("booted"),
+            available = o.optStringOrNull("available"),
+            source = o.optStringOrNull("source"),
+            checkedAt = o.optLong("checkedAt"),
+            error = o.optStringOrNull("error"),
+            log = o.optJSONArray("log").strings(),
+            generations = o.optJSONArray("generations").objects().map {
+                Generation(
+                    number = it.getInt("number"),
+                    path = it.getString("path"),
+                    date = it.optLong("date"),
+                    label = it.optStringOrNull("label"),
+                    current = it.optBoolean("current"),
+                    booted = it.optBoolean("booted"),
+                )
+            },
+        )
+    }
+}
+
+private fun JSONArray?.strings(): List<String> =
+    if (this == null) emptyList() else (0 until length()).map { getString(it) }
 
 private fun JSONArray?.objects(): List<JSONObject> =
     if (this == null) emptyList() else (0 until length()).map { getJSONObject(it) }

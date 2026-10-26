@@ -3053,6 +3053,16 @@ public final class TerminalEmulator {
                 break;
             case 119: // Reset highlight color.
                 break;
+            case 9:
+                // iTerm2's notification. ConEmu's OSC 9;<n>;… (progress and the like) starts with a number: skip those.
+                if (!textParameter.isEmpty() && !textParameter.matches("\\d+(;.*)?")) mSession.onNotify(null, textParameter);
+                break;
+            case 777: {
+                // "777;notify;<title>;<body>" (rxvt-unicode's notify extension, as foot and others read it).
+                String[] parts = textParameter.split(";", 3);
+                if (parts.length >= 2 && parts[0].equals("notify")) mSession.onNotify(parts[1], parts.length > 2 ? parts[2] : "");
+                break;
+            }
             case 1337: // iTerm image
                 // - https://iterm2.com/documentation-images.html
                 // - https://iterm2.com/documentation-escape-codes.html

@@ -36,10 +36,14 @@ class ControlChannel(private val scope: CoroutineScope, private val appVersion: 
     private val _config = MutableStateFlow<GuestConfig?>(null)
     val config: StateFlow<GuestConfig?> = _config.asStateFlow()
 
+    private val _updates = MutableStateFlow<Updates?>(null)
+    /** The agent's update state; pushed on connect and on every change. */
+    val updates: StateFlow<Updates?> = _updates.asStateFlow()
+
     private var job: Job? = null
     @Volatile private var stream: AgentStream? = null
     private val requests = Mutex()
-    @Volatile private var pending: CompletableDeferred<Result<String>>? = null
+    @Volatile private var pending: CompletableDeferred<Result<JSONObject>>? = null
 
     fun start(dialer: AgentDialer) {
         stop()
@@ -76,33 +80,52 @@ class ControlChannel(private val scope: CoroutineScope, private val appVersion: 
     private fun readLoop(s: AgentStream) {
         while (true) {
             val msg = JSONObject(Protocol.readLine(s.input))
-            when (val type = msg.optString("type")) {
+            when (msg.optString("type")) {
                 "config" -> _config.value = GuestConfig.parse(msg)
+                // Pushed, and the answer to [refreshUpdates]; never a pending request's reply.
+                "updates" -> _updates.value = Updates.parse(msg)
                 "error" -> pending?.complete(Result.failure(AgentException(msg.optString("message"))))
-                else -> pending?.complete(Result.success(type))
+                else -> pending?.complete(Result.success(msg))
             }
         }
     }
 
     /**
-     * Sends a request (poweroff, reboot, ping) and waits for the agent's
-     * answer. Returns false when the stream is down or the agent refused.
+     * Sends [req] and returns the agent's answer: a message of the request's
+     * own type (pong for ping). Throws [AgentException] when the agent refused,
+     * IOException when the stream is down or the answer doesn't come in time.
      */
-    suspend fun request(type: String, timeoutMs: Long = 5_000): Boolean = requests.withLock {
-        val s = stream ?: return false
-        val answer = CompletableDeferred<Result<String>>()
+    suspend fun call(req: JSONObject, timeoutMs: Long = 5_000): JSONObject = requests.withLock {
+        val s = stream ?: throw IOException("the agent isn't connected")
+        val type = req.getString("type")
+        val answer = CompletableDeferred<Result<JSONObject>>()
         pending = answer
         try {
             scope.launch(Dispatchers.IO) {
-                runCatching { synchronized(s) { Protocol.writeJson(s.output, JSONObject().put("type", type)) } }
+                runCatching { synchronized(s) { Protocol.writeJson(s.output, req) } }
                     .onFailure { answer.complete(Result.failure(it)) }
             }
-            val r = withTimeoutOrNull(timeoutMs) { answer.await() } ?: return false
-            r.onFailure { Log.w(TAG, "$type: ${it.message}") }
+            val reply = withTimeoutOrNull(timeoutMs) { answer.await() }?.getOrThrow()
+                ?: throw IOException("$type: no answer in ${timeoutMs / 1000}s")
             val want = if (type == "ping") "pong" else type
-            r.getOrNull() == want
+            if (reply.optString("type") != want) throw IOException("$type: the agent answered ${reply.optString("type")}")
+            reply
         } finally {
             pending = null
+        }
+    }
+
+    /** [call] for a request with no fields; false when it failed. */
+    suspend fun request(type: String, timeoutMs: Long = 5_000): Boolean =
+        runCatching { call(JSONObject().put("type", type), timeoutMs) }
+            .onFailure { Log.w(TAG, "$type: ${it.message}") }
+            .isSuccess
+
+    /** Asks for a fresh update state (the generations may have changed under it); it arrives in [updates]. */
+    fun refreshUpdates() {
+        val s = stream ?: return
+        scope.launch(Dispatchers.IO) {
+            runCatching { synchronized(s) { Protocol.writeJson(s.output, JSONObject().put("type", "updates")) } }
         }
     }
 
@@ -116,6 +139,7 @@ class ControlChannel(private val scope: CoroutineScope, private val appVersion: 
     /** Forgets the last config, for a VM that stopped. */
     fun clear() {
         _config.value = null
+        _updates.value = null
     }
 
     private companion object {

@@ -253,6 +253,11 @@ public class TerminalSession extends TerminalOutput {
     }
 
     @Override
+    public void onNotify(String title, String body) {
+        mClient.onNotify(this, title, body);
+    }
+
+    @Override
     public void onColorsChanged() {
         mClient.onColorsChanged(this);
     }

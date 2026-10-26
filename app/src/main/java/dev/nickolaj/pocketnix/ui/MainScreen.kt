@@ -71,7 +71,11 @@ fun MainScreen(vm: Vm) {
     val typeface by vm.typeface.collectAsState()
     val themeRevision by vm.themeRevision.collectAsState()
     val forwardErrors by vm.forwardErrors.collectAsState()
+    val updates by vm.updates.collectAsState()
+    val agentLate by vm.agentLate.collectAsState()
     var showSettings by remember { mutableStateOf(false) }
+    var showUpdates by remember { mutableStateOf(false) }
+    var showPalette by remember { mutableStateOf(false) }
     var composerOpen by rememberSaveable { mutableStateOf(false) }
     var modifierRevision by remember { mutableIntStateOf(0) }
     val controller = remember {
@@ -88,7 +92,11 @@ fun MainScreen(vm: Vm) {
     LaunchedEffect(themeRevision) { controller.redraw() }
 
     if (showSettings) SettingsDialog(vm) { showSettings = false }
+    if (showUpdates) UpdatesDialog(vm) { showUpdates = false }
+    if (showPalette) PaletteDialog(vm, controller) { showPalette = false }
 
+    val running = state == VmState.Running || state == VmState.Starting
+    val agentUp = link is ControlChannel.Link.Up
     Column(
         Modifier
             .fillMaxSize()
@@ -98,17 +106,37 @@ fun MainScreen(vm: Vm) {
     ) {
         StatusBar(
             status = statusText(state, link, stopping, config?.hostname),
-            running = state == VmState.Running || state == VmState.Starting,
+            running = running,
             canStart = missing.isEmpty(),
             foreground = foreground,
-            onStart = vm::start,
+            onStart = { vm.start() },
             onStop = vm::stop,
             composerOpen = composerOpen,
             onComposer = { composerOpen = !composerOpen },
-            onSettings = { showSettings = true },
-        )
+            updateAvailable = updates?.available != null,
+            onUpdates = { showUpdates = true },
+        ) { dismiss ->
+            MenuItem("Commands", enabled = agentUp) { dismiss(); showPalette = true }
+            MenuItem("System and updates", enabled = agentUp) { dismiss(); showUpdates = true }
+            MenuItem("Settings") { dismiss(); showSettings = true }
+            if (running) {
+                MenuItem("Reboot", enabled = agentUp) { dismiss(); vm.reboot() }
+                MenuItem("Restart with boot menu") { dismiss(); vm.restartWithBootMenu() }
+            } else {
+                MenuItem("Start with boot menu", enabled = missing.isEmpty()) { dismiss(); vm.start(bootMenu = true) }
+            }
+        }
         for (e in forwardErrors) {
             Text(e, color = foreground.copy(alpha = 0.8f), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 8.dp))
+        }
+        if (agentLate) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "No agent after two minutes. A generation that won't boot? The console tab shows the boot.",
+                    color = foreground.copy(alpha = 0.8f), fontSize = 12.sp, modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = vm::restartWithBootMenu) { Text("Boot menu") }
+            }
         }
         if (missing.isNotEmpty() && state == VmState.Stopped) {
             Requirements(missing, foreground, Modifier.padding(16.dp))
@@ -152,6 +180,11 @@ private fun statusText(state: VmState, link: ControlChannel.Link, stopping: Bool
 }
 
 @Composable
+private fun MenuItem(text: String, enabled: Boolean = true, onClick: () -> Unit) {
+    DropdownMenuItem(text = { Text(text) }, enabled = enabled, onClick = onClick)
+}
+
+@Composable
 private fun StatusBar(
     status: String,
     running: Boolean,
@@ -161,12 +194,19 @@ private fun StatusBar(
     onStop: () -> Unit,
     composerOpen: Boolean,
     onComposer: () -> Unit,
-    onSettings: () -> Unit,
+    updateAvailable: Boolean,
+    onUpdates: () -> Unit,
+    menuItems: @Composable (dismiss: () -> Unit) -> Unit,
 ) {
+    var menu by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(status, color = foreground, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        if (updateAvailable) TextButton(onClick = onUpdates) { Text("Update") }
         TextButton(onClick = onComposer) { Text(if (composerOpen) "Keys" else "Compose") }
-        TextButton(onClick = onSettings) { Text("Settings") }
+        Box {
+            TextButton(onClick = { menu = true }) { Text("⋮", color = foreground) }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) { menuItems { menu = false } }
+        }
         if (running) {
             // The module's background may be dark under a light Material scheme.
             OutlinedButton(onClick = onStop, colors = ButtonDefaults.outlinedButtonColors(contentColor = foreground)) { Text("Stop") }
@@ -203,6 +243,8 @@ private fun TabRow(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 val ended = !tab.session.isRunning && tab.kind != Tab.Kind.Console
+                // A bell or notification arrived while nobody watched the tab.
+                if (tab.attention) Text("● ", color = foreground, fontSize = 10.sp)
                 Text(
                     tab.title + if (ended) " (ended)" else "",
                     color = foreground.copy(alpha = if (isSelected) 1f else 0.7f),

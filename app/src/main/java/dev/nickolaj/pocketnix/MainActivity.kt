@@ -1,5 +1,8 @@
 package dev.nickolaj.pocketnix
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -16,6 +19,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        openTab(intent)
+        // Tab notifications; `pocketnix provision` grants it, this asks otherwise. Asked once.
+        if (savedInstanceState == null && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
+        }
         setContent {
             val context = LocalContext.current
             // The terminal is dark by default; keep the chrome around it dark too.
@@ -27,5 +35,30 @@ class MainActivity : ComponentActivity() {
                 MainScreen(vm)
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        openTab(intent)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        vm.tabs.visible = true
+    }
+
+    override fun onStop() {
+        vm.tabs.visible = false
+        super.onStop()
+    }
+
+    /** A tab notification opens its tab. */
+    private fun openTab(intent: Intent?) {
+        val id = intent?.getIntExtra(EXTRA_TAB, -1) ?: -1
+        if (id >= 0) vm.tabs.select(id)
+    }
+
+    companion object {
+        const val EXTRA_TAB = "dev.nickolaj.pocketnix.extra.TAB"
     }
 }

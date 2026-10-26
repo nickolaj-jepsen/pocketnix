@@ -16,6 +16,7 @@ import dev.nickolaj.pocketnix.terminal.FnKeys
 import dev.nickolaj.pocketnix.terminal.KeyAction
 import dev.nickolaj.pocketnix.terminal.Modifier
 import dev.nickolaj.pocketnix.terminal.Modifiers
+import dev.nickolaj.pocketnix.terminal.Paste
 import dev.nickolaj.pocketnix.terminal.Tab
 import dev.nickolaj.pocketnix.terminal.Tabs
 
@@ -89,6 +90,14 @@ class TerminalController(
     /** Writes text straight to the session, bypassing key handling. */
     fun write(text: String) {
         view?.currentSession?.write(text)
+    }
+
+    /** Types [text] into the current tab as a paste (bracketed when the app asked); [submit] presses Enter. */
+    fun paste(text: String, submit: Boolean) {
+        val session = view?.currentSession ?: return
+        val emulator = session.emulator ?: return
+        if (text.isEmpty() && !submit) return
+        session.write(Paste.encode(text, emulator.isBracketedPasteMode, submit))
     }
 
     private inner class Client : TerminalViewClient {

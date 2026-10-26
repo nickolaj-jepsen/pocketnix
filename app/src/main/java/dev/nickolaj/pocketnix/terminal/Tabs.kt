@@ -24,6 +24,10 @@ class Tab(val id: Int, val kind: Kind, val session: TerminalSession) {
             Kind.Console -> "console"
             is Kind.Pty -> session.title?.takeIf { it.isNotBlank() } ?: kind.profile
         }
+
+    /** Rang or notified while nobody watched it; cleared when it's shown. */
+    @Volatile var attention = false
+        internal set
 }
 
 /** The open terminal tabs. The console tab comes first and stays. */
@@ -36,6 +40,22 @@ class Tabs(private val context: Context, consoleBackend: TerminalBackend, privat
     }
 
     @Volatile var view: View? = null
+
+    /** Told when a tab asks for attention, and when that's been seen. */
+    interface Alerts {
+        /** A bell ([title] and [body] null) or an OSC 9/777 notification; [watched] if it was in view. */
+        fun alert(tab: Tab, watched: Boolean, appVisible: Boolean, title: String?, body: String?)
+        fun seen(tab: Tab)
+    }
+
+    @Volatile var alerts: Alerts? = null
+
+    /** Whether the app is in the foreground, so the selected tab is in view. */
+    var visible = false
+        set(v) {
+            field = v
+            if (v) seen(current())
+        }
 
     private var nextId = 0
     private val client = Client()
@@ -64,7 +84,9 @@ class Tabs(private val context: Context, consoleBackend: TerminalBackend, privat
     }
 
     fun select(id: Int) {
-        if (_tabs.value.any { it.id == id }) _selected.value = id
+        val tab = _tabs.value.firstOrNull { it.id == id } ?: return
+        _selected.value = id
+        if (visible) seen(tab)
     }
 
     fun close(id: Int) {
@@ -73,7 +95,26 @@ class Tabs(private val context: Context, consoleBackend: TerminalBackend, privat
         tab.session.finishIfRunning()
         val remaining = _tabs.value - tab
         _tabs.value = remaining
-        if (_selected.value == id) _selected.value = remaining.last().id
+        alerts?.seen(tab)
+        if (_selected.value == id) select(remaining.last().id)
+    }
+
+    private fun seen(tab: Tab) {
+        if (tab.attention) {
+            tab.attention = false
+            _revision.update { it + 1 }
+        }
+        alerts?.seen(tab)
+    }
+
+    private fun attention(session: TerminalSession, title: String?, body: String?) {
+        val tab = _tabs.value.firstOrNull { it.session === session } ?: return
+        val watched = visible && tab.id == _selected.value
+        if (!watched && !tab.attention) {
+            tab.attention = true
+            _revision.update { it + 1 }
+        }
+        alerts?.alert(tab, watched, visible, title, body)
     }
 
     fun current(): Tab = _tabs.value.firstOrNull { it.id == _selected.value } ?: console
@@ -105,7 +146,9 @@ class Tabs(private val context: Context, consoleBackend: TerminalBackend, privat
             session.write(Paste.encode(text, emulator.isBracketedPasteMode, submit = false))
         }
 
-        override fun onBell(session: TerminalSession) {}
+        override fun onBell(session: TerminalSession) = attention(session, null, null)
+
+        override fun onNotify(session: TerminalSession, title: String?, body: String) = attention(session, title, body)
 
         override fun onColorsChanged(session: TerminalSession) {
             view?.onColorsChanged()

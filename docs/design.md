@@ -103,6 +103,27 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
   with boot menu" taps a key on hvc0 so systemd-boot shows its menu in the
   console tab. Offered automatically when no ready signal arrives in time.
   (nixpkgs' systemd-boot has no boot counting.)
+- A check asks the build host first and falls back to the published path, so
+  CI covers for a desktop that's off. The build host runs
+  `nix build --refresh --no-link --print-out-paths <installable>` over ssh as
+  root with the guest's host key, in BatchMode: its host key must be in
+  `programs.ssh.knownHosts`. A build host's path is substituted first and
+  copied (`--no-check-sigs`: the guest already trusts that host with its whole
+  system) only when the caches don't have it.
+- Update is check, fetch and switch in one; the switch runs
+  `switch-to-configuration` in its own unit through `systemd-run`, as
+  nixos-rebuild does. Background checks (`updates.checkInterval`, 6 h) only
+  report "update available"; nothing applies on its own.
+- Generations come from the system profile; rolling back is switching to an
+  older one (`nix-env --switch-generation` + `switch`). The app offers a reboot
+  when the running system isn't the booted one.
+- The update state (sources, operation, available path, log tail,
+  generations) is pushed on the control stream; requests are answered in
+  order, so an unknown request gets an Error rather than silence.
+- The boot menu: the app taps space on the console from the VM's start until
+  the kernel's EFI stub speaks (at most 20 s). Space is no entry's hotkey, so
+  it only shows the menu. "Offered automatically" is a banner after 2 min
+  running without the agent.
 
 ## Exposure
 
@@ -129,6 +150,13 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
   modifiers, a command palette (module snippets + shell history), and
   session-aware tabs (BEL / OSC 9 / OSC 777 in a background tab → badge +
   notification).
+- The palette's history is the user's shell history file, read by the agent
+  (bash, zsh or fish format, or `terminal.historyFile`), newest first, each
+  command once; snippets come first.
+- A notification (OSC 9 not starting with a number, which is ConEmu's
+  progress; OSC 777;notify) posts unless its tab is in view. A bell only badges
+  while the app is open, and posts from the background at most every 30 s a
+  tab, since every failed completion rings.
 
 ## Distribution
 

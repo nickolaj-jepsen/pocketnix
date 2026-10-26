@@ -9,6 +9,18 @@ import java.util.Random;
 /** "ESC ]" is the Operating System Command. */
 public class OperatingSystemControlTest extends TerminalTestCase {
 
+	public void testNotifications() {
+		withTerminalSized(10, 10);
+		enterString("\033]9;build done\007");
+		enterString("\033]777;notify;make;all targets built\033\\");
+		enterString("\033]777;notify;title only\007");
+		// ConEmu's progress report and other numbered OSC 9 forms aren't notifications.
+		enterString("\033]9;4;1;50\007");
+		enterString("\033]777;preexec\007");
+		assertEquals(List.of("null|build done", "make|all targets built", "title only|"), mOutput.notifications);
+		assertEquals(0, mOutput.bellsRung);
+	}
+
 	public void testSetTitle() throws Exception {
 		List<ChangedTitle> expectedTitleChanges = new ArrayList<>();
 

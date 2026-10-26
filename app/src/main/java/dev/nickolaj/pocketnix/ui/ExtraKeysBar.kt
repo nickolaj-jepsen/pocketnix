@@ -34,7 +34,6 @@ import dev.nickolaj.pocketnix.agent.ExtraKey
 import dev.nickolaj.pocketnix.terminal.ExtraKeys
 import dev.nickolaj.pocketnix.terminal.KeyAction
 import dev.nickolaj.pocketnix.terminal.Modifiers
-import dev.nickolaj.pocketnix.terminal.Paste
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -123,10 +122,7 @@ private fun ExtraKeyButton(key: ExtraKey, modifiers: Modifiers, revision: Int, f
 fun Composer(controller: TerminalController, foreground: Color) {
     var text by rememberSaveable { mutableStateOf("") }
     fun send(submit: Boolean) {
-        val session = controller.view?.currentSession ?: return
-        val emulator = session.emulator ?: return
-        if (text.isEmpty() && !submit) return
-        session.write(Paste.encode(text, emulator.isBracketedPasteMode, submit))
+        controller.paste(text, submit)
         text = ""
     }
     Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {

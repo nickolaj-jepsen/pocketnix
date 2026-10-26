@@ -57,6 +57,14 @@ public abstract class TerminalTestCase extends TestCase {
 		public void onColorsChanged() {
 			colorsChanged++;
 		}
+
+		/** "title|body" per notification; title is "null" for OSC 9. */
+		public final List<String> notifications = new ArrayList<>();
+
+		@Override
+		public void onNotify(String title, String body) {
+			notifications.add(title + "|" + body);
+		}
 	}
 
 	public TerminalEmulator mTerminal;

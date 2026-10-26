@@ -15,6 +15,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
+import org.json.JSONObject
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -51,9 +52,10 @@ class AgentIntegrationTest {
                 Thread { c.use { s -> s.getOutputStream().write("echo:".toByteArray() + s.getInputStream().readBytes()) } }.start()
             }
         }.apply { isDaemon = true }.start()
+        File(dir, "history").writeText("ls\nmake\n")
         File(dir, "agent.json").writeText(
             """
-            {"shell":"/bin/sh",
+            {"shell":"/bin/sh", "history":"${File(dir, "history").path}",
              "forwards":[{"name":"echo","guestPort":${echo.localPort},"hostPort":${freePort()}}],
              "terminal":{"profiles":[{"name":"shell"},
                {"name":"exit4","command":"echo hi; exit 4"},
@@ -90,6 +92,24 @@ class AgentIntegrationTest {
         assertTrue(ctl.request("ping"))
         // The agent runs with --no-power: poweroff is refused, and request says so.
         assertEquals(false, ctl.request("poweroff"))
+        ctl.stop()
+    }
+
+    @Test
+    fun updateStateAndHistory() = runBlocking {
+        val ctl = ControlChannel(scope, "test")
+        ctl.start(dialer)
+        val u = withTimeout(10_000) { ctl.updates.filterNotNull().first() }
+        assertEquals("idle", u.state)
+        assertEquals(emptyList<String>(), u.sources)
+        // No source configured: refused, and the refusal says why.
+        val refused = runCatching { ctl.call(JSONObject().put("type", "update-check")) }.exceptionOrNull()
+        assertTrue("$refused", refused is AgentException && refused.message!!.contains("no update source"))
+        val h = ctl.call(JSONObject().put("type", "history"))
+        assertEquals(listOf("make", "ls"), (0 until h.getJSONArray("entries").length()).map { h.getJSONArray("entries").getString(it) })
+        // An updates refresh answers outside the requests, so the next request still pairs with its reply.
+        ctl.refreshUpdates()
+        assertTrue(ctl.request("ping"))
         ctl.stop()
     }
 

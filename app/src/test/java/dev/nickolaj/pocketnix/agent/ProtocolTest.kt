@@ -4,6 +4,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.json.JSONObject
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -29,6 +30,37 @@ class ProtocolTest {
         assertEquals(listOf(ExtraKey("ESC", null, null), ExtraKey("-", "|", null), ExtraKey("x", null, "X!")), c.extraKeys.single())
         assertEquals(mapOf("background" to "#1e1e2e"), c.theme.colors)
         assertEquals("/nix/store/x-font/a.ttf", c.theme.font)
+    }
+
+    @Test
+    fun parsesSnippets() {
+        val c = GuestConfig.parse("""{"type":"config","terminal":{"snippets":[{"name":"Logs","command":"journalctl -f"},{"name":"df","command":"df -h","submit":true}]}}""")
+        assertEquals(listOf(Snippet("Logs", "journalctl -f", false), Snippet("df", "df -h", true)), c.snippets)
+    }
+
+    @Test
+    fun parsesUpdates() {
+        val u = Updates.parse(
+            JSONObject(
+                """
+                {"type":"updates","sources":["buildHost"],"state":"idle","op":3,
+                 "current":"/nix/store/b-sys","booted":"/nix/store/a-sys","available":"/nix/store/c-sys","source":"buildHost",
+                 "checkedAt":1700000000,"log":["x"],
+                 "generations":[{"number":2,"path":"/nix/store/b-sys","date":1700000000,"label":"26.05","current":true},
+                                {"number":1,"path":"/nix/store/a-sys","date":1690000000,"booted":true}]}
+                """.trimIndent(),
+            ),
+        )
+        assertEquals(false, u.busy)
+        assertEquals(true, u.rebootPending)
+        assertEquals("/nix/store/c-sys", u.available)
+        assertEquals(listOf(2, 1), u.generations.map { it.number })
+        assertEquals(Generation(1, "/nix/store/a-sys", 1690000000, null, current = false, booted = true), u.generations[1])
+        // A minimal state: nothing configured, nothing found.
+        val empty = Updates.parse(JSONObject("""{"type":"updates","state":"checking"}"""))
+        assertEquals(true, empty.busy)
+        assertNull(empty.available)
+        assertEquals(false, empty.rebootPending)
     }
 
     @Test

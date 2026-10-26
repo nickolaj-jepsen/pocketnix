@@ -29,4 +29,10 @@ public abstract class TerminalOutput {
 
     public abstract void onColorsChanged();
 
+    /**
+     * A program asked for a desktop notification: OSC 9 (iTerm2; no title)
+     * or OSC 777;notify (rxvt-unicode, foot). Title is null for OSC 9.
+     */
+    public void onNotify(String title, String body) {}
+
 }

@@ -42,6 +42,11 @@ class ConsoleLog(private val capacity: Int = 256 * 1024) {
         }
     }
 
+    /** Attaches [sink] to live output only, with no replay. */
+    fun listen(sink: TerminalBackend.Sink) {
+        listeners.add(sink)
+    }
+
     fun detach(sink: TerminalBackend.Sink) {
         listeners.remove(sink)
     }

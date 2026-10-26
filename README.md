@@ -20,6 +20,23 @@ nix run github:nickolaj-jepsen/pocketnix#provision -- \
   --inject /etc/ssh/ssh_host_ed25519_key=./host_key
 ```
 
+The phone never evaluates or builds. Updates come finished, from a build host
+over ssh, or from a store path your CI publishes, and the app's System menu
+updates, rolls back and lists generations:
+
+```nix
+pocketnix.guest.updates = {
+  # Builds `<flake>#nixosConfigurations.<hostName>`; trusts the guest's host key.
+  buildHost = { host = "alice@desktop"; flake = "github:alice/nixos"; };
+  # Fallback: a URL whose body is the toplevel path, in a cache the guest trusts.
+  published.url = "https://ci.example.com/phone/toplevel";
+};
+programs.ssh.knownHosts.desktop.publicKey = "ssh-ed25519 …";
+```
+
+To push from a desktop over USB instead, use `pocketnix ssh-proxy` as an ssh
+ProxyCommand (`pocketnix ssh-proxy -h`).
+
 ## Requirements
 
 - A phone with AVF and non-protected VM support (tested on a Pixel 8 Pro running

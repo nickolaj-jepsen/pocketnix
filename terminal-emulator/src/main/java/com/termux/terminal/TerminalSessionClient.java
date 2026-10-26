@@ -22,6 +22,9 @@ public interface TerminalSessionClient {
 
     void onBell(@NonNull TerminalSession session);
 
+    /** OSC 9 or OSC 777;notify; see {@link TerminalOutput#onNotify}. */
+    default void onNotify(@NonNull TerminalSession session, @Nullable String title, @NonNull String body) {}
+
     void onColorsChanged(@NonNull TerminalSession session);
 
     void onTerminalCursorStateChange(boolean state);

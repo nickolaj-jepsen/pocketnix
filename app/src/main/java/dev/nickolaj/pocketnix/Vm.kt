@@ -8,13 +8,16 @@ import dev.nickolaj.pocketnix.agent.ControlChannel
 import dev.nickolaj.pocketnix.agent.FontCache
 import dev.nickolaj.pocketnix.agent.GuestConfig
 import dev.nickolaj.pocketnix.agent.PtyBackend
+import dev.nickolaj.pocketnix.agent.Updates
 import dev.nickolaj.pocketnix.engine.AvfEngine
+import dev.nickolaj.pocketnix.engine.BootMenu
 import dev.nickolaj.pocketnix.engine.ConsoleLog
 import dev.nickolaj.pocketnix.engine.TcpEngine
 import dev.nickolaj.pocketnix.engine.VmEngine
 import dev.nickolaj.pocketnix.engine.VmState
 import dev.nickolaj.pocketnix.forward.PortForwards
 import dev.nickolaj.pocketnix.service.VmService
+import dev.nickolaj.pocketnix.terminal.TabAlerts
 import dev.nickolaj.pocketnix.terminal.Tabs
 import dev.nickolaj.pocketnix.terminal.TerminalTheme
 import kotlinx.coroutines.CoroutineScope
@@ -25,6 +28,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -34,6 +39,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
 import java.io.File
 
 /**
@@ -73,7 +79,25 @@ class Vm(private val app: Context) {
     private val _themeRevision = MutableStateFlow(0)
     val themeRevision: StateFlow<Int> = _themeRevision.asStateFlow()
 
+    private val _agentLate = MutableStateFlow(false)
+    /** The guest runs but its agent hasn't answered in [AGENT_LATE_MS]: maybe a generation that won't boot. */
+    val agentLate: StateFlow<Boolean> = _agentLate.asStateFlow()
+
+    val updates: StateFlow<Updates?> get() = control.updates
+
     init {
+        tabs.alerts = TabAlerts(app) { control.config.value?.hostname }
+        scope.launch {
+            combine(state, control.link) { s, link -> s == VmState.Running && link !is ControlChannel.Link.Up }
+                .distinctUntilChanged()
+                .collectLatest { waiting ->
+                    _agentLate.value = false
+                    if (waiting) {
+                        delay(AGENT_LATE_MS)
+                        _agentLate.value = true
+                    }
+                }
+        }
         scope.launch {
             state.collect { s ->
                 when (s) {
@@ -117,15 +141,59 @@ class Vm(private val app: Context) {
         _engine.value = pickEngine()
     }
 
-    fun start() {
+    /**
+     * Boots the VM. With [bootMenu], systemd-boot shows its menu in the
+     * console tab (see [BootMenu]), the way back from a generation that
+     * won't boot.
+     */
+    fun start(bootMenu: Boolean = false) {
         reloadEngine()
         if (state.value == VmState.Running || state.value == VmState.Starting) return
         // Refused when the app isn't in the foreground (e.g. started over adb on a locked
         // phone); the VM still runs, just without the service keeping the process alive.
         runCatching { app.startForegroundService(Intent(app, VmService::class.java)) }
             .onFailure { Log.w(TAG, "foreground service refused: ${it.message}") }
-        _engine.value.start(settings.vm(), console)
+        val e = _engine.value
+        if (bootMenu && e.ownsGuest) {
+            tabs.select(tabs.console.id)
+            BootMenu(console, scope).tap()
+        }
+        e.start(settings.vm(), console)
     }
+
+    /** Stops the VM at once (its agent may be what's broken) and boots it into the boot menu. */
+    fun restartWithBootMenu() {
+        scope.launch {
+            if (state.value == VmState.Running || state.value == VmState.Starting) {
+                _engine.value.forceStop()
+                state.first { it != VmState.Running && it != VmState.Starting }
+            }
+            start(bootMenu = true)
+        }
+    }
+
+    /** Asks the guest to reboot; the engine boots it again (into the default generation). */
+    fun reboot() {
+        scope.launch { control.request("reboot") }
+    }
+
+    /**
+     * Runs an update request (update-check, update-apply, or
+     * switch-generation with [generation]); progress arrives in [updates].
+     * Returns why the agent refused, or null.
+     */
+    suspend fun updateRequest(type: String, generation: Int? = null): String? {
+        val req = JSONObject().put("type", type)
+        if (generation != null) req.put("generation", generation)
+        return runCatching { control.call(req) }.exceptionOrNull()?.message
+    }
+
+    /** The user's shell history for the command palette, newest first; empty while the agent can't be reached. */
+    suspend fun history(): List<String> = runCatching {
+        val h = control.call(JSONObject().put("type", "history").put("limit", HISTORY_LIMIT))
+        val a = h.optJSONArray("entries") ?: return@runCatching emptyList()
+        (0 until a.length()).map { a.getString(it) }
+    }.onFailure { Log.w(TAG, "history: ${it.message}") }.getOrDefault(emptyList())
 
     /** Graceful: the agent powers the guest off; a hard stop follows if it can't or doesn't in time. */
     fun stop() {
@@ -200,5 +268,7 @@ class Vm(private val app: Context) {
     private companion object {
         const val TAG = "Vm"
         const val GRACEFUL_STOP_MS = 30_000L
+        const val AGENT_LATE_MS = 120_000L
+        const val HISTORY_LIMIT = 1000
     }
 }
