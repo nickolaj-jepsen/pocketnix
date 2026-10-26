@@ -153,3 +153,9 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
 - Any uncaught exception on an app thread kills the process and so the VM;
   `PocketnixApp` logs worker-thread ones instead, and guest output goes
   through a fuzzed emulator (`FuzzTest`).
+- An agent push with a top-level `"id"` never reaches `GuestBridge`: the
+  app's `ControlChannel` and the Go client take it for a late answer to a
+  request. Name event ids otherwise (notify uses `notification`).
+- Tabs have no login session, so without lingering there is no user manager
+  and no `/run/user/<uid>/bus`; the module lingers the user, which brings the
+  session bus up with no login (the NixOS test checks it).

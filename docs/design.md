@@ -182,11 +182,28 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 - Guest programs reach the agent on a guest-local unix socket
   (`/run/pocketnix/guest.sock`), which admits root and the session user by
   peer credentials. `pocketnix-guest` speaks it, and the module installs it as
-  `xdg-open` and `notify-send` (both on by default, above xdg-utils and
-  libnotify). With no app connected a request fails rather than queues.
+  `xdg-open` (on by default, above xdg-utils). With no app connected a
+  request fails rather than queues.
 - `xdg-open <url>` opens on Android; `xdg-open <file>` opens the file through
   the file provider, so only files under its root. From the background
   Android won't start an activity, so both become a notification to tap.
+  The module also makes `pocketnix-open.desktop` the default for web, mail,
+  phone and map links and a few common file types, so `gio open` and
+  GLib/Qt programs open on Android too (this keeps `xdg.mime` on under AVF).
+- Tabs get the user's session bus: the module turns on lingering, which
+  starts it without a login, and the agent sets `DBUS_SESSION_BUS_ADDRESS`
+  when the socket exists.
+- Notifications: `pocketnix-guest notifyd`, a D-Bus-activated user service,
+  is `org.freedesktop.Notifications`, so libnotify's own `notify-send` and
+  desktop programs post Android notifications. The agent assigns the ids
+  (a replacement keeps its Android notification, also across a notifyd
+  restart); urgency picks the channel (low silent, critical heads-up).
+  Actions and dismissals come back over one long-lived `subscribe`
+  connection on the guest socket (exempt from its idle deadline) as
+  `ActionInvoked` and `NotificationClosed`; notifyd only signals ids it
+  posted. A tap without a default action opens the app and counts as a
+  dismissal. Root and system units have no session bus: they use
+  `pocketnix-guest notify`.
 - Clipboard: a guest copy (`pocketnix-guest copy`, or OSC 52 in a tab) sets
   Android's. Android's goes to the agent whenever the app gains focus (the
   only time Android lets it read), and `pocketnix-guest paste` prints it.
