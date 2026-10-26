@@ -420,6 +420,13 @@ in {
       default = true;
       description = "The AVF platform: kernel, disk image, boot loader, first boot and the hvc0 console. Off for other hypervisors, such as NixOS tests.";
     };
+    # Off only in the evaluation that yields the unwrapped installer.
+    avf.wrapBootLoader = mkOption {
+      type = types.bool;
+      default = true;
+      internal = true;
+      visible = false;
+    };
   };
 
   options.system.build.pocketnixImage = mkOption {
@@ -492,6 +499,14 @@ in {
       boot.loader.efi.canTouchEfiVariables = false;
       # The app's boot-menu start taps a key on hvc0 to show the menu.
       boot.loader.timeout = mkDefault 0;
+      # Google's kernel has no efivarfs, yet /sys/firmware/efi exists, so the
+      # version check a plain `switch` runs (`bootctl status`, which reads EFI
+      # variables) exits 1 and fails the switch. The install path passes
+      # --no-variables: take it on every switch, as --install-bootloader does.
+      system.build.installBootLoader = mkIf cfg.avf.wrapBootLoader (lib.mkForce (pkgs.writeShellScript "install-bootloader-pocketnix" ''
+        export NIXOS_INSTALL_BOOTLOADER=1
+        exec ${(extendModules {modules = [{pocketnix.guest.avf.wrapBootLoader = false;}];}).config.system.build.installBootLoader} "$@"
+      ''));
 
       fileSystems."/" = {
         device = "/dev/disk/by-label/nixos";

@@ -94,6 +94,9 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
   TerminalView never sizes its session; and logcat (`-c` too) is the only way to
   see the app. Debug builds' `DEBUG_TAB` / `DEBUG_DUMP` actions are for this.
 - Termux's `ByteQueue` throws on a zero-length write; keep empty writes out.
+- Google's kernel has no efivarfs but has `/sys/firmware/efi`: `bootctl status`
+  (the version check of a plain `switch`) exits 1 without a word, while
+  `bootctl --no-variables …` works. The module makes every switch install.
 
 ## Traps (verified on the desktop)
 
