@@ -34,6 +34,7 @@ func main() {
 	stateDir := flag.String("state-dir", "", "directory for state that must outlive a crash (unfinished file-provider writes); empty keeps none")
 	guestSocket := flag.String("guest-socket", "", "unix socket for guest programs (pocketnix-guest), e.g. "+protocol.GuestSocket+"; empty serves none")
 	displayCapture := flag.String("display-capture", "", "print one PPM frame to stdout, e.g. 'grim -t ppm -'; empty serves no display streams")
+	displayHelper := flag.String("display-helper", "", "long-lived capture client printing damage rects, e.g. 'pocketnix-capture' (wins over -display-capture)")
 	displayCompositor := flag.String("display-compositor", "", "start this once for the display stream, e.g. 'sway -c /etc/pocketnix/sway.conf'; empty uses whatever runs")
 	displayInterval := flag.Duration("display-interval", 100*time.Millisecond, "quiet time between display captures")
 	var displayEnv listFlag
@@ -68,11 +69,12 @@ func main() {
 	}()
 
 	go srv.Updates.Periodic(context.Background())
-	if *displayCapture != "" {
+	if *displayCapture != "" || *displayHelper != "" {
 		// The command lines are split on spaces, not run through a shell: a
 		// module writing the config never has to quote.
 		srv.Display = &agent.Display{
 			Capture:    strings.Fields(*displayCapture),
+			Helper:     strings.Fields(*displayHelper),
 			Compositor: strings.Fields(*displayCompositor),
 			Env:        displayEnv,
 			Interval:   *displayInterval,

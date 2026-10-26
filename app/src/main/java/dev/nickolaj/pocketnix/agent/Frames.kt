@@ -21,6 +21,7 @@ object Frames {
     // Display streams (go/internal/protocol display.go).
     const val DISPLAY_GEOMETRY: Int = 3
     const val DISPLAY_BAND: Int = 4
+    const val DISPLAY_RECT: Int = 5
     const val DISPLAY_RGBA: Int = 1
     const val MAX_PAYLOAD = 1 shl 20
 
@@ -89,6 +90,24 @@ object Frames {
 
     /** Rows of a display frame that changed, RGBA in ARGB_8888 byte order. */
     class Band(val y: Int, val height: Int, val stride: Int, val pixels: ByteArray)
+
+    /** A damage rect of a display frame, with its own stride (w × 4). */
+    class Rect(val x: Int, val y: Int, val width: Int, val height: Int, val stride: Int, val pixels: ByteArray)
+
+    fun rect(payload: ByteArray): Rect {
+        if (payload.size < 12) throw IOException("rect payload ${payload.size} bytes")
+        val b = ByteBuffer.wrap(payload)
+        val x = b.short.toInt() and 0xffff
+        val y = b.short.toInt() and 0xffff
+        val width = b.short.toInt() and 0xffff
+        val height = b.short.toInt() and 0xffff
+        val stride = b.int
+        val pixels = payload.copyOfRange(12, payload.size)
+        if (width == 0 || height == 0 || stride != width * 4 || pixels.size != height * stride) {
+            throw IOException("rect $width×$height at $x,$y: ${pixels.size} bytes for stride $stride")
+        }
+        return Rect(x, y, width, height, stride, pixels)
+    }
 
     fun band(payload: ByteArray): Band {
         if (payload.size < 8) throw IOException("band payload ${payload.size} bytes")

@@ -17,6 +17,10 @@ const (
 	// FrameDisplayBand payload: [y u16][height u16][stride u32] then
 	// height*stride bytes of pixels in the geometry's format.
 	FrameDisplayBand byte = 4
+	// FrameDisplayRect payload: [x u16][y u16][width u16][height u16][stride u32]
+	// then height*stride bytes of pixels. What a compositor's damage really
+	// is: a narrow window changing must not cost the whole screen's width.
+	FrameDisplayRect byte = 5
 )
 
 // DisplayFormatRGBA is R,G,B,A per pixel: the byte order Android's ARGB_8888
@@ -70,6 +74,49 @@ func DecodeDisplayBand(b []byte) (y, height uint16, stride uint32, pixels []byte
 		return 0, 0, 0, nil, fmt.Errorf("band carries %d bytes, want %d", len(pixels), want)
 	}
 	return y, height, stride, pixels, nil
+}
+
+const displayRectHeader = 12
+
+// EncodeDisplayRect returns the FrameDisplayRect payload for one rect.
+func EncodeDisplayRect(x, y, width, height uint16, stride uint32, pixels []byte) ([]byte, error) {
+	if len(pixels) != int(height)*int(stride) {
+		return nil, fmt.Errorf("rect is %d bytes, want %d", len(pixels), int(height)*int(stride))
+	}
+	b := make([]byte, displayRectHeader+len(pixels))
+	binary.BigEndian.PutUint16(b[0:], x)
+	binary.BigEndian.PutUint16(b[2:], y)
+	binary.BigEndian.PutUint16(b[4:], width)
+	binary.BigEndian.PutUint16(b[6:], height)
+	binary.BigEndian.PutUint32(b[8:], stride)
+	copy(b[displayRectHeader:], pixels)
+	return b, nil
+}
+
+// DecodeDisplayRect parses the FrameDisplayRect payload.
+func DecodeDisplayRect(b []byte) (x, y, width, height uint16, stride uint32, pixels []byte, err error) {
+	if len(b) < displayRectHeader {
+		return 0, 0, 0, 0, 0, nil, fmt.Errorf("rect payload is %d bytes, want at least %d", len(b), displayRectHeader)
+	}
+	x = binary.BigEndian.Uint16(b[0:])
+	y = binary.BigEndian.Uint16(b[2:])
+	width = binary.BigEndian.Uint16(b[4:])
+	height = binary.BigEndian.Uint16(b[6:])
+	stride = binary.BigEndian.Uint32(b[8:])
+	pixels = b[displayRectHeader:]
+	if want := int(height) * int(stride); len(pixels) != want {
+		return 0, 0, 0, 0, 0, nil, fmt.Errorf("rect carries %d bytes, want %d", len(pixels), want)
+	}
+	return x, y, width, height, stride, pixels, nil
+}
+
+// MaxDisplayRectHeight is the tallest rect of width pixels that fits one frame.
+func MaxDisplayRectHeight(width int) int {
+	if width <= 0 {
+		return 0
+	}
+	rows := (MaxFramePayload - displayRectHeader) / (width * 4)
+	return max(rows, 1)
 }
 
 // MaxDisplayBandHeight is the tallest band of a width-pixel RGBA frame that

@@ -55,44 +55,63 @@ func TestDisplayStreamLive(t *testing.T) {
 	}
 	t.Logf("geometry %dx%d, %d bytes a frame", w, h, int(w)*int(h)*4)
 
-	// One frame: the bands that cover the screen, in order and in full, and
-	// within the frame cap.
+	// One frame: whatever covers the screen, in order and within the frame cap.
 	start := time.Now()
 	covered := make([]bool, h)
-	bands := 0
-	for row := 0; row < int(h); {
+	pieces := 0
+	for {
+		all := true
+		for _, ok := range covered {
+			if !ok {
+				all = false
+				break
+			}
+		}
+		if all {
+			break
+		}
 		typ, payload, err := protocol.ReadFrame(conn)
 		if err != nil {
-			t.Fatalf("read band: %v", err)
-		}
-		if typ != protocol.FrameDisplayBand {
-			t.Fatalf("frame type %d, want a band", typ)
+			t.Fatalf("read frame: %v", err)
 		}
 		if len(payload) > protocol.MaxFramePayload {
-			t.Fatalf("band frame is %d bytes, over the cap", len(payload))
+			t.Fatalf("frame is %d bytes, over the cap", len(payload))
 		}
-		y, rows, stride, _, err := protocol.DecodeDisplayBand(payload)
-		if err != nil {
-			t.Fatal(err)
+		switch typ {
+		case protocol.FrameDisplayBand:
+			y, rows, stride, _, err := protocol.DecodeDisplayBand(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stride != uint32(w)*4 {
+				t.Fatalf("band stride %d, want %d", stride, uint32(w)*4)
+			}
+			if int(y)+int(rows) > int(h) {
+				t.Fatalf("band %d+%d past the frame", y, rows)
+			}
+			for i := 0; i < int(rows); i++ {
+				covered[int(y)+i] = true
+			}
+		case protocol.FrameDisplayRect:
+			x, y, rw, rh, stride, _, err := protocol.DecodeDisplayRect(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stride != uint32(rw)*4 {
+				t.Fatalf("rect stride %d, want %d", stride, uint32(rw)*4)
+			}
+			if int(x)+int(rw) > int(w) || int(y)+int(rh) > int(h) {
+				t.Fatalf("rect %dx%d at %d,%d past the frame", rw, rh, x, y)
+			}
+			for i := 0; i < int(rh); i++ {
+				covered[int(y)+i] = true
+			}
+		default:
+			t.Fatalf("frame type %d, want a band or a rect", typ)
 		}
-		if int(y) != row {
-			t.Fatalf("band starts at %d, want %d", y, row)
-		}
-		if stride != uint32(w)*4 {
-			t.Fatalf("stride %d, want %d", stride, uint32(w)*4)
-		}
-		for i := 0; i < int(rows); i++ {
-			covered[int(y)+i] = true
-		}
-		row += int(rows)
-		bands++
+		pieces++
 	}
-	for row, ok := range covered {
-		if !ok {
-			t.Fatalf("row %d missing from the first frame", row)
-		}
-	}
-	t.Logf("first frame: %d bands in %v", bands, time.Since(start))
+	t.Logf("first frame: %d pieces in %v", pieces, time.Since(start))
 
 	// Throughput: what the capture and the wire actually deliver, which is
 	// what bounds the app's frame rate.
@@ -111,7 +130,7 @@ func TestDisplayStreamLive(t *testing.T) {
 		if err != nil {
 			break
 		}
-		if typ != protocol.FrameDisplayBand {
+		if typ != protocol.FrameDisplayBand && typ != protocol.FrameDisplayRect {
 			continue
 		}
 		bytes += len(payload)
@@ -121,6 +140,6 @@ func TestDisplayStreamLive(t *testing.T) {
 		last = nil
 		frames++
 	}
-	t.Logf("%v: %d bands, %d KiB (%.0f KiB/s)", window, frames, bytes/1024, float64(bytes)/1024/window.Seconds())
+	t.Logf("%v: %d frames, %d KiB (%.0f KiB/s)", window, frames, bytes/1024, float64(bytes)/1024/window.Seconds())
 	_ = last
 }

@@ -30,7 +30,11 @@ type Display struct {
 	// XDG_RUNTIME_DIR, WLR_BACKENDS, WLR_RENDERER, VK_ICD_FILENAMES, …
 	Env []string
 	// Capture prints one PPM (P6) frame on stdout; it runs once per frame.
+	// Ignored when Helper is set.
 	Capture []string
+	// Helper is a long-lived capture client (capture/pocketnix-capture) that
+	// prints damage rects and pixels itself; see display_helper.go.
+	Helper []string
 	// Interval is the quiet time between captures; zero means 100 ms.
 	Interval time.Duration
 
@@ -40,11 +44,15 @@ type Display struct {
 // serveDisplay writes the geometry and then a frame's changed bands until the
 // app goes away.
 func (s *Server) serveDisplay(c net.Conn) {
-	if s.Display == nil || len(s.Display.Capture) == 0 {
+	if s.Display == nil || (len(s.Display.Capture) == 0 && len(s.Display.Helper) == 0) {
 		reject(c, "display: this agent has no capture command")
 		return
 	}
-	if protocol.WriteJSON(c, s.hello()) != nil {
+	if len(s.Display.Helper) > 0 {
+		if protocol.WriteJSON(c, s.hello()) != nil {
+			return
+		}
+		s.Display.serveHelper(c)
 		return
 	}
 	s.Display.serve(c)

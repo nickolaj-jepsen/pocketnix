@@ -18,6 +18,9 @@ class DisplayStream(
         fun onGeometry(width: Int, height: Int)
         fun onBand(y: Int, height: Int, stride: Int, pixels: ByteArray)
 
+        /** A damage rect: what a compositor's damage really is. */
+        fun onRect(x: Int, y: Int, width: Int, height: Int, stride: Int, pixels: ByteArray)
+
         /** The stream ended: null when the app closed it, else why. */
         fun onEnd(reason: String?)
     }
@@ -56,6 +59,11 @@ class DisplayStream(
                         if (!sized) throw AgentException("display band before its geometry")
                         val band = Frames.band(f.payload)
                         sink.onBand(band.y, band.height, band.stride, band.pixels)
+                    }
+                    Frames.DISPLAY_RECT -> {
+                        if (!sized) throw AgentException("display rect before its geometry")
+                        val r = Frames.rect(f.payload)
+                        sink.onRect(r.x, r.y, r.width, r.height, r.stride, r.pixels)
                     }
                     // Unknown types are for a newer agent to add.
                 }

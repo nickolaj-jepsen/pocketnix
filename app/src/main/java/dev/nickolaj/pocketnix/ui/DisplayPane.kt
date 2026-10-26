@@ -132,6 +132,18 @@ private class DisplayRenderer(private val view: SurfaceView) : DisplayStream.Sin
         handler.post { if (!released) scheduleDraw() }
     }
 
+    override fun onRect(x: Int, y: Int, width: Int, height: Int, stride: Int, pixels: ByteArray) {
+        synchronized(lock) {
+            val buf = frame ?: return
+            if (stride != width * 4 || x + width > this.width || y + height > this.height) return
+            val rowBytes = width * 4
+            for (row in 0 until height) {
+                System.arraycopy(pixels, row * rowBytes, buf, ((y + row) * this.width + x) * 4, rowBytes)
+            }
+        }
+        handler.post { if (!released) scheduleDraw() }
+    }
+
     private fun scheduleDraw() {
         if (released || drawPending) return
         drawPending = true
