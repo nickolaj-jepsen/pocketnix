@@ -44,6 +44,9 @@ func (s *Server) serveDisplay(c net.Conn) {
 		reject(c, "display: this agent has no capture command")
 		return
 	}
+	if protocol.WriteJSON(c, s.hello()) != nil {
+		return
+	}
 	s.Display.serve(c)
 }
 
