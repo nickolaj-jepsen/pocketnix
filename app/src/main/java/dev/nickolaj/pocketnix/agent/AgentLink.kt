@@ -3,6 +3,7 @@ package dev.nickolaj.pocketnix.agent
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.Closeable
+import java.io.FilterInputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetSocketAddress
@@ -39,7 +40,13 @@ fun AgentDialer.open(hello: JSONObject): Pair<AgentStream, JSONObject> {
 }
 
 private class BufferedStream(s: AgentStream) : AgentStream by s {
-    override val input: InputStream = BufferedInputStream(s.input, 64 * 1024)
+    // BufferedInputStream asks available() after a short read, and an app may not FIONREAD a vsock fd.
+    override val input: InputStream = BufferedInputStream(
+        object : FilterInputStream(s.input) {
+            override fun available() = 0
+        },
+        64 * 1024,
+    )
 }
 
 class TcpDialer(private val host: String, private val port: Int) : AgentDialer {

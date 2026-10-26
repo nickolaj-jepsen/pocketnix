@@ -1,5 +1,6 @@
 package dev.nickolaj.pocketnix.agent
 
+import android.util.Log
 import com.termux.terminal.TerminalBackend
 import java.io.IOException
 import java.util.concurrent.CountDownLatch
@@ -57,7 +58,10 @@ class PtyBackend(
         } catch (e: AgentException) {
             reason = "The agent refused the session: ${e.message}"
         } catch (e: IOException) {
-            if (!closed.get()) reason = if (stream == null) "Couldn't reach the agent: ${e.message}" else "Connection to the guest lost"
+            if (!closed.get()) {
+                Log.w(TAG, "pty stream failed", e)
+                reason = if (stream == null) "Couldn't reach the agent: ${e.message}" else "Connection to the guest lost"
+            }
         } catch (e: Exception) {
             // A garbled Hello (JSONException), an engine error: end the tab, not the app.
             reason = "Session failed: ${e.message ?: e.javaClass.simpleName}"
@@ -96,5 +100,9 @@ class PtyBackend(
         if (!closed.compareAndSet(false, true)) return
         sender.shutdown()
         stream?.let { runCatching { it.close() } }
+    }
+
+    private companion object {
+        const val TAG = "PtyBackend"
     }
 }

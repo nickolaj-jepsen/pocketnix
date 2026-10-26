@@ -98,6 +98,9 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
 - Google's kernel has no efivarfs but has `/sys/firmware/efi`: `bootctl status`
   (the version check of a plain `switch`) exits 1 without a word, while
   `bootctl --no-variables …` works. The module makes every switch install.
+- An app can't `FIONREAD` a vsock fd, so `available()` on its stream throws,
+  and a `BufferedInputStream` calls it after every short read: big PTY output
+  and forwards died. `AgentLink`'s buffer hides it; TCP tests can't catch it.
 
 ## Traps (verified on the desktop)
 
