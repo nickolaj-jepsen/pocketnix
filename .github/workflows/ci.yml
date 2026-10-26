@@ -11,15 +11,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
-      - run: nix build .#pocketnix
-      - run: nix develop --command go -C go test ./...
+      # The package's checkPhase runs the Go tests, the --inject ones included.
+      - run: nix build .#pocketnix .#pocketnix-cli -L
+
+  nixos-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Let the Nix sandbox use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: system-features = nixos-test benchmark big-parallel kvm
+      - run: nix build .#checks.x86_64-linux.agent -L
 
   android:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
-      - run: nix develop --command ./gradlew assembleDebug --console=plain
+      - run: nix build .#pocketnix --out-link pocketnix
+      # POCKETNIX_AGENT runs the app's agent client against the real agent.
+      - run: POCKETNIX_AGENT=$PWD/pocketnix/bin/pocketnix-agent nix develop --command ./gradlew assembleDebug testDebugUnitTest --console=plain
       - uses: actions/upload-artifact@v4
         with:
           name: app-debug
