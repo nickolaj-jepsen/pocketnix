@@ -13,7 +13,7 @@ buildGoModule (finalAttrs: {
     name = "pocketnix-go";
     src = ../go;
   };
-  vendorHash = "sha256-KPSzmeN2s92ajBGV2j6m1XiRtPeh2IBWK459+ZkTOEQ=";
+  vendorHash = "sha256-RpQigkqATmLriMtDgkfC1b2irFEiXb/K13MZGodfNWI=";
 
   # The agent runs in the guest from a NixOS store path; no cgo keeps it a single static binary.
   env.CGO_ENABLED = 0;

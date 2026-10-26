@@ -123,15 +123,21 @@ func nextEvent(t *testing.T, ctl *client.Control) protocol.Event {
 	panic("unreachable")
 }
 
+// nextSignal returns the next notifyd signal, skipping the bus's own
+// (NameAcquired reaches the channel whatever the match rules say).
 func nextSignal(t *testing.T, ch <-chan *dbus.Signal) *dbus.Signal {
 	t.Helper()
-	select {
-	case s := <-ch:
-		return s
-	case <-time.After(5 * time.Second):
-		t.Fatal("no signal within 5s")
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case s := <-ch:
+			if strings.HasPrefix(s.Name, notifyd.Name+".") {
+				return s
+			}
+		case <-deadline:
+			t.Fatal("no signal within 5s")
+		}
 	}
-	panic("unreachable")
 }
 
 func TestNotifications(t *testing.T) {
