@@ -6,11 +6,18 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
 
-/** PTY stream frames: [type u8][length u32 BE][payload]. */
+/** PTY and FileOpen stream frames: [type u8][length u32 BE][payload]. */
 object Frames {
     const val DATA: Int = 0
     const val RESIZE: Int = 1
     const val EXIT: Int = 2
+    // FileOpen streams (go/internal/protocol FileFrame*).
+    const val FILE_READ: Int = 0x10
+    const val FILE_WRITE: Int = 0x11
+    const val FILE_SYNC: Int = 0x12
+    const val FILE_COMMIT: Int = 0x13
+    const val FILE_OK: Int = 0x20
+    const val FILE_ERROR: Int = 0x21
     const val MAX_PAYLOAD = 1 shl 20
 
     class Frame(val type: Int, val payload: ByteArray)

@@ -61,6 +61,32 @@ const (
 	FileDelete = "delete"
 	// FileRename renames Path to Hello.Name in the same directory; answers Hello.File.
 	FileRename = "rename"
+	// FileOpen opens Path for ranged access in Hello.Mode, Android's open
+	// modes ("r", "w", "wt", "wa", "rw", "rwt"; "w" truncates); answers
+	// Hello.File, whose Size is 0 for a truncating mode. Then [FileFrame]
+	// requests follow, each answered in order by FileFrameOK or
+	// FileFrameError. Writes land in a temporary file that only
+	// FileFrameCommit puts in place; a stream that ends without it, or any
+	// error, discards them. Agents older than this answer an Error.
+	FileOpen = "open"
+)
+
+// Frames on a FileOpen stream ([WriteFrame]'s format).
+const (
+	// FileFrameRead is [offset u64][length u32]; the answer's payload is up
+	// to length bytes, fewer only at the end of the file.
+	FileFrameRead byte = 0x10
+	// FileFrameWrite is [offset u64] and the bytes to write there.
+	FileFrameWrite byte = 0x11
+	// FileFrameSync flushes the writes so far to disk.
+	FileFrameSync byte = 0x12
+	// FileFrameCommit puts the written file in place of Path, keeping an
+	// existing file's mode and owner; it ends the stream.
+	FileFrameCommit byte = 0x13
+	// FileFrameOK answers a request; a read's carries the bytes.
+	FileFrameOK byte = 0x20
+	// FileFrameError carries a message; the agent closes after it.
+	FileFrameError byte = 0x21
 )
 
 // FileInfo is one file under the file provider's root.

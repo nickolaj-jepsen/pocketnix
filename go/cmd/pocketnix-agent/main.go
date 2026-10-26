@@ -31,6 +31,7 @@ func main() {
 	config := flag.String("config", "/etc/pocketnix/agent.json", "config file, as the NixOS module writes it")
 	noPower := flag.Bool("no-power", false, "refuse the app's poweroff and reboot requests (desktop development)")
 	flag.Var(&listen, "listen", "address to serve (vsock:<port>, tcp:<host>:<port>, unix:<path>); repeatable")
+	stateDir := flag.String("state-dir", "", "directory for state that must outlive a crash (unfinished file-provider writes); empty keeps none")
 	guestSocket := flag.String("guest-socket", "", "unix socket for guest programs (pocketnix-guest), e.g. "+protocol.GuestSocket+"; empty serves none")
 	flag.Parse()
 	if len(listen) == 0 {
@@ -43,6 +44,8 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 	srv.Version = version
+	srv.StateDir = *stateDir
+	srv.SweepTemps()
 	if !*noPower {
 		srv.Power = systemdPower{}
 	}

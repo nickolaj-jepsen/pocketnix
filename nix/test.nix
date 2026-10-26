@@ -231,6 +231,12 @@ in
           names = [json.loads(l)["name"] for l in client.succeed(f"{A} ls").splitlines()]
           assert "notes.txt" in names and "Inbox" in names, names
           client.fail(f"{A} cat ../../etc/shadow")
+          # A ranged edit lands in place, keeps the owner, and leaves no temp or record.
+          client.succeed(f"printf XY | {A} patch notes.txt 1")
+          phone.succeed("test \"$(cat /home/nixos/notes.txt)\" = dXY")
+          phone.succeed("test \"$(stat -c %U /home/nixos/notes.txt)\" = nixos")
+          phone.succeed("test -z \"$(ls -A /var/lib/pocketnix/file-temps)\"")
+          phone.fail("ls -A /home/nixos | grep -q pocketnix-")
 
       with subtest("an update from the build host arrives over ssh and switches"):
           # Test VMs boot without a system profile; a real guest has one from its first boot.

@@ -190,9 +190,16 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
   path its last argument. Text arrives as a `.txt` file.
 - The file provider (`files.root`, default the user's home) goes through an
   `os.Root`: no path or symlink leaves it, and new files belong to the user.
-  Opened documents are local copies (apps want seekable descriptors) that are
-  uploaded when a writer closes them, unless the copy is unchanged; a copy
-  cut short is an error, never a shorter file.
+  Opened documents are seekable proxy descriptors served by ranged reads
+  (with read-ahead) over one stream per descriptor, so a big file streams
+  rather than copies. Writes go to a temporary file next to the target (an
+  edit starts from a copy made in the guest at its first write), which the
+  writer's close fsyncs and renames over it: readers see the old file or the
+  new one, an open that changed nothing changes nothing, and a dropped stream
+  discards the writes. The agent records each temporary file under its state
+  directory and removes leftovers when it starts. Agents without ranged
+  access get local copies, uploaded when a writer closes them (kept for a
+  retry when that fails); a copy cut short is an error, never a shorter file.
 - The Quick Settings tile starts the VM through ControlActivity (a foreground
   service may only start from the foreground) and stops it gracefully.
 - The palette's history is the user's shell history file, read by the agent

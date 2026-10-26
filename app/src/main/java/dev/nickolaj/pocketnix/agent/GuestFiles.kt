@@ -83,6 +83,20 @@ class GuestFiles(private val dialer: AgentDialer, private val appVersion: String
         }
     }
 
+    /**
+     * Opens [path] for ranged access in an Android open [mode] ("r", "w",
+     * "wa", "rw", …), or null when the agent predates it.
+     */
+    fun openRanged(path: String, mode: String): RangedFile? {
+        val (s, hello) = try {
+            open("open", path) { put("mode", mode) }
+        } catch (e: AgentException) {
+            if (e.message.orEmpty().startsWith("unknown file operation")) return null
+            throw e
+        }
+        return RangedFile(s, hello.optJSONObject("file")?.optLong("size") ?: 0, mode)
+    }
+
     fun create(dir: String, name: String, isDir: Boolean): GuestFile =
         simple("create", dir) { put("name", name); put("dir", isDir) }.file()
 

@@ -12,9 +12,9 @@ import java.io.File
 import java.util.UUID
 
 /**
- * Saves from the Files app that couldn't reach the guest (the VM stopped, the
- * link dropped): kept in app storage and uploaded when the agent is back,
- * rather than lost.
+ * Saves through the file provider's copy fallback (agents without ranged
+ * access) that couldn't reach the guest (the VM stopped, the link dropped):
+ * kept in app storage and uploaded when the agent is back, rather than lost.
  */
 object PendingUploads {
     private const val TAG = "PendingUploads"
@@ -50,7 +50,8 @@ object PendingUploads {
         return done
     }
 
-    private fun notify(context: Context, title: String, text: String) {
+    /** Posts the file provider's save notice (one at a time). */
+    fun notify(context: Context, title: String, text: String) {
         if (context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val n = Notification.Builder(context, "guest")
             .setSmallIcon(R.drawable.ic_pocketnix)

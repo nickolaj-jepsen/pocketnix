@@ -49,6 +49,7 @@ commands:
   share <file>           share a file, as Android's share sheet does
   share-text <text>      share text
   ls [path] | cat <path> | put <path>   the file provider (put reads stdin)
+  patch <path> <offset>  write stdin into a file at offset, as an in-place edit does
 `
 
 func runAgent(args []string) error {
@@ -168,6 +169,27 @@ func runAgent(args []string) error {
 			return err
 		}
 		return c.WriteFile(rest[0], b)
+	case "patch":
+		if len(rest) != 2 {
+			return errUsage
+		}
+		off, err := strconv.ParseInt(rest[1], 10, 64)
+		if err != nil {
+			return errUsage
+		}
+		b, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return err
+		}
+		f, err := c.Open(rest[0], "rw")
+		if err != nil {
+			return err
+		}
+		if err := f.WriteAt(off, b); err != nil {
+			f.Close()
+			return err
+		}
+		return f.Commit()
 	case "exec":
 		return agentExec(c, rest)
 	case "forward":

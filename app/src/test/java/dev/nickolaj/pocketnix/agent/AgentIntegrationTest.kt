@@ -163,6 +163,53 @@ class AgentIntegrationTest {
     }
 
     @Test
+    fun rangedFileAccess() {
+        val files = GuestFiles(dialer, "test")
+        val big = ByteArray(700_000) { (it % 251).toByte() }
+        File(dir, "files/big.bin").writeBytes(big)
+
+        // Page-sized reads, as a proxy fd asks, across the read-ahead's edges.
+        files.openRanged("big.bin", "r")!!.use { f ->
+            assertEquals(big.size.toLong(), f.size)
+            val out = ByteArrayOutputStream()
+            val page = ByteArray(4096)
+            var at = 0L
+            while (true) {
+                val n = f.read(at, page, 0, page.size)
+                if (n == 0) break
+                out.write(page, 0, n)
+                at += n
+            }
+            assertTrue(out.toByteArray().contentEquals(big))
+            assertEquals(0, f.read(big.size + 10L, page, 0, page.size))
+        }
+
+        // "rw" edits in place; others see the old file until the commit.
+        File(dir, "files/notes.txt").writeText("hello world")
+        val rw = files.openRanged("notes.txt", "rw")!!
+        rw.write(6, "WORLD".toByteArray(), 0, 5)
+        val back = ByteArray(32)
+        assertEquals("hello WORLD", String(back, 0, rw.read(0, back, 0, back.size)))
+        rw.sync()
+        assertEquals("hello world", File(dir, "files/notes.txt").readText())
+        rw.commit()
+        assertEquals("hello WORLD", File(dir, "files/notes.txt").readText())
+
+        // An open that's closed without a commit changes nothing.
+        files.openRanged("notes.txt", "w")!!.apply { write(0, "gone".toByteArray(), 0, 4) }.close()
+        assertEquals("hello WORLD", File(dir, "files/notes.txt").readText())
+
+        // "wa" appends whatever offset the writer is at.
+        files.openRanged("notes.txt", "wa")!!.apply { write(0, "!".toByteArray(), 0, 1) }.commit()
+        assertEquals("hello WORLD!", File(dir, "files/notes.txt").readText())
+
+        // Refusals are AgentException; an agent without ranged access says so in a way open() recognizes.
+        assertTrue(runCatching { files.openRanged("../agent.json", "r") }.exceptionOrNull() is AgentException)
+        val unknown = runCatching { dialer.open(Protocol.hello("file", "test") { put("op", "bogus") }) }.exceptionOrNull()
+        assertTrue("$unknown", unknown is AgentException && unknown.message!!.startsWith("unknown file operation"))
+    }
+
+    @Test
     fun guestEventsReachTheApp() = runBlocking {
         val ctl = ControlChannel(scope, "test")
         ctl.start(dialer)

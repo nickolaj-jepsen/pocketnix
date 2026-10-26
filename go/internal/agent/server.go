@@ -31,6 +31,9 @@ type Server struct {
 	Power   Power // nil refuses power requests
 	// Updates runs the app's update and generation requests.
 	Updates *Updater
+	// StateDir keeps what must outlive a crash (the file provider's
+	// unfinished temporary files); empty keeps nothing.
+	StateDir string
 
 	mu       sync.Mutex
 	path     string

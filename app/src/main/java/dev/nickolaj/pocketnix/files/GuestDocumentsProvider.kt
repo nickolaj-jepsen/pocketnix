@@ -8,16 +8,21 @@ import android.os.CancellationSignal
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
+import android.os.ProxyFileDescriptorCallback
+import android.os.storage.StorageManager
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
 import android.provider.DocumentsContract.Root
 import android.provider.DocumentsProvider
+import android.system.ErrnoException
+import android.system.OsConstants
 import android.util.Log
 import android.webkit.MimeTypeMap
 import dev.nickolaj.pocketnix.GuestBridge
 import dev.nickolaj.pocketnix.R
 import dev.nickolaj.pocketnix.agent.GuestFile
 import dev.nickolaj.pocketnix.agent.GuestFiles
+import dev.nickolaj.pocketnix.agent.RangedFile
 import dev.nickolaj.pocketnix.vm
 import java.io.File
 import java.io.FileNotFoundException
@@ -31,7 +36,7 @@ import java.io.FileNotFoundException
  * Document ids are "/" + the path under the root.
  */
 class GuestDocumentsProvider : DocumentsProvider() {
-    // openDocument's close callbacks (the upload of a written file) run here.
+    // The copy fallback's close callbacks (the upload of a written file) run here.
     private val io by lazy { Handler(HandlerThread("guest-documents").apply { start() }.looper) }
 
     override fun onCreate(): Boolean {
@@ -94,9 +99,84 @@ class GuestDocumentsProvider : DocumentsProvider() {
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor {
         val f = files()
         val p = path(documentId)
+        val ranged = call { f.openRanged(p, mode) } ?: return openCopy(f, documentId, p, mode)
+        // Its own thread: a slow guest read mustn't stall every other open file.
+        val thread = HandlerThread("guest-document").apply { start() }
+        // A proxy fd takes only these three; truncating and appending are RangedFile's.
+        val pfdMode = when {
+            mode == "r" -> ParcelFileDescriptor.MODE_READ_ONLY
+            mode.contains('r') -> ParcelFileDescriptor.MODE_READ_WRITE
+            else -> ParcelFileDescriptor.MODE_WRITE_ONLY
+        }
+        return try {
+            ctx.getSystemService(StorageManager::class.java)
+                .openProxyFileDescriptor(pfdMode, Ranged(ranged, documentId, thread), Handler(thread.looper))
+        } catch (e: Exception) {
+            ranged.close()
+            thread.quitSafely()
+            throw FileNotFoundException(e.message).apply { initCause(e) }
+        }
+    }
+
+    /**
+     * A seekable descriptor served from ranged reads and writes: a writer's
+     * bytes go to the guest as they come, and land when it closes.
+     */
+    private inner class Ranged(
+        private val file: RangedFile,
+        private val documentId: String,
+        private val thread: HandlerThread,
+    ) : ProxyFileDescriptorCallback() {
+        // The writer already saw an error, so it knows its save failed.
+        private var failed = false
+
+        override fun onGetSize(): Long = file.size
+
+        override fun onRead(offset: Long, size: Int, data: ByteArray): Int = io("read") {
+            var n = 0
+            while (n < size) {
+                val got = file.read(offset + n, data, n, size - n)
+                if (got == 0) break
+                n += got
+            }
+            n
+        }
+
+        override fun onWrite(offset: Long, size: Int, data: ByteArray): Int = io("write") { file.write(offset, data, 0, size) }
+
+        override fun onFsync() = io("fsync") { file.sync() }
+
+        override fun onRelease() {
+            try {
+                if (file.changed && !failed) {
+                    file.commit()
+                    notifyChanged(parentOf(documentId))
+                } else {
+                    file.close()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "commit $documentId", e)
+                PendingUploads.notify(ctx, "Couldn't save ${documentId.substringAfterLast('/')} in the guest", "The guest lost the changes; save again.")
+            } finally {
+                thread.quitSafely()
+            }
+        }
+
+        private fun <T> io(op: String, block: () -> T): T = try {
+            block()
+        } catch (e: Exception) {
+            Log.w(TAG, "$op $documentId: ${e.message}")
+            failed = true
+            throw ErrnoException(op, OsConstants.EIO)
+        }
+    }
+
+    /**
+     * For agents without ranged access: a local copy, uploaded when a writer
+     * closes it (apps want seekable descriptors, which a stream isn't).
+     */
+    private fun openCopy(f: GuestFiles, documentId: String, p: String, mode: String): ParcelFileDescriptor {
         val pfdMode = ParcelFileDescriptor.parseMode(mode)
-        // A local copy, uploaded when a writer closes it: apps want seekable
-        // descriptors, which a stream from the agent isn't.
         val tmp = File.createTempFile("doc", null, documentsDir().apply { mkdirs() })
         // "w" and "wt" start empty; reading and appending need what's there.
         val copied = mode.contains('r') || mode.contains('a')

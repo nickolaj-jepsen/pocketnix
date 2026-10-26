@@ -130,6 +130,8 @@ type Hello struct {
 	Name string    `json:"name,omitempty"`
 	Dir  bool      `json:"dir,omitempty"`
 	File *FileInfo `json:"file,omitempty"`
+	// Mode is a FileOpen's.
+	Mode string `json:"mode,omitempty"`
 }
 
 // Error rejects a Hello, or reports a failed control request.

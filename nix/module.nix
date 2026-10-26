@@ -555,9 +555,11 @@ in {
         # Updates: ssh to the build host, nix to fetch, systemd-run to switch.
         path = [config.nix.package config.programs.ssh.package config.systemd.package];
         serviceConfig = {
-          ExecStart = lib.escapeShellArgs ([(lib.getExe' cfg.package "pocketnix-agent") "--guest-socket" "/run/pocketnix/guest.sock"] ++ lib.concatMap (a: ["--listen" a]) cfg.agent.listen);
+          ExecStart = lib.escapeShellArgs ([(lib.getExe' cfg.package "pocketnix-agent") "--guest-socket" "/run/pocketnix/guest.sock" "--state-dir" "/var/lib/pocketnix"] ++ lib.concatMap (a: ["--listen" a]) cfg.agent.listen);
           RuntimeDirectory = "pocketnix";
           RuntimeDirectoryMode = "0755";
+          StateDirectory = "pocketnix";
+          StateDirectoryMode = "0700";
           ExecReload = "${lib.getExe' pkgs.coreutils "kill"} -HUP $MAINPID";
           Restart = "always";
           RestartSec = 1;
