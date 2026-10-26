@@ -109,21 +109,52 @@ object AvfReflect {
         if (!ok) Log.w(TAG, "no useNetwork/setNetworkSupported on this AVF API")
     }
 
+    /** The GPU AVF should give the guest; null fields leave AVF's defaults alone. */
+    data class Gpu(
+        val backend: String,
+        val vulkan: Boolean? = null,
+        val egl: Boolean? = null,
+        val gles: Boolean? = null,
+        val glx: Boolean? = null,
+        val surfaceless: Boolean? = null,
+        val contexts: List<String> = emptyList(),
+    )
+
     /**
-     * Declares a headless 2D GPU. Its point is crosvm binary selection: stock
-     * Pixel virtmgr runs GPU-less VMs on crosvm_minimal, which lacks `--net`
-     * and aborts a networked VM. Returns whether it took effect; absent
-     * GpuConfig classes mean a revision that runs full crosvm anyway.
+     * Declares the GPU AVF gives the guest, and returns whether it took effect.
+     *
+     * "2d" is what a networked VM asks for: stock Pixel virtmgr runs GPU-less
+     * VMs on crosvm_minimal, which lacks `--net` and aborts a networked VM. A
+     * 3D backend ("virgl", "gfxstream") also makes crosvm hand the guest a
+     * render node, which is the only way to the phone's GPU without the
+     * display service the Terminal app gets (sepolicy, vmlauncher_app).
+     * Whether this device's crosvm was built with such a backend is unknown
+     * until tried: absent GpuConfig classes mean a revision that runs full
+     * crosvm anyway, and a refused backend stops the VM. See the log lines.
      */
-    fun setGpuConfig(b: Any): Boolean = runCatching {
+    fun setGpuConfig(b: Any, gpu: Gpu): Boolean = runCatching {
         val gpuB = (GPU_B ?: return true).getDeclaredConstructor().apply { isAccessible = true }.newInstance()
-        invoke(gpuB, "setBackend", String::class.java to "2d")
-        runCatching { invoke(gpuB, "setRendererUseSurfaceless", Boolean::class.javaPrimitiveType!! to true) }
-        val gpu = invoke(gpuB, "build") ?: error("GpuConfig.Builder.build() returned null")
-        invoke(b, "setGpuConfig", GPU!! to gpu)
+        val missing = mutableListOf<String>()
+        if (!set(gpuB, "setBackend", gpu.backend)) error("GpuConfig.Builder has no setBackend")
+        // Optional setters: revisions disagree, and the config is still useful without them.
+        val wanted = listOf(
+            "setRendererUseVulkan" to gpu.vulkan,
+            "setRendererUseEgl" to gpu.egl,
+            "setRendererUseGles" to gpu.gles,
+            "setRendererUseGlx" to gpu.glx,
+            "setRendererUseSurfaceless" to gpu.surfaceless,
+            "setContextTypes" to gpu.contexts.takeIf { it.isNotEmpty() }?.toTypedArray(),
+        )
+        for ((name, value) in wanted) {
+            if (value == null) continue
+            if (!set(gpuB, name, value)) missing += name
+        }
+        val cfg = invoke(gpuB, "build") ?: error("GpuConfig.Builder.build() returned null")
+        invoke(b, "setGpuConfig", GPU!! to cfg)
+        Log.i(TAG, "gpu config: $gpu missing=$missing")
         true
     }.getOrElse {
-        Log.w(TAG, "setGpuConfig failed; virtmgr may pick crosvm_minimal (no virtio-net)", it)
+        Log.w(TAG, "setGpuConfig(${gpu.backend}) failed; virtmgr may pick crosvm_minimal (no virtio-net)", it)
         false
     }
 
@@ -160,6 +191,27 @@ object AvfReflect {
 
     fun consoleOutput(vm: Any): InputStream = invoke(vm, "getConsoleOutput") as? InputStream ?: error("no console output")
     fun consoleInput(vm: Any): OutputStream = invoke(vm, "getConsoleInput") as? OutputStream ?: error("no console input")
+
+    /**
+     * Calls [name] with [value], tolerating the parameter being boxed or a
+     * primitive: GpuConfig's setters take `Boolean` on GrapheneOS 17 and
+     * `boolean` on other revisions. False when no such method exists.
+     */
+    private fun set(target: Any, name: String, value: Any): Boolean {
+        val types = when (value) {
+            is Boolean -> listOf(Boolean::class.javaObjectType, Boolean::class.javaPrimitiveType!!)
+            is String -> listOf(String::class.java)
+            is Array<*> -> listOf(Array<String>::class.java)
+            else -> emptyList()
+        }
+        for (t in types) {
+            val m = runCatching { target.javaClass.getDeclaredMethod(name, t) }.getOrNull() ?: continue
+            m.isAccessible = true
+            m.invoke(target, value)
+            return true
+        }
+        return false
+    }
 
     private fun invoke(target: Any, name: String, vararg typedArgs: Pair<Class<*>, Any?>): Any? {
         val m = target.javaClass.getDeclaredMethod(name, *typedArgs.map { it.first }.toTypedArray()).apply { isAccessible = true }

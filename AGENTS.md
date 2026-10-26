@@ -84,7 +84,27 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
   phone has it), and logs "Memory balloon not enabled" otherwise.
 - The `pm grant`s are per Android user and lost on uninstall.
 - The AVF API is `@SystemApi` and `VirtualMachineCustomImageConfig` is `@hide`:
-  reach them by reflection with in-process HiddenApiBypass.
+  reach them by reflection with in-process HiddenApiBypass. Its
+  `GpuConfig.Builder` takes boxed `Boolean`s on GrapheneOS 17, so a
+  `boolean.class` lookup throws and the GPU config silently doesn't apply.
+- A third-party VM can have the phone's GPU, but nothing yet composites on it.
+  `GpuConfig(backend=gfxstream, vulkan=true, egl=false, gles=false, glx=false,
+  surfaceless=true, context-types=[gfxstream-vulkan, gfxstream-composer])` —
+  the Terminal app's own config — reaches crosvm as `--gpu=…` and the guest's
+  Mesa gfxstream ICD then runs `vulkaninfo` against the real GPU ("Virtio-GPU
+  GFXStream (Mali-G715)"). Leaving `egl`/`gles` unset is not equivalent:
+  virtmgr defaults them true and the guest's ASG stream then dies on
+  `mmap64: Invalid argument`. Two blockers stop a compositor anyway: the ICD
+  lacks `VK_EXT_physical_device_drm` (wlroots' Vulkan renderer refuses the
+  device) and zink needs robustness2's `nullDescriptor` (also absent).
+  `backend=virglrenderer` answers "No virgl contexts available on host", and
+  adding `venus` panics crosvm's `v_gpu` thread (SIGABRT).
+- Only the display *surface* handoff is sealed to `vmlauncher_app` (sepolicy),
+  which is why the guest gets a render node but no scanout. GrapheneOS's own
+  Terminal app is not a better reference: its `GraphicsManager` offers only
+  Lavapipe (software) and Gfxstream, and `gfxstream_supported` is a device
+  overlay — on the Pixel 8 Pro its GUI renders in software, while our app still
+  gets a working gfxstream device.
 - Building the image on x86_64 with the guest's own repart tools fails; assemble
   it with the build host's tools but keep the guest's `systemdRepartFlags`
   (`--architecture`). Host-tool repart dereferences top-level symlink store

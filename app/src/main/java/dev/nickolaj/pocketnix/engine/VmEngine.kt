@@ -18,6 +18,8 @@ data class VmSettings(
     val cpus: Int,
     val diskGb: Int,
     val network: Boolean,
+    /** "2d", "virgl", "venus", "gfxstream" or "none"; empty means the default (2d when networked). */
+    val gpu: String = "",
 )
 
 /** What runs the guest: AVF on the phone, or (debug builds) an agent on another machine. */
