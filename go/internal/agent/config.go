@@ -35,6 +35,8 @@ type File struct {
 
 	Power PowerConfig `json:"power"`
 	Host  HostConfig  `json:"host"`
+	// HostFolders is where Android folders the app shares are mounted.
+	HostFolders HostFoldersConfig `json:"hostFolders"`
 }
 
 // PowerConfig is how the guest keeps the phone awake.
@@ -53,6 +55,13 @@ type WakeLocksConfig struct {
 type HostConfig struct {
 	// TimeZone sets the guest's timezone to the phone's.
 	TimeZone bool `json:"timeZone,omitempty"`
+}
+
+// HostFoldersConfig places the app's shared folders: each at
+// <MountPoint>/<name>, MountPoint absolute or relative to the session
+// user's home; empty is "Android".
+type HostFoldersConfig struct {
+	MountPoint string `json:"mountPoint,omitempty"`
 }
 
 // ShareConfig delivers shared text and files: into Directory, then (when

@@ -107,6 +107,9 @@ type Request struct {
 
 	// Host is a host-state request's.
 	Host *HostState `json:"host,omitempty"`
+
+	// Folders is a host-folders request's (hostfs.go).
+	Folders []HostFolder `json:"folders,omitempty"`
 }
 
 // Envelope is the part of every JSON message a receiver reads first.

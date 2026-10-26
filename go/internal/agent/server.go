@@ -51,6 +51,7 @@ type Server struct {
 	Systemctl string
 	host      hostTracker
 	wakes     wakeTracker
+	hostfs    hostFolders
 }
 
 // New loads the config file at path.
@@ -172,6 +173,8 @@ func (s *Server) handle(c net.Conn) {
 		s.serveShare(c, hello)
 	case protocol.StreamSave:
 		s.serveSave(c, hello)
+	case protocol.StreamHostFS:
+		s.serveHostFS(c, hello)
 	default:
 		reject(c, fmt.Sprintf("unknown stream %q", hello.Stream))
 	}
@@ -325,6 +328,8 @@ func (s *Server) request(req protocol.Request) (any, error) {
 		return ack, s.notifyFromApp(req)
 	case protocol.TypeGuestDone:
 		return ack, s.guestDone(req)
+	case protocol.TypeHostFolders:
+		return ack, s.applyHostFolders(req.Folders)
 	default:
 		// Answered, so a newer app's later requests still pair with their replies.
 		return nil, fmt.Errorf("unknown request %q", req.Type)

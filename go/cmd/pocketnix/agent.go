@@ -59,6 +59,11 @@ commands:
   patch <path> <offset>  write stdin into a file at offset, as an in-place edit does
   notify-action <id> <key>       choose a guest notification's action
   notify-closed <id> [reason]    dismiss a guest notification (reason 2 unless given)
+  hostfs-serve [flags] <dir>  share a directory as the app shares an Android folder,
+                         until a stream or the control stream ends
+      --name <name>        folder name (default: the directory's)
+      --read-only          refuse changes
+      --streams <n>        streams to keep open (default 2)
 `
 
 func runAgent(args []string) error {
@@ -217,6 +222,8 @@ func runAgent(args []string) error {
 		return f.Commit()
 	case "exec":
 		return agentExec(c, rest)
+	case "hostfs-serve":
+		return agentHostFS(c, rest)
 	case "forward":
 		if len(rest) != 1 {
 			return errUsage
