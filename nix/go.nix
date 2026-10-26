@@ -2,6 +2,7 @@
   lib,
   buildGoModule,
   e2fsprogs,
+  dbus,
 }:
 buildGoModule (finalAttrs: {
   pname = "pocketnix";
@@ -12,12 +13,12 @@ buildGoModule (finalAttrs: {
     name = "pocketnix-go";
     src = ../go;
   };
-  vendorHash = "sha256-mpY15mzV8qNGMLofA3jspNbsCK+oEXHYTNTk+FQjrLo=";
+  vendorHash = "sha256-KPSzmeN2s92ajBGV2j6m1XiRtPeh2IBWK459+ZkTOEQ=";
 
   # The agent runs in the guest from a NixOS store path; no cgo keeps it a single static binary.
   env.CGO_ENABLED = 0;
-  # The --inject tests edit a real ext4 image.
-  nativeCheckInputs = [e2fsprogs];
+  # The --inject tests edit a real ext4 image; notifyd's run a private session bus.
+  nativeCheckInputs = [e2fsprogs dbus];
   ldflags = [
     "-s"
     "-X main.version=${finalAttrs.version}"

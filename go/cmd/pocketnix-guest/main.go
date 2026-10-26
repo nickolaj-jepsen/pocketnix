@@ -1,6 +1,6 @@
 // Command pocketnix-guest lets guest programs reach Android through the
 // pocketnix agent: notifications, opening URLs and files, and the clipboard.
-// Installed as xdg-open or notify-send, it behaves as those.
+// Installed as xdg-open, it behaves as that.
 package main
 
 import (
@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/client"
+	"github.com/nickolaj-jepsen/pocketnix/go/internal/notifyd"
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/protocol"
 )
 
@@ -24,10 +25,14 @@ commands:
                                     file provider root, on Android
   copy [text]                       set Android's clipboard (stdin without text)
   paste                             print the clipboard Android last handed over
+  notifyd                           serve org.freedesktop.Notifications on the
+                                    session bus (notify-send's daemon)
 
-As xdg-open it opens; as notify-send it notifies (SUMMARY [BODY], other
-options ignored). $POCKETNIX_GUEST_SOCKET overrides the agent's socket.
+As xdg-open it opens. $POCKETNIX_GUEST_SOCKET overrides the agent's socket.
 `
+
+// version is set by the build (nix/go.nix).
+var version = "dev"
 
 var errUsage = errors.New("usage")
 
@@ -36,8 +41,6 @@ func main() {
 	switch filepath.Base(os.Args[0]) {
 	case "xdg-open":
 		args = append([]string{"open"}, args...)
-	case "notify-send":
-		args = append([]string{"notify-send"}, args...)
 	}
 	err := run(args)
 	if errors.Is(err, errUsage) {
@@ -75,13 +78,11 @@ func run(args []string) error {
 		}
 		_, err := send(protocol.GuestRequest{Type: protocol.GuestNotify, Title: title, Body: strings.Join(rest, " ")})
 		return err
-	case "notify-send":
-		summary, body, err := notifySendArgs(rest)
-		if err != nil {
-			return err
+	case "notifyd":
+		if len(rest) != 0 {
+			return errUsage
 		}
-		_, err = send(protocol.GuestRequest{Type: protocol.GuestNotify, Title: summary, Body: body})
-		return err
+		return notifyd.Run(socket(), version)
 	case "open":
 		if len(rest) != 1 {
 			return errUsage
@@ -123,37 +124,4 @@ func run(args []string) error {
 	default:
 		return errUsage
 	}
-}
-
-// notifySendArgs takes libnotify's notify-send arguments apart: SUMMARY and
-// an optional BODY; the options are accepted and ignored.
-func notifySendArgs(args []string) (summary, body string, err error) {
-	withValue := map[string]bool{
-		"-u": true, "--urgency": true, "-t": true, "--expire-time": true, "-a": true, "--app-name": true,
-		"-i": true, "--icon": true, "-c": true, "--category": true, "-h": true, "--hint": true,
-		"-r": true, "--replace-id": true, "-A": true, "--action": true,
-	}
-	var pos []string
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "--":
-			pos = append(pos, args[i+1:]...)
-			i = len(args)
-		case withValue[a]:
-			i++
-		case strings.HasPrefix(a, "-") && len(a) > 1:
-			// --opt=value, or a flag without a value (-e, -p, -w).
-		default:
-			pos = append(pos, a)
-		}
-	}
-	if len(pos) == 0 {
-		return "", "", errors.New("no summary specified")
-	}
-	summary = pos[0]
-	if len(pos) > 1 {
-		body = strings.Join(pos[1:], " ")
-	}
-	return summary, body, nil
 }
