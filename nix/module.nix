@@ -521,6 +521,13 @@ in {
       };
       boot.growPartition = true;
 
+      # Google's kernel brings dummy and ifb devices; dhcpcd waiting on them
+      # was the longest unit on phone-vm's boot (7 of 18 s).
+      networking.dhcpcd.denyInterfaces = ["dummy*" "ifb*"];
+      # No display: a login on tty1 is a session nobody sees.
+      systemd.services."getty@tty1".enable = false;
+      systemd.services."autovt@tty1".enable = false;
+
       # The app's terminal speaks xterm, not serial-getty's default vt220.
       systemd.services."serial-getty@hvc0".environment.TERM = "xterm-256color";
       # The console is the recovery tab; the phone's lock screen is the gate.

@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"errors"
 	"io"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -16,29 +18,42 @@ import (
 // Android's share sheet delivers text and files into the share directory,
 // then runs the share command on each.
 
-// shareDir is where shares land, made if missing.
-func (s *Server) shareDir() (string, error) {
+// shareDir opens where shares land, made if missing, and returns it with its
+// path. A directory relative to the home is resolved inside the home, as the
+// user owns every step of it: a symlink there can't send root's writes
+// elsewhere. An absolute one comes from the module.
+func (s *Server) shareDir() (*os.Root, string, error) {
 	cfg := s.config()
 	dir := cfg.Share.Directory
 	if dir == "" {
 		dir = "Inbox"
 	}
-	if !filepath.IsAbs(dir) {
-		u, err := sessionUser(cfg.User)
-		if err != nil {
-			return "", err
-		}
-		dir = filepath.Join(u.home, dir)
-	}
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
+	if filepath.IsAbs(dir) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return "", err
+			return nil, "", err
+		}
+		r, err := os.OpenRoot(dir)
+		return r, dir, err
+	}
+	u, err := sessionUser(cfg.User)
+	if err != nil {
+		return nil, "", err
+	}
+	home, err := os.OpenRoot(u.home)
+	if err != nil {
+		return nil, "", err
+	}
+	defer home.Close()
+	if _, err := home.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+		if err := home.MkdirAll(dir, 0o755); err != nil {
+			return nil, "", err
 		}
 		if o := s.owner(); o != nil {
-			os.Lchown(dir, o.uid, o.gid)
+			home.Lchown(dir, o.uid, o.gid)
 		}
 	}
-	return dir, nil
+	r, err := home.OpenRoot(dir)
+	return r, filepath.Join(u.home, dir), err
 }
 
 // serveShare stores one shared file: Hello.Size bytes after the agent's Hello.
@@ -66,11 +81,7 @@ func (s *Server) shareText(text string) (string, error) {
 // name like name, and runs the share command on it. ready, when set, runs
 // once the file exists and before r is read.
 func (s *Server) deliver(name string, ready func() error, r io.Reader, size int64) (string, error) {
-	dir, err := s.shareDir()
-	if err != nil {
-		return "", err
-	}
-	root, err := os.OpenRoot(dir)
+	root, dir, err := s.shareDir()
 	if err != nil {
 		return "", err
 	}

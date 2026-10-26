@@ -40,6 +40,9 @@ func fakeADB(args []string) int {
 		fmt.Println("device")
 	case "install":
 		logEvent("install %s", filepath.Base(args[len(args)-1]))
+		// As on a phone: replacing the app kills its process, and so a running VM.
+		os.WriteFile(filepath.Join(state, "installed"), nil, 0o644)
+		os.WriteFile(filepath.Join(state, "vm-killed"), nil, 0o644)
 	case "push":
 		b, err := os.ReadFile(args[1])
 		if err != nil {
@@ -76,6 +79,12 @@ func fakeShell(state, line string, logEvent func(string, ...any)) (string, int) 
 	switch {
 	case len(f) == 4 && f[0] == "pm" && f[1] == "grant":
 		logEvent("grant %s %s", f[2], f[3])
+	case len(f) == 3 && f[0] == "pm" && f[1] == "path":
+		// A running VM means the app is there.
+		if _, err := os.Stat(filepath.Join(state, "installed")); err != nil && os.Getenv("FAKE_ADB_RUNNING") != "1" {
+			return "", 1
+		}
+		return "package:/data/app/base.apk\n", 0
 	case len(f) >= 6 && f[0] == "content" && f[1] == "call":
 		method := f[5]
 		arg := ""
@@ -85,7 +94,9 @@ func fakeShell(state, line string, logEvent func(string, ...any)) (string, int) 
 		switch method {
 		case "status":
 			_, err := os.Stat(disk)
-			return fmt.Sprintf("Result: Bundle[{ok=true, disk=%t, running=%t}]\n", err == nil, os.Getenv("FAKE_ADB_RUNNING") == "1"), 0
+			_, killed := os.Stat(filepath.Join(state, "vm-killed"))
+			running := os.Getenv("FAKE_ADB_RUNNING") == "1" && killed != nil
+			return fmt.Sprintf("Result: Bundle[{ok=true, disk=%t, running=%t}]\n", err == nil, running), 0
 		case "begin":
 			n, _ := strconv.ParseInt(arg, 10, 64)
 			os.MkdirAll(files, 0o755)
@@ -237,6 +248,10 @@ func TestProvisionRefusesWhileRunning(t *testing.T) {
 	}
 	if d.disk() != nil {
 		t.Error("disk written while the VM runs")
+	}
+	// Installing would have killed it.
+	if strings.Contains(d.events(), "install ") {
+		t.Errorf("installed the app over a running VM; events:\n%s", d.events())
 	}
 }
 

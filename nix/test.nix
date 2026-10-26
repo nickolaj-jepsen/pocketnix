@@ -10,6 +10,13 @@
   # The builder's binary cache; a test-only key.
   cacheSecret = pkgs.writeText "cache.sec" "pocketnix-test-builder:cNCiLJRJKtj/NYr6HKMIB0f0JS0K51uY8Boefn15NtUdEVxl8P73M2yibOJqDDCQxM7dSd+4OSUHzjzwmf6O5A==";
   cachePublic = "pocketnix-test-builder:HRFcZfD+9zNsomziagwwkMTO3UnfuDklB8488Jn+juQ=";
+  # The published path is https only: a self-signed certificate for the builder's address, trusted by the phone.
+  tlsFor = ip:
+    pkgs.runCommand "pocketnix-test-tls" {nativeBuildInputs = [pkgs.openssl];} ''
+      mkdir $out
+      openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
+        -subj /CN=builder -addext "subjectAltName=IP:${ip},DNS:builder" -keyout $out/key -out $out/cert
+    '';
 in
   pkgs.testers.runNixOSTest {
     name = "pocketnix-agent";
@@ -36,7 +43,7 @@ in
             sshKey = "/etc/pocketnix-test/id_ed25519";
           };
           # By IP: the agent's pure-Go resolver.
-          published.url = "http://${nodes.builder.networking.primaryIPAddress}/toplevel";
+          published.url = "https://${nodes.builder.networking.primaryIPAddress}/toplevel";
           checkInterval = null;
         };
       };
@@ -47,6 +54,7 @@ in
         mode = "0600";
       };
       programs.ssh.knownHosts.builder.publicKey = snakeOilEd25519PublicKey;
+      security.pki.certificateFiles = ["${tlsFor nodes.builder.networking.primaryIPAddress}/cert"];
       nix.settings = {
         substituters = pkgs.lib.mkForce ["http://builder:5000"];
         trusted-public-keys = [cachePublic];
@@ -91,9 +99,16 @@ in
       };
       services.nginx = {
         enable = true;
-        virtualHosts.default.locations."= /toplevel".return = "200 '${next."2"}'";
+        virtualHosts.default = let
+          tls = tlsFor nodes.builder.networking.primaryIPAddress;
+        in {
+          onlySSL = true;
+          sslCertificate = "${tls}/cert";
+          sslCertificateKey = "${tls}/key";
+          locations."= /toplevel".return = "200 '${next."2"}'";
+        };
       };
-      networking.firewall.allowedTCPPorts = [80 5000];
+      networking.firewall.allowedTCPPorts = [443 5000];
       virtualisation.memorySize = 1536;
     };
 
@@ -206,7 +221,7 @@ in
           builder.succeed("systemctl start nix-serve.service")
           builder.succeed("systemctl stop sshd.service")
           builder.wait_for_open_port(5000)
-          builder.wait_for_open_port(80)
+          builder.wait_for_open_port(443)
           u = json.loads(client.succeed(f"{A} update"))
           assert u["current"] == "${next."2"}", u
           phone.succeed("grep -qx 2 /etc/pocketnix-test-generation")

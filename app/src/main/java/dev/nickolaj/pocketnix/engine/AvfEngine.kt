@@ -54,7 +54,7 @@ class AvfEngine(private val context: Context) : VmEngine {
             }
         }
 
-    override fun start(settings: VmSettings, console: ConsoleLog) {
+    override fun start(settings: () -> VmSettings, console: ConsoleLog) {
         // Claimed here, not on the lifecycle thread: the foreground service
         // starting alongside stops itself if it still sees Stopped.
         synchronized(this) {
@@ -65,7 +65,9 @@ class AvfEngine(private val context: Context) : VmEngine {
         lifecycle.execute { launch(settings, console) }
     }
 
-    private fun launch(settings: VmSettings, console: ConsoleLog) {
+    private fun launch(settingsOf: () -> VmSettings, console: ConsoleLog) {
+        // Read per launch: a guest reboot picks up what changed in Settings since.
+        val settings = settingsOf()
         val gen = ++generation
         lastError = null
         try {
@@ -92,7 +94,7 @@ class AvfEngine(private val context: Context) : VmEngine {
                         Log.e(TAG, "VM error $code: $msg")
                         lastError = "AVF error $code: ${msg ?: "no message"}"
                     },
-                    onStopped = { reason -> onStopped(gen, reason, settings, console) },
+                    onStopped = { reason -> onStopped(gen, reason, settingsOf, console) },
                 ),
             )
 
@@ -157,7 +159,7 @@ class AvfEngine(private val context: Context) : VmEngine {
     }
 
     // On the lifecycle thread (the callback executor).
-    private fun onStopped(gen: Long, reason: Int, settings: VmSettings, console: ConsoleLog) {
+    private fun onStopped(gen: Long, reason: Int, settings: () -> VmSettings, console: ConsoleLog) {
         if (gen != generation) return
         Log.i(TAG, "VM stopped: ${AvfReasons.stopReason(reason)}")
         cleanup(console)
@@ -216,6 +218,12 @@ class AvfEngine(private val context: Context) : VmEngine {
 /** The guest's disk: one raw GPT image in app-private storage (virtmgr can't open FUSE paths). */
 object DiskImage {
     fun file(context: Context): File = File(context.filesDir, "disk.img")
+
+    /** The largest disk the phone has room for: what the image holds now plus the free space, in whole GiB. */
+    fun maxGb(context: Context): Int {
+        val f = file(context)
+        return (((if (f.exists()) f.length() else 0L) + context.filesDir.usableSpace) shr 30).toInt()
+    }
 
     /** Grows the image file to [gb] GiB; the guest grows its root partition on boot. Never shrinks. */
     fun grow(file: File, gb: Int) {

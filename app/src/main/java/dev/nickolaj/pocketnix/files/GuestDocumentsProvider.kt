@@ -100,17 +100,18 @@ class GuestDocumentsProvider : DocumentsProvider() {
             return ParcelFileDescriptor.open(tmp, pfdMode).also { tmp.delete() }
         }
         return ParcelFileDescriptor.open(tmp, pfdMode, io) { e ->
+            if (e != null) {
+                Log.w(TAG, "$documentId: writer failed, not uploading", e)
+                tmp.delete()
+                return@open
+            }
             try {
-                if (e == null) {
-                    tmp.inputStream().use { input -> f.write(p).use { input.copyTo(it) } }
-                    notifyChanged(parentOf(documentId))
-                } else {
-                    Log.w(TAG, "$documentId: writer failed, not uploading", e)
-                }
+                tmp.inputStream().use { input -> f.write(p, tmp.length()).use { input.copyTo(it) } }
+                tmp.delete()
+                notifyChanged(parentOf(documentId))
             } catch (t: Exception) {
                 Log.e(TAG, "upload $documentId", t)
-            } finally {
-                tmp.delete()
+                PendingUploads.keep(ctx, p, tmp)
             }
         }
     }

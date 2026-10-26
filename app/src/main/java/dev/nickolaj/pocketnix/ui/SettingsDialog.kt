@@ -19,14 +19,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import dev.nickolaj.pocketnix.BuildConfig
+import dev.nickolaj.pocketnix.Settings
 import dev.nickolaj.pocketnix.Vm
+import dev.nickolaj.pocketnix.engine.DiskImage
 import dev.nickolaj.pocketnix.engine.VmState
 
 /** The set-once hardware; changes apply at the next start. */
 @Composable
 fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
     val s = vm.settings
+    val context = LocalContext.current
     var memory by remember { mutableStateOf(s.memoryMb.toString()) }
     var disk by remember { mutableStateOf(s.diskGb.toString()) }
     var allCpus by remember { mutableStateOf(s.cpus != 1) }
@@ -55,8 +59,8 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
         },
         confirmButton = {
             TextButton(onClick = {
-                memory.toIntOrNull()?.takeIf { it >= 512 }?.let { s.memoryMb = it }
-                disk.toIntOrNull()?.takeIf { it >= 4 }?.let { s.diskGb = it }
+                memory.toIntOrNull()?.takeIf { it in 512..Settings.MAX_MEMORY_MB }?.let { s.memoryMb = it }
+                disk.toIntOrNull()?.takeIf { it in 4..DiskImage.maxGb(context) }?.let { s.diskGb = it }
                 s.cpus = if (allCpus) 0 else 1
                 s.network = network
                 s.tcpBackend = tcp

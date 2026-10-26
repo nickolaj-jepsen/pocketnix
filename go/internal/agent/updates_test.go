@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/agent"
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/client"
@@ -32,7 +33,7 @@ func newFakeGuest(t *testing.T) *fakeGuest {
 		must(t, os.MkdirAll(d, 0o755))
 	}
 	for i, c := range []string{"a", "b"} {
-		top := filepath.Join(g.store, strings.Repeat(c, 32)+fmt.Sprintf("-nixos-system-%d", i+1))
+		top := filepath.Join(g.store, strings.Repeat(c, 32)+fmt.Sprintf("-nixos-system-phone-26.05.%d", i+1))
 		must(t, os.MkdirAll(filepath.Join(top, "bin"), 0o755))
 		must(t, os.WriteFile(filepath.Join(top, "nixos-version"), fmt.Appendf(nil, "26.05.%d\n", i+1), 0o644))
 		g.script(t, filepath.Join(top, "bin", "switch-to-configuration"), fmt.Sprintf(`
@@ -50,6 +51,7 @@ ln -sfn %[1]s %[2]s
 	// ssh prints what $dir/answer says, or fails like an unreachable host.
 	g.script(t, g.bin("ssh"), fmt.Sprintf(`
 case "$*" in *BatchMode=yes*) ;; *) echo "no BatchMode" >&2; exit 2 ;; esac
+[ -f %[1]s/hang ] && exec sleep 600
 [ -f %[1]s/answer ] || { echo "ssh: connect to host builder port 22: No route to host" >&2; exit 255; }
 echo "evaluating on the build host" >&2
 cat %[1]s/answer
@@ -57,8 +59,10 @@ cat %[1]s/answer
 	// The guest's caches have a path when $dir/cached lists it.
 	g.script(t, g.bin("nix-store"), fmt.Sprintf(`
 [ "$1" = --realise ] || exit 2
-grep -qxF "$2" %[1]s/cached 2>/dev/null || { echo "error: don't know how to build these paths: $2" >&2; exit 1; }
-echo "copying path '$2' from 'https://cache.example'" >&2
+case "$*" in *"--max-jobs 0"*) ;; *) echo "realise may build" >&2; exit 2 ;; esac
+for p; do :; done
+grep -qxF "$p" %[1]s/cached 2>/dev/null || { echo "error: don't know how to build these paths: $p" >&2; exit 1; }
+echo "copying path '$p' from 'https://cache.example'" >&2
 `, dir))
 	g.script(t, g.bin("nix"), fmt.Sprintf(`
 [ "$3" = copy ] || exit 2
@@ -107,15 +111,20 @@ func must(t *testing.T, err error) {
 	}
 }
 
-// startUpdates serves updates (the config's "updates" object) on a fake guest.
-func startUpdates(t *testing.T, g *fakeGuest, updates map[string]any) *client.Control {
+// startUpdates serves updates (the config's "updates" object) on a fake
+// guest named "phone"; tls, when set, is the published path's server.
+func startUpdates(t *testing.T, g *fakeGuest, updates map[string]any, tls ...*httptest.Server) *client.Control {
 	t.Helper()
 	cfg := baseConfig()
+	cfg["hostname"] = "phone"
 	cfg["updates"] = updates
 	h := start(t, cfg, unixAddr)
 	u := h.srv.Updates
 	u.SSH, u.NixStore, u.Nix, u.NixEnv, u.SystemdRun = g.bin("ssh"), g.bin("nix-store"), g.bin("nix"), g.bin("nix-env"), ""
 	u.Profile, u.Current, u.Booted, u.StoreDir = g.profile, g.current, g.booted(), g.store
+	if len(tls) > 0 {
+		u.HTTP = tls[0].Client()
+	}
 	ctl, err := h.client.Control()
 	if err != nil {
 		t.Fatal(err)
@@ -188,12 +197,12 @@ func TestUpdateUpToDate(t *testing.T) {
 
 func TestUpdatePublishedSubstitutes(t *testing.T) {
 	g := newFakeGuest(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, g.systems[1])
 	}))
 	defer srv.Close()
 	g.cache(t, g.systems[1])
-	ctl := startUpdates(t, g, map[string]any{"published": map[string]any{"url": srv.URL + "/phone"}})
+	ctl := startUpdates(t, g, map[string]any{"published": map[string]any{"url": srv.URL + "/phone"}}, srv)
 	u, err := ctl.Run(ctl.UpdateApply)
 	if err != nil {
 		t.Fatalf("apply: %v (log %q)", err, u.Log)
@@ -205,12 +214,12 @@ func TestUpdatePublishedSubstitutes(t *testing.T) {
 
 func TestUpdateFallsBackToPublished(t *testing.T) {
 	g := newFakeGuest(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, g.systems[1])
 	}))
 	defer srv.Close()
 	// No answer file: the build host is unreachable.
-	ctl := startUpdates(t, g, map[string]any{"buildHost": buildHost["buildHost"], "published": map[string]any{"url": srv.URL}})
+	ctl := startUpdates(t, g, map[string]any{"buildHost": buildHost["buildHost"], "published": map[string]any{"url": srv.URL}}, srv)
 	u, err := ctl.Run(ctl.UpdateCheck)
 	if err != nil {
 		t.Fatalf("check: %v (log %q)", err, u.Log)
@@ -230,6 +239,13 @@ func TestUpdateRejectsNonStorePath(t *testing.T) {
 	u, err := ctl.Run(ctl.UpdateApply)
 	if err == nil || !strings.Contains(u.Error, "not a store path") {
 		t.Fatalf("err %v, state error %q", err, u.Error)
+	}
+	// Another machine's system, or a derivation to build, isn't this host's toplevel.
+	for _, other := range []string{"-nixos-system-desktop-26.05.1", "-nixos-system-phone-26.05.drv-x.drv", "-hello-2.12"} {
+		g.answer(t, filepath.Join(g.store, strings.Repeat("c", 32)+other))
+		if u, err := ctl.Run(ctl.UpdateApply); err == nil || !strings.Contains(u.Error, "toplevel") {
+			t.Errorf("%s: err %v, state error %q", other, err, u.Error)
+		}
 	}
 	if currentGeneration(u) != 1 {
 		t.Errorf("switched anyway: %+v", u.Generations)
@@ -252,6 +268,42 @@ func TestSwitchGenerationRollsBack(t *testing.T) {
 	}
 	if err := ctl.SwitchGeneration(7); err == nil {
 		t.Error("switched to a generation that doesn't exist")
+	}
+}
+
+// A build host that hangs mid-build mustn't hold the updater: a cancel ends
+// the check, and a rollback doesn't wait for it.
+func TestHungBuildHost(t *testing.T) {
+	g := newFakeGuest(t)
+	ctl := startUpdates(t, g, buildHost)
+	must(t, os.WriteFile(filepath.Join(g.dir, "hang"), nil, 0o644))
+	hung := func() {
+		t.Helper()
+		if err := ctl.UpdateCheck(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ctl.WaitUpdates(func(u protocol.Updates) bool { return u.State == protocol.UpdateChecking }); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	hung()
+	start := time.Now()
+	if err := ctl.UpdateCancel(); err != nil {
+		t.Fatal(err)
+	}
+	u, err := ctl.WaitUpdates(func(u protocol.Updates) bool { return u.State == protocol.UpdateIdle })
+	if err != nil || u.Error != "cancelled" || time.Since(start) > 10*time.Second {
+		t.Fatalf("after cancel: %+v, %v, %v", u.Error, err, time.Since(start))
+	}
+	if err := ctl.UpdateCancel(); err == nil {
+		t.Error("cancelled while idle")
+	}
+
+	hung()
+	u, err = ctl.Run(func() error { return ctl.SwitchGeneration(1) })
+	if err != nil || currentGeneration(u) != 1 {
+		t.Fatalf("rollback during a hung check: %v, %+v", err, u)
 	}
 }
 
@@ -278,6 +330,7 @@ func TestUpdatesBadConfig(t *testing.T) {
 	for name, updates := range map[string]map[string]any{
 		"no installable": {"buildHost": map[string]any{"host": "builder"}},
 		"not http":       {"published": map[string]any{"url": "file:///etc/passwd"}},
+		"plain http":     {"published": map[string]any{"url": "http://ci.example/phone"}},
 		"bad interval":   {"checkInterval": "soon"},
 	} {
 		t.Run(name, func(t *testing.T) {

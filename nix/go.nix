@@ -5,7 +5,8 @@
 }:
 buildGoModule (finalAttrs: {
   pname = "pocketnix";
-  version = "0.0.0";
+  # The app shares it; a git rev here would rebuild the agent, and so the image, on every commit.
+  version = lib.fileContents ../VERSION;
   # Unpacked as plain "go", the source would land on the builder's GOPATH (/build/go).
   src = lib.cleanSourceWith {
     name = "pocketnix-go";

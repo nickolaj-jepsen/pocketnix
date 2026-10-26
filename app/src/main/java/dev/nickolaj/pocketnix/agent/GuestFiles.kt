@@ -62,11 +62,12 @@ class GuestFiles(private val dialer: AgentDialer, private val appVersion: String
     }
 
     /**
-     * Replaces the file with what's written to the returned stream; closing it
-     * commits, throwing when the agent couldn't.
+     * Replaces the file with the [size] bytes written to the returned stream;
+     * closing it commits, throwing when the agent couldn't. Fewer bytes leave
+     * the old file as it was.
      */
-    fun write(path: String): OutputStream {
-        val (s, _) = open("write", path)
+    fun write(path: String, size: Long): OutputStream {
+        val (s, _) = open("write", path) { put("size", size) }
         return object : OutputStream() {
             override fun write(b: Int) = s.output.write(b)
             override fun write(b: ByteArray, off: Int, len: Int) = s.output.write(b, off, len)

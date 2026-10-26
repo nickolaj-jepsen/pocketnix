@@ -50,8 +50,10 @@ const (
 	// first when no check has found one.
 	TypeUpdateApply = "update-apply"
 	// TypeSwitchGeneration switches to [Request.Generation]: a rollback, or
-	// forward again.
+	// forward again. It cancels a running check or download first.
 	TypeSwitchGeneration = "switch-generation"
+	// TypeUpdateCancel stops a running check or download.
+	TypeUpdateCancel = "update-cancel"
 	// TypeHistory asks for the user's shell history, answered with [History].
 	TypeHistory = "history"
 )

@@ -17,7 +17,8 @@ android {
         minSdk = 34
         targetSdk = 36
         versionCode = 1
-        versionName = "0.0.0"
+        // The CLI shares it (nix/go.nix): provision installs the release matching its own version.
+        versionName = rootProject.file("VERSION").readText().trim()
 
         ndk {
             abiFilters += "arm64-v8a"

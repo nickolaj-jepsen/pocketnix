@@ -54,6 +54,11 @@ type Updater struct {
 	log       []string
 	nextCheck time.Time
 	pushTimer *time.Timer
+
+	// The running operation: its context, how to cancel it, closed when it ends.
+	ctx    context.Context
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 // NewUpdater returns an Updater for a NixOS guest.
@@ -162,7 +167,7 @@ func (u *Updater) Apply() error {
 		if err := u.fetch(c, src, path); err != nil {
 			return err
 		}
-		if err := u.cmd(u.NixEnv, "-p", u.Profile, "--set", path); err != nil {
+		if err := u.cmd(envTimeout, u.NixEnv, "-p", u.Profile, "--set", path); err != nil {
 			return err
 		}
 		if err := u.switchTo(path); err != nil {
@@ -183,13 +188,39 @@ func (u *Updater) SwitchGeneration(n int) error {
 	if path == "" {
 		return fmt.Errorf("no generation %d", n)
 	}
+	// A rollback can't wait for a check that a hung build host holds up.
+	u.mu.Lock()
+	checking, done := u.state == protocol.UpdateChecking || u.state == protocol.UpdateFetching, u.done
+	u.mu.Unlock()
+	if checking {
+		u.Cancel()
+		select {
+		case <-done:
+		case <-time.After(30 * time.Second):
+		}
+	}
 	return u.start(protocol.UpdateSwitching, func(UpdatesConfig) error {
 		u.logf("switching to generation %d (%s)", n, path)
-		if err := u.cmd(u.NixEnv, "-p", u.Profile, "--switch-generation", strconv.Itoa(n)); err != nil {
+		if err := u.cmd(envTimeout, u.NixEnv, "-p", u.Profile, "--switch-generation", strconv.Itoa(n)); err != nil {
 			return err
 		}
 		return u.switchTo(path)
 	})
+}
+
+// Cancel stops the running check or download. A switch already under way
+// finishes: stopping one halfway would leave the system half activated.
+func (u *Updater) Cancel() error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.state == protocol.UpdateIdle || u.cancel == nil {
+		return errors.New("nothing to cancel")
+	}
+	if u.state == protocol.UpdateSwitching {
+		return errors.New("a switch can't be cancelled")
+	}
+	u.cancel()
+	return nil
 }
 
 func (u *Updater) run(state string, op func(UpdatesConfig) error) error {
@@ -213,15 +244,24 @@ func (u *Updater) start(state string, op func(UpdatesConfig) error) error {
 	u.state, u.err, u.log = state, "", nil
 	u.op++
 	cfg := u.cfg
+	ctx, cancel := context.WithCancel(context.Background())
+	u.ctx, u.cancel, u.done = ctx, cancel, make(chan struct{})
+	done := u.done
 	u.mu.Unlock()
 	u.changed()
 	go func() {
 		err := op(cfg)
+		if ctx.Err() != nil && err != nil {
+			err = errors.New("cancelled")
+		}
+		cancel()
 		u.mu.Lock()
 		u.state = protocol.UpdateIdle
+		u.cancel = nil
 		if err != nil {
 			u.err = err.Error()
 		}
+		close(done)
 		u.mu.Unlock()
 		if err != nil {
 			u.logf("failed: %v", err)
@@ -263,7 +303,9 @@ func (u *Updater) check(c UpdatesConfig) (path, source string, err error) {
 
 var storeName = regexp.MustCompile(`^[0-9a-z]{32}-[^/\s]+$`)
 
-func (u *Updater) storePath(s string) (string, error) {
+// storePath validates a source's answer: a store path, and this host's
+// system (not a .drv to build, nor another machine's toplevel).
+func (u *Updater) storePath(c UpdatesConfig, s string) (string, error) {
 	s = strings.TrimSpace(s)
 	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
 		s = strings.TrimSpace(s[i+1:])
@@ -271,6 +313,9 @@ func (u *Updater) storePath(s string) (string, error) {
 	dir, name := filepath.Split(s)
 	if filepath.Clean(dir) != u.StoreDir || !storeName.MatchString(name) {
 		return "", fmt.Errorf("answered %q, not a store path", s)
+	}
+	if strings.HasSuffix(name, ".drv") || c.hostname != "" && !strings.HasPrefix(name[33:], "nixos-system-"+c.hostname+"-") {
+		return "", fmt.Errorf("answered %q, not a nixos-system-%s-… toplevel", s, c.hostname)
 	}
 	return s, nil
 }
@@ -281,14 +326,18 @@ func (u *Updater) target(c UpdatesConfig, src string) (string, error) {
 		b := c.BuildHost
 		u.logf("building %s on %s", b.Installable, b.Host)
 		args := append(sshArgs(b), b.Host, "nix --extra-experimental-features 'nix-command flakes' build --no-link --print-out-paths --refresh "+shellQuote(b.Installable))
-		out, err := u.output(u.SSH, args...)
+		var out strings.Builder
+		if err := u.runCmd(buildTimeout, &out, nil, u.SSH, args...); err != nil {
+			return "", err
+		}
+		return u.storePath(c, out.String())
+	case protocol.SourcePublished:
+		u.logf("fetching %s", c.Published.URL)
+		req, err := http.NewRequestWithContext(u.opContext(), http.MethodGet, c.Published.URL, nil)
 		if err != nil {
 			return "", err
 		}
-		return u.storePath(out)
-	case protocol.SourcePublished:
-		u.logf("fetching %s", c.Published.URL)
-		resp, err := u.HTTP.Get(c.Published.URL)
+		resp, err := u.HTTP.Do(req)
 		if err != nil {
 			return "", err
 		}
@@ -300,7 +349,7 @@ func (u *Updater) target(c UpdatesConfig, src string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return u.storePath(string(b))
+		return u.storePath(c, string(b))
 	}
 	return "", fmt.Errorf("unknown source %q", src)
 }
@@ -308,33 +357,42 @@ func (u *Updater) target(c UpdatesConfig, src string) (string, error) {
 // fetch makes path valid in the guest's store: from its binary caches, or
 // else (for a build host that doesn't push to one) over ssh from the host.
 func (u *Updater) fetch(c UpdatesConfig, src, path string) error {
-	err := u.cmd(u.NixStore, "--realise", path)
-	if err == nil || src != protocol.SourceBuildHost {
+	// Substitute only: a cache may hold the path, but nothing gets built here.
+	err := u.cmd(fetchTimeout, u.NixStore, "--realise", "--max-jobs", "0", path)
+	if err == nil || src != protocol.SourceBuildHost || u.opContext().Err() != nil {
 		return err
 	}
 	b := c.BuildHost
 	u.logf("not in the guest's caches; copying from %s", b.Host)
 	// Unsigned is fine: the guest already trusts this host with its whole system.
-	cmd := exec.Command(u.Nix, "--extra-experimental-features", "nix-command", "copy", "-v", "--no-check-sigs", "--from", "ssh-ng://"+b.Host, path)
-	cmd.Env = append(os.Environ(), "NIX_SSHOPTS="+strings.Join(sshArgs(b), " "))
-	return u.runCmd(cmd, nil)
+	env := []string{"NIX_SSHOPTS=" + strings.Join(sshArgs(b), " ")}
+	return u.runCmd(fetchTimeout, nil, env, u.Nix, "--extra-experimental-features", "nix-command", "copy", "-v", "--no-check-sigs", "--from", "ssh-ng://"+b.Host, path)
 }
 
 func (u *Updater) switchTo(path string) error {
 	u.setState(protocol.UpdateSwitching)
 	stc := filepath.Join(path, "bin", "switch-to-configuration")
 	if u.SystemdRun == "" {
-		return u.cmd(stc, "switch")
+		return u.cmd(switchTimeout, stc, "switch")
 	}
-	return u.cmd(u.SystemdRun, "-E", "LOCALE_ARCHIVE", "-E", "NIXOS_INSTALL_BOOTLOADER",
+	return u.cmd(switchTimeout, u.SystemdRun, "-E", "LOCALE_ARCHIVE", "-E", "NIXOS_INSTALL_BOOTLOADER",
 		"--collect", "--no-ask-password", "--pipe", "--quiet", "--service-type=exec",
 		"--unit=pocketnix-switch-to-configuration", stc, "switch")
 }
 
+// Deadlines per phase. They're backstops; the ssh keepalives below notice a
+// build host that went away much sooner.
+const (
+	buildTimeout  = 3 * time.Hour
+	fetchTimeout  = 2 * time.Hour
+	switchTimeout = 30 * time.Minute
+	envTimeout    = 2 * time.Minute
+)
+
 func sshArgs(b *BuildHost) []string {
 	// No prompts: nobody can answer them. Unknown host keys fail too; the
 	// module's users list the build host in programs.ssh.knownHosts.
-	args := []string{"-o", "BatchMode=yes"}
+	args := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4"}
 	if b.SSHKey != "" {
 		args = append(args, "-i", b.SSHKey)
 	}
@@ -343,20 +401,38 @@ func sshArgs(b *BuildHost) []string {
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-func (u *Updater) cmd(name string, args ...string) error {
-	return u.runCmd(exec.Command(name, args...), nil)
+func (u *Updater) cmd(timeout time.Duration, name string, args ...string) error {
+	return u.runCmd(timeout, nil, nil, name, args...)
 }
 
-// output runs a command, logging its stderr, and returns its stdout.
-func (u *Updater) output(name string, args ...string) (string, error) {
-	var out strings.Builder
-	err := u.runCmd(exec.Command(name, args...), &out)
-	return out.String(), err
+// opContext is the running operation's; Cancel ends it.
+func (u *Updater) opContext() context.Context {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.ctx == nil {
+		return context.Background()
+	}
+	return u.ctx
 }
 
-// runCmd logs cmd's output line by line; stdout goes to out instead when
-// out is set.
-func (u *Updater) runCmd(cmd *exec.Cmd, out io.Writer) error {
+// runCmd runs a command for at most timeout, logging its output line by
+// line; stdout goes to out instead when out is set. A cancel ends it, except
+// during a switch, which must not stop halfway.
+func (u *Updater) runCmd(timeout time.Duration, out io.Writer, env []string, name string, args ...string) error {
+	ctx := u.opContext()
+	u.mu.Lock()
+	if u.state == protocol.UpdateSwitching {
+		ctx = context.WithoutCancel(ctx)
+	}
+	u.mu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	// A child that keeps the output pipe open mustn't hold the updater after a kill.
+	cmd.WaitDelay = 5 * time.Second
+	if env != nil {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	pr, pw := io.Pipe()
 	cmd.Stderr = pw
 	cmd.Stdout = pw

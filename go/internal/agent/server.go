@@ -217,6 +217,8 @@ func (s *Server) request(req protocol.Request) (any, error) {
 		return ack, s.Updates.Check()
 	case protocol.TypeUpdateApply:
 		return ack, s.Updates.Apply()
+	case protocol.TypeUpdateCancel:
+		return ack, s.Updates.Cancel()
 	case protocol.TypeSwitchGeneration:
 		return ack, s.Updates.SwitchGeneration(req.Generation)
 	case protocol.TypeHistory:

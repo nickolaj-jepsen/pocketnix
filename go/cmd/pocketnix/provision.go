@@ -155,6 +155,14 @@ func (o *provisionOpts) run() error {
 			return fmt.Errorf("%w (pass --apk to install a local build)", err)
 		}
 	}
+	prov := provider{dev: dev, authority: o.pkg() + ".provision"}
+	// Before the install: replacing the app kills its process, and with it a
+	// running VM, which would then look stopped to the check below.
+	if _, err := dev.Shell("pm path " + o.pkg()); err == nil {
+		if st, err := prov.call("status", ""); err == nil && st["running"] == "true" {
+			return errors.New("the VM is running; stop it in the app first (installing the app would kill it)")
+		}
+	}
 	o.logf("installing %s", apk)
 	if _, err := dev.Run("install", "-r", "-g", apk); err != nil {
 		return fmt.Errorf("%w\nA signature mismatch needs an uninstall first, which deletes the VM's disk image; do that by hand if you mean it", err)
@@ -166,7 +174,6 @@ func (o *provisionOpts) run() error {
 	}
 	o.logf("granted %s", strings.Join(avfPermissions, ", "))
 
-	prov := provider{dev: dev, authority: o.pkg() + ".provision"}
 	st, err := prov.call("status", "")
 	if err != nil {
 		return err

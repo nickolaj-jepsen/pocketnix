@@ -20,7 +20,7 @@ class TcpEngine(private val host: String, private val port: Int) : VmEngine {
     override val dialer: AgentDialer?
         get() = if (_state.value == VmState.Running) TcpDialer(host, port) else null
 
-    override fun start(settings: VmSettings, console: ConsoleLog) {
+    override fun start(settings: () -> VmSettings, console: ConsoleLog) {
         console.append("\r\n[pocketnix: TCP agent backend, $host:$port; there is no console]\r\n")
         _state.value = VmState.Running
     }

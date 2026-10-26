@@ -2,11 +2,15 @@ package agent
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 )
 
 const (
@@ -24,22 +28,32 @@ func history(cfg *File, limit int) ([]string, error) {
 	}
 	limit = min(limit, maxHistory)
 	path, shell := cfg.History, cfg.Shell
-	if path == "" || shell == "" {
-		u, err := sessionUser(cfg.User)
-		if err != nil {
-			return nil, err
+	var f *os.File
+	var err error
+	if path != "" {
+		// The module's own path: trusted, but still read with care.
+		f, err = os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	} else {
+		// The agent is root and the user owns this path: open it inside the
+		// home, so a symlink can't reach /etc/shadow or /dev/zero.
+		u, uerr := sessionUser(cfg.User)
+		if uerr != nil {
+			return nil, uerr
 		}
 		if shell == "" {
 			shell = u.shell
 		}
-		if path == "" {
-			path = defaultHistoryFile(u.home, filepath.Base(shell))
-		}
+		path = defaultHistoryFile(filepath.Base(shell))
+		f, err = openInHome(u.home, path)
 	}
-	b, err := readTail(path, historyTail)
-	if os.IsNotExist(err) {
+	if errors.Is(err, fs.ErrNotExist) {
 		return []string{}, nil
 	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	b, err := readTail(f, historyTail)
 	if err != nil {
 		return nil, err
 	}
@@ -55,39 +69,51 @@ func history(cfg *File, limit int) ([]string, error) {
 	return recentUnique(cmds, limit), nil
 }
 
-func defaultHistoryFile(home, shell string) string {
+// defaultHistoryFile is relative to the home.
+func defaultHistoryFile(shell string) string {
 	switch shell {
 	case "fish":
-		return filepath.Join(home, ".local/share/fish/fish_history")
+		return ".local/share/fish/fish_history"
 	case "zsh":
-		return filepath.Join(home, ".zsh_history")
+		return ".zsh_history"
 	default:
-		return filepath.Join(home, ".bash_history")
+		return ".bash_history"
 	}
 }
 
-func readTail(path string, n int64) ([]byte, error) {
-	f, err := os.Open(path)
+// openInHome opens rel under home without leaving it, and without blocking
+// on a FIFO.
+func openInHome(home, rel string) (*os.File, error) {
+	root, err := os.OpenRoot(home)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer root.Close()
+	return root.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+}
+
+// readTail reads at most the last n bytes of a regular file.
+func readTail(f *os.File, n int64) ([]byte, error) {
 	fi, err := f.Stat()
 	if err != nil {
 		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", f.Name())
 	}
 	if fi.Size() > n {
 		if _, err := f.Seek(fi.Size()-n, io.SeekStart); err != nil {
 			return nil, err
 		}
-		b, err := io.ReadAll(f)
+		b, err := io.ReadAll(io.LimitReader(f, n))
 		// Drop the partial first line.
 		if i := bytes.IndexByte(b, '\n'); i >= 0 {
 			b = b[i+1:]
 		}
 		return b, err
 	}
-	return io.ReadAll(f)
+	// The file may grow while it's read.
+	return io.ReadAll(io.LimitReader(f, n))
 }
 
 // recentUnique keeps each command's latest use, newest first.

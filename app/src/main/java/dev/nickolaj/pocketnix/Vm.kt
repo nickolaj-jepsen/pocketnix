@@ -10,6 +10,7 @@ import dev.nickolaj.pocketnix.agent.GuestConfig
 import dev.nickolaj.pocketnix.agent.GuestFiles
 import dev.nickolaj.pocketnix.agent.PtyBackend
 import dev.nickolaj.pocketnix.files.GuestDocumentsProvider
+import dev.nickolaj.pocketnix.files.PendingUploads
 import dev.nickolaj.pocketnix.agent.Updates
 import dev.nickolaj.pocketnix.engine.AvfEngine
 import dev.nickolaj.pocketnix.engine.BootMenu
@@ -102,7 +103,14 @@ class Vm(private val app: Context) {
             }
         }
         // The Files app lists the root either way, but says when it can't be opened.
-        scope.launch { control.link.map { it is ControlChannel.Link.Up }.distinctUntilChanged().collect { GuestDocumentsProvider.rootsChanged(app) } }
+        scope.launch {
+            control.link.map { it is ControlChannel.Link.Up }.distinctUntilChanged().collect { up ->
+                GuestDocumentsProvider.rootsChanged(app)
+                // Saves that missed the guest go in now.
+                val f = if (up) files() else null
+                if (f != null) withContext(Dispatchers.IO) { PendingUploads.retry(app, f) }
+            }
+        }
         scope.launch {
             combine(state, control.link) { s, link -> s == VmState.Running && link !is ControlChannel.Link.Up }
                 .distinctUntilChanged()
@@ -171,7 +179,7 @@ class Vm(private val app: Context) {
             BootMenu(console, scope).tap()
         }
         // The engine claims Starting first, so the service never starts into a Stopped state and quits.
-        e.start(settings.vm(), console)
+        e.start(settings::vm, console)
         startService()
     }
 

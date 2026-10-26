@@ -64,6 +64,8 @@ fun UpdatesDialog(vm: Vm, onDismiss: () -> Unit) {
             val u = updates
             if (u != null && u.sources.isNotEmpty()) {
                 Row {
+                    // A check or download can hang on a build host that went away; a switch must finish.
+                    if (u.busy && u.state != "switching") TextButton(onClick = { send("update-cancel") }) { Text("Cancel") }
                     TextButton(enabled = !u.busy, onClick = { send("update-check") }) { Text("Check") }
                     Button(enabled = !u.busy, onClick = { send("update-apply") }) { Text("Update") }
                 }

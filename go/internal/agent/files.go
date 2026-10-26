@@ -7,11 +7,10 @@ import (
 	"io/fs"
 	"net"
 	"os"
-
 	"path"
 	"path/filepath"
 	"strings"
-
+	"syscall"
 	"time"
 
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/protocol"
@@ -91,7 +90,7 @@ func (s *Server) serveFile(c net.Conn, h protocol.Hello) {
 		if protocol.WriteJSON(c, reply) != nil {
 			return
 		}
-		if err := writeFile(root, p, c, owner); err != nil {
+		if err := writeFile(root, p, c, h.Size, owner); err != nil {
 			reject(c, err.Error())
 			return
 		}
@@ -234,28 +233,38 @@ func (o *fileOwner) chown(root *os.Root, p string) error {
 // writeFile replaces p with r's bytes through a temporary file, so a failed
 // transfer leaves the old contents. A new file is 0644; an existing one keeps
 // its mode.
-func writeFile(root *os.Root, p string, r io.Reader, owner *fileOwner) error {
+func writeFile(root *os.Root, p string, r io.Reader, size int64, owner *fileOwner) error {
 	mode := fs.FileMode(0o644)
+	// A replaced file keeps its owner; a new one is the session user's.
+	keep := owner
 	if fi, err := root.Stat(osPath(p)); err == nil {
 		if fi.IsDir() {
 			return fmt.Errorf("%s is a directory", p)
 		}
 		mode = fi.Mode().Perm()
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok && os.Getuid() == 0 {
+			keep = &fileOwner{int(st.Uid), int(st.Gid)}
+		}
 	}
 	tmp := path.Join(path.Dir(p), fmt.Sprintf(".%s.pocketnix-%d", path.Base(p), time.Now().UnixNano()))
-	f, err := root.OpenFile(osPath(tmp), os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	f, err := root.OpenFile(osPath(tmp), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(f, r)
+	n, err := io.Copy(f, io.LimitReader(r, size))
+	if err == nil && n != size {
+		// The app's upload failed midway: keep the old contents.
+		err = fmt.Errorf("got %d of %d bytes", n, size)
+	}
+	// On the descriptor: the path could be swapped under a chown by name.
+	if err == nil && keep != nil {
+		err = f.Chown(keep.uid, keep.gid)
+	}
+	if err == nil {
+		err = f.Chmod(mode)
+	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
-	}
-	if err == nil {
-		err = owner.chown(root, tmp)
-	}
-	if err == nil {
-		err = root.Chmod(osPath(tmp), mode)
 	}
 	if err == nil {
 		err = root.Rename(osPath(tmp), osPath(p))

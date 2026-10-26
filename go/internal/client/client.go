@@ -222,6 +222,9 @@ func (c *Control) Reboot() error      { return c.simple(protocol.TypeReboot) }
 func (c *Control) UpdateCheck() error { return c.simple(protocol.TypeUpdateCheck) }
 func (c *Control) UpdateApply() error { return c.simple(protocol.TypeUpdateApply) }
 
+// UpdateCancel stops the running check or download.
+func (c *Control) UpdateCancel() error { return c.simple(protocol.TypeUpdateCancel) }
+
 // RefreshUpdates asks for a fresh update state; it arrives through Updates.
 func (c *Control) RefreshUpdates() error { return c.simple(protocol.TypeUpdates) }
 
@@ -313,13 +316,13 @@ func (c *Client) ReadFile(path string) ([]byte, error) {
 }
 
 // WriteFile replaces a file under the file provider's root with r's bytes.
-func (c *Client) WriteFile(path string, r io.Reader) error {
-	conn, _, err := c.open(protocol.Hello{Stream: protocol.StreamFile, Op: protocol.FileWrite, Path: path})
+func (c *Client) WriteFile(path string, data []byte) error {
+	conn, _, err := c.open(protocol.Hello{Stream: protocol.StreamFile, Op: protocol.FileWrite, Path: path, Size: int64(len(data))})
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	return sendAndAwaitDone(conn, r, nil)
+	return sendAndAwaitDone(conn, bytes.NewReader(data), nil)
 }
 
 // Share sends a file as the share sheet does, returning where it landed.

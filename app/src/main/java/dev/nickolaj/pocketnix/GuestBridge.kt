@@ -65,7 +65,7 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
         // Android stops background apps starting activities; a notification can.
         if (appVisible && runCatching { context.startActivity(chooser) }.isSuccess) return
         val what = url.ifEmpty { msg.optString("path") }
-        notify("Open from ${hostname() ?: "the guest"}", what, PendingIntent.getActivity(context, nextId, chooser, PendingIntent.FLAG_IMMUTABLE))
+        notify("Open from ${hostname() ?: "the guest"}", what, PendingIntent.getActivity(context, nextId, chooser, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
     }
 
     private fun notify(title: String, body: String, action: PendingIntent?) {

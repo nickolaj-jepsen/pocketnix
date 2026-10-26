@@ -37,6 +37,7 @@ commands:
   updates                print the update state and generations
   update-check           look for a newer system; prints the state after
   update                 check, fetch and switch to a newer system
+  update-cancel          stop a running check or download
   switch-generation <n>  switch to generation <n> (a rollback, or forward again)
   history [limit]        print the user's shell history, newest first
   events                 print the guest's notify/open/clipboard pushes, one JSON per line
@@ -90,7 +91,7 @@ func runAgent(args []string) error {
 		default:
 			return ctl.Reboot()
 		}
-	case "updates", "update-check", "update", "switch-generation", "history":
+	case "updates", "update-check", "update", "update-cancel", "switch-generation", "history":
 		ctl, err := c.Control()
 		if err != nil {
 			return err
@@ -157,7 +158,12 @@ func runAgent(args []string) error {
 		if len(rest) != 1 {
 			return errUsage
 		}
-		return c.WriteFile(rest[0], os.Stdin)
+		// Writes carry their size, so read it all first.
+		b, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return err
+		}
+		return c.WriteFile(rest[0], b)
 	case "exec":
 		return agentExec(c, rest)
 	case "forward":
@@ -216,6 +222,8 @@ func agentUpdates(ctl *client.Control, cmd string, args []string) error {
 		return nil
 	case "update-check":
 		start = ctl.UpdateCheck
+	case "update-cancel":
+		return ctl.UpdateCancel()
 	case "update":
 		start = ctl.UpdateApply
 	case "switch-generation":

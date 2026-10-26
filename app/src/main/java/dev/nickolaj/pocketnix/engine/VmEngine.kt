@@ -30,8 +30,8 @@ interface VmEngine {
     /** False for an agent the app doesn't own, which a stop must not power off. */
     val ownsGuest: Boolean
 
-    /** Boots the guest; the hvc0 console goes to [console]. */
-    fun start(settings: VmSettings, console: ConsoleLog)
+    /** Boots the guest with [settings], read at every launch (a reboot's too); the hvc0 console goes to [console]. */
+    fun start(settings: () -> VmSettings, console: ConsoleLog)
 
     /** Stops the VM at once, without asking the guest. */
     fun forceStop()

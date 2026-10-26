@@ -142,7 +142,7 @@ func TestFileProvider(t *testing.T) {
 		t.Errorf("read = %q, %v", b, err)
 	}
 	// A rewrite keeps the file's mode.
-	if err := c.WriteFile("dir/a.txt", strings.NewReader("beta")); err != nil {
+	if err := c.WriteFile("dir/a.txt", []byte("beta")); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(root, "dir", "a.txt")); string(b) != "beta" {
@@ -150,6 +150,26 @@ func TestFileProvider(t *testing.T) {
 	}
 	if fi, _ := os.Stat(filepath.Join(root, "dir", "a.txt")); fi.Mode().Perm() != 0o600 {
 		t.Errorf("mode after write = %v", fi.Mode().Perm())
+	}
+
+	// An upload that ends early (the app lost its link) keeps the old contents.
+	conn, err := h.client.Dial()
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(t, protocol.WriteJSON(conn, protocol.Hello{Type: protocol.TypeHello, Version: protocol.Version, Stream: protocol.StreamFile, Op: protocol.FileWrite, Path: "dir/a.txt", Size: 100}))
+	if _, err := protocol.ReadHello(conn); err != nil {
+		t.Fatal(err)
+	}
+	conn.Write([]byte("trunc"))
+	conn.(interface{ CloseWrite() error }).CloseWrite()
+	line, _ := protocol.ReadLine(conn)
+	conn.Close()
+	if !strings.Contains(string(line), "got 5 of 100 bytes") {
+		t.Errorf("short write answered %s", line)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "dir", "a.txt")); string(b) != "beta" {
+		t.Errorf("a short write replaced the file: %q", b)
 	}
 
 	// Create picks a free name; directories too.

@@ -124,7 +124,7 @@ class AgentIntegrationTest {
     @Test
     fun fileProviderAndShares() {
         val files = GuestFiles(dialer, "test")
-        files.write("notes.txt").use { it.write("hello".toByteArray()) }
+        files.write("notes.txt", 5).use { it.write("hello".toByteArray()) }
         assertEquals("hello", files.read("notes.txt").use { it.readBytes().decodeToString() })
         assertEquals("hello", File(dir, "files/notes.txt").readText())
         val made = files.create("", "notes.txt", isDir = false)

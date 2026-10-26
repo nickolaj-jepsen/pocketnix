@@ -37,10 +37,12 @@
             </intent-filter>
         </activity>
 
-        <!-- Scripted control over adb (`pocketnix provision`); invisible, and never replayed. -->
+        <!-- Scripted control over adb (`pocketnix provision`); invisible, and never replayed.
+             DUMP: the adb shell holds it, other apps can't; this app's own starts (the tile) skip the check. -->
         <activity
             android:name=".ControlActivity"
             android:exported="true"
+            android:permission="android.permission.DUMP"
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:taskAffinity=""

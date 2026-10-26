@@ -46,6 +46,11 @@ class VmTileService : TileService() {
     }
 
     override fun onClick() {
+        // Quick Settings works on the lock screen; starting or stopping the VM shouldn't.
+        if (isLocked) unlockAndRun(::toggle) else toggle()
+    }
+
+    private fun toggle() {
         val s = vm.state.value
         if (s == VmState.Running || s == VmState.Starting) {
             vm.stop()

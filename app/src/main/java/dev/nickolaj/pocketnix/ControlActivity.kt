@@ -3,6 +3,7 @@ package dev.nickolaj.pocketnix
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
+import dev.nickolaj.pocketnix.engine.DiskImage
 
 /**
  * Scripted control over adb (`am start -n <pkg>/dev.nickolaj.pocketnix.ControlActivity -a …`):
@@ -33,8 +34,9 @@ class ControlActivity : Activity() {
         val s = vm.settings
         if (intent.hasExtra(EXTRA_NETWORK)) s.network = intent.getBooleanExtra(EXTRA_NETWORK, true)
         // The settings screen's values, for scripted starts (`--ei memoryMb 1024`).
-        intent.getIntExtra(EXTRA_MEMORY, 0).takeIf { it >= 512 }?.let { s.memoryMb = it }
-        intent.getIntExtra(EXTRA_DISK, 0).takeIf { it >= 4 }?.let { s.diskGb = it }
+        intent.getIntExtra(EXTRA_MEMORY, 0).takeIf { it in 512..Settings.MAX_MEMORY_MB }?.let { s.memoryMb = it }
+        // The guest grows into the disk: past the phone's free space, /data fills up.
+        intent.getIntExtra(EXTRA_DISK, 0).takeIf { it in 4..DiskImage.maxGb(this) }?.let { s.diskGb = it }
         if (intent.hasExtra(EXTRA_CPUS)) s.cpus = if (intent.getIntExtra(EXTRA_CPUS, 0) == 1) 1 else 0
         // Debug builds: `--es tcp <host:port>` runs against a desktop agent, `--es tcp ""` back to AVF.
         if (BuildConfig.DEBUG && intent.hasExtra(EXTRA_TCP)) {

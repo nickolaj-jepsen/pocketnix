@@ -53,6 +53,8 @@ type UpdatesConfig struct {
 	CheckInterval string `json:"checkInterval,omitempty"`
 
 	interval time.Duration
+	// hostname names the toplevel a source may answer (nixos-system-<hostname>-…).
+	hostname string
 }
 
 // BuildHost evaluates and builds the guest's system over ssh.
@@ -88,8 +90,9 @@ func (u *UpdatesConfig) normalize() error {
 		return errors.New("updates.buildHost needs host and installable")
 	}
 	if p := u.Published; p != nil {
-		if !strings.HasPrefix(p.URL, "http://") && !strings.HasPrefix(p.URL, "https://") {
-			return fmt.Errorf("updates.published.url %q is not an http(s) URL", p.URL)
+		// Whoever can change the answer picks the system the guest switches to.
+		if !strings.HasPrefix(p.URL, "https://") {
+			return fmt.Errorf("updates.published.url %q is not an https URL", p.URL)
 		}
 	}
 	u.interval = 0
@@ -162,6 +165,7 @@ func (f *File) normalize() error {
 	if t.Snippets == nil {
 		t.Snippets = []protocol.Snippet{}
 	}
+	f.Updates.hostname = f.Hostname
 	return f.Updates.normalize()
 }
 

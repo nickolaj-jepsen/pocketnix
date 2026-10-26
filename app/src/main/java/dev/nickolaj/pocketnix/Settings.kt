@@ -41,4 +41,8 @@ class Settings(context: Context) {
         set(v) = prefs.edit { putInt("textSize", v) }
 
     fun vm() = VmSettings(memoryMb = memoryMb, cpus = cpus, diskGb = diskGb, network = network)
+
+    companion object {
+        const val MAX_MEMORY_MB = 65_536
+    }
 }
