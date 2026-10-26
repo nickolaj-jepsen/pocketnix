@@ -97,6 +97,8 @@ fun MainScreen(vm: Vm) {
 
     val running = state == VmState.Running || state == VmState.Starting
     val agentUp = link is ControlChannel.Link.Up
+    // The debug TCP backend has no console, so no boot menu.
+    val ownsGuest = vm.engine.collectAsState().value.ownsGuest
     Column(
         Modifier
             .fillMaxSize()
@@ -121,8 +123,8 @@ fun MainScreen(vm: Vm) {
             MenuItem("Settings") { dismiss(); showSettings = true }
             if (running) {
                 MenuItem("Reboot", enabled = agentUp) { dismiss(); vm.reboot() }
-                MenuItem("Restart with boot menu") { dismiss(); vm.restartWithBootMenu() }
-            } else {
+                if (ownsGuest) MenuItem("Restart with boot menu") { dismiss(); vm.restartWithBootMenu() }
+            } else if (ownsGuest) {
                 MenuItem("Start with boot menu", enabled = missing.isEmpty()) { dismiss(); vm.start(bootMenu = true) }
             }
         }

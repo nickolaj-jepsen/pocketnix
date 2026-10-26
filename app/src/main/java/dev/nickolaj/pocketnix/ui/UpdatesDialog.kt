@@ -98,12 +98,23 @@ private fun UpdatesBody(u: Updates, refused: String?, onSwitch: (Int) -> Unit, o
             )
         }
         Text("Generations", style = MaterialTheme.typography.titleSmall)
-        for (g in u.generations) GenerationRow(g, enabled = !u.busy && !g.current) { onSwitch(g.number) }
+        // A switch is a rollback: the first tap only asks.
+        var confirming by remember { mutableStateOf<Int?>(null) }
+        for (g in u.generations) {
+            GenerationRow(g, enabled = !u.busy && !g.current, confirming = confirming == g.number) {
+                if (confirming == g.number) {
+                    confirming = null
+                    onSwitch(g.number)
+                } else {
+                    confirming = g.number
+                }
+            }
+        }
     }
 }
 
 @Composable
-private fun GenerationRow(g: Generation, enabled: Boolean, onSwitch: () -> Unit) {
+private fun GenerationRow(g: Generation, enabled: Boolean, confirming: Boolean, onSwitch: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             val marks = listOfNotNull("current".takeIf { g.current }, "booted".takeIf { g.booted }).joinToString(", ")
@@ -115,7 +126,7 @@ private fun GenerationRow(g: Generation, enabled: Boolean, onSwitch: () -> Unit)
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        if (!g.current) OutlinedButton(enabled = enabled, onClick = onSwitch) { Text("Switch") }
+        if (!g.current) OutlinedButton(enabled = enabled, onClick = onSwitch) { Text(if (confirming) "Confirm" else "Switch") }
     }
 }
 
