@@ -219,7 +219,7 @@ class AgentIntegrationTest {
         // Give the collector a moment to subscribe before the push.
         Thread.sleep(100)
         val reply = guest("""{"type":"notify","title":"make","body":"done"}""")
-        assertEquals("{}", reply)
+        assertTrue(reply, JSONObject(reply).optInt("id") > 0)
         val ev = event.await()
         assertEquals(listOf("notify", "make", "done"), listOf(ev.getString("type"), ev.getString("title"), ev.getString("body")))
         // Android's clipboard reaches a guest paste.
