@@ -56,9 +56,23 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 
 ## Updates and recovery
 
-- Pull: module option for the flake ref to follow. The agent checks whether the
-  new toplevel is fully substitutable (`--max-jobs 0`, the phone never builds);
-  the app shows update available, Update, Roll back and the generation list.
+- The phone never evaluates a flake, not only never builds: evaluating a real
+  config needs more memory and time than the guest has. Plain remote builders
+  (`nix.buildMachines`) don't help here, since they move builds, never
+  evaluation. So every update arrives as a finished toplevel store path, from
+  one of two sources (module options; one or both):
+  - **Build host (the standard).** The agent SSHes to a build host (any machine
+    with Nix that trusts the guest's key, e.g. over Tailscale). The build host
+    evaluates and builds the configured flake ref there and prints the toplevel
+    path. The agent then copies the closure (`nix copy --from ssh-ng://<host>`,
+    or substitutes it when the host pushes to a cache the guest uses).
+  - **Published path (cache).** CI evaluates and builds, pushes to a binary
+    cache, and publishes the toplevel path as one line of text at a URL. The
+    agent fetches the path and realises it with `--max-jobs 0`, substituting only.
+    No build host needs to be up.
+- With either source, the agent switches to the path
+  (`nix-env -p /nix/var/nix/profiles/system --set` + `switch-to-configuration`).
+  The app shows update available, Update, Roll back and the generation list.
 - Push from a desktop keeps working (`nixos-rebuild --target-host`); the CLI
   offers an ssh ProxyCommand over adb → forward → guest sshd.
 - A generation that won't boot: `boot.loader.timeout = 0`; the app's "Start
@@ -107,5 +121,6 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
   The first real deployment cuts over here.
 - **M2 integrations**: notifications/open URL, clipboard, share sheet, QS tile,
   DocumentsProvider.
-- **M3 NixOS ops**: pull updates, rollback and generations, boot-menu start,
+- **M3 NixOS ops**: pull updates (build host first, then published path),
+  rollback and generations, boot-menu start,
   command palette, session-aware tabs.
