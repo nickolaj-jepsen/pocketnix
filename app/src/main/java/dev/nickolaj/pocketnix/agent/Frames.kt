@@ -22,6 +22,13 @@ object Frames {
     const val DISPLAY_GEOMETRY: Int = 3
     const val DISPLAY_BAND: Int = 4
     const val DISPLAY_RECT: Int = 5
+    const val DISPLAY_INPUT: Int = 6
+    // Input events, in the payload's kind byte (go/internal/protocol display.go).
+    const val INPUT_POINTER: Int = 1
+    const val INPUT_BUTTON: Int = 2
+    const val INPUT_WHEEL: Int = 3
+    const val INPUT_KEY: Int = 4
+    const val BTN_LEFT: Int = 0x110
     const val DISPLAY_RGBA: Int = 1
     const val MAX_PAYLOAD = 1 shl 20
 
@@ -73,6 +80,10 @@ object Frames {
         if (payload.size != 4) throw IOException("exit payload ${payload.size} bytes")
         return ByteBuffer.wrap(payload).int
     }
+
+    /** One display input event: [kind u8][a i32][b i32]. */
+    fun displayInput(kind: Int, a: Int, b: Int): ByteArray =
+        ByteBuffer.allocate(9).put(kind.toByte()).putInt(a).putInt(b).array()
 
     /** The frame size a display stream starts with. */
     class Geometry(val width: Int, val height: Int, val format: Int)

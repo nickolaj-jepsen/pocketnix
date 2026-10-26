@@ -72,7 +72,14 @@ func main() {
 	if *displayCapture != "" || *displayHelper != "" {
 		// The command lines are split on spaces, not run through a shell: a
 		// module writing the config never has to quote.
+		var input *agent.Input
+		if in, err := agent.OpenInput("/dev/uinput"); err != nil {
+			log.Printf("display: no input device: %v", err)
+		} else {
+			input = in
+		}
 		srv.Display = &agent.Display{
+			Input:      input,
 			Capture:    strings.Fields(*displayCapture),
 			Helper:     strings.Fields(*displayHelper),
 			Compositor: strings.Fields(*displayCompositor),

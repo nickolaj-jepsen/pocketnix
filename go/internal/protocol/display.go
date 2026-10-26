@@ -21,7 +21,39 @@ const (
 	// then height*stride bytes of pixels. What a compositor's damage really
 	// is: a narrow window changing must not cost the whole screen's width.
 	FrameDisplayRect byte = 5
+	// FrameDisplayInput (app → agent) payload: [kind u8][a i32][b i32], one
+	// event at a time so the agent's uinput device can apply it as it arrives.
+	FrameDisplayInput byte = 6
 )
+
+// Display input events, in FrameDisplayInput's a/b fields.
+const (
+	// InputPointer: a,b are x,y absolute, 0..65535 across the frame.
+	InputPointer byte = 1
+	// InputButton: a is an evdev button code (0x110 is BTN_LEFT), b is 1 press, 0 release.
+	InputButton byte = 2
+	// InputWheel: a is 0 for vertical (positive is up) or 1 for horizontal, b is steps.
+	InputWheel byte = 3
+	// InputKey: a is an evdev key code, b is 1 press, 0 release.
+	InputKey byte = 4
+)
+
+// EncodeDisplayInput returns the FrameDisplayInput payload.
+func EncodeDisplayInput(kind byte, a, b int32) []byte {
+	buf := make([]byte, 9)
+	buf[0] = kind
+	binary.BigEndian.PutUint32(buf[1:], uint32(a))
+	binary.BigEndian.PutUint32(buf[5:], uint32(b))
+	return buf
+}
+
+// DecodeDisplayInput parses the FrameDisplayInput payload.
+func DecodeDisplayInput(b []byte) (kind byte, a, b2 int32, err error) {
+	if len(b) != 9 {
+		return 0, 0, 0, fmt.Errorf("input payload is %d bytes, want 9", len(b))
+	}
+	return b[0], int32(binary.BigEndian.Uint32(b[1:])), int32(binary.BigEndian.Uint32(b[5:])), nil
+}
 
 // DisplayFormatRGBA is R,G,B,A per pixel: the byte order Android's ARGB_8888
 // bitmap has in memory, so the app can copy pixels without converting them.

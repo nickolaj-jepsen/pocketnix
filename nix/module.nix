@@ -11,6 +11,8 @@
   ...
 }: let
   cfg = config.pocketnix.guest;
+  # The agent's screencopy client, from this flake (see nix/capture.nix).
+  capture = self.packages.${pkgs.stdenv.hostPlatform.system}.pocketnix-capture;
   inherit (lib) mkOption mkEnableOption mkIf mkDefault mkMerge types;
 
   extraKey = types.submodule {
@@ -233,6 +235,20 @@ in {
         listener hands a shell to anyone who reaches it, so add one only for
         tests.
       '';
+    };
+
+    display = {
+      enable = mkEnableOption "the guest's own compositor, streamed to the app's screen";
+      size = mkOption {
+        type = types.str;
+        default = "1080x2400";
+        description = "The compositor output's size (WxH); match the phone's aspect to avoid letterboxing.";
+      };
+      renderer = mkOption {
+        type = types.enum ["pixman" "gles2"];
+        default = "pixman";
+        description = "wlroots renderer. The guest has no usable GL stack (AGENTS.md), so pixman is the working choice.";
+      };
     };
 
     forwards = mkOption {
@@ -537,10 +553,19 @@ in {
       ];
       warnings = lib.optional (cfg.avf.enable && lib.any (lib.hasPrefix "tcp:") cfg.agent.listen) "pocketnix.guest.agent.listen has a TCP listener on an AVF guest: anyone who reaches it gets a shell";
 
-      boot.kernelModules = ["vmw_vsock_virtio_transport"];
+      boot.kernelModules = ["vmw_vsock_virtio_transport"] ++ lib.optional cfg.display.enable "uinput";
       environment.etc."pocketnix/agent.json".source = agentConfigFile;
       # Above xdg-utils and libnotify, which a desktop-ish config may pull in.
-      environment.systemPackages = [(lib.hiPrio guestTools)];
+      environment.systemPackages =
+        [(lib.hiPrio guestTools)]
+        ++ lib.optionals cfg.display.enable [pkgs.sway capture];
+      # A headless output, sized for the phone; the app shows it fit.
+      environment.etc."pocketnix/sway.conf" = lib.mkIf cfg.display.enable {
+        text = ''
+          output HEADLESS-1 resolution ${cfg.display.size}
+          xwayland disable
+        '';
+      };
       environment.sessionVariables.BROWSER = mkIf cfg.integrations.xdgOpen (mkDefault "xdg-open");
 
       systemd.services.pocketnix-agent = {
@@ -555,8 +580,28 @@ in {
         # Updates: ssh to the build host, nix to fetch, systemd-run to switch.
         path = [config.nix.package config.programs.ssh.package config.systemd.package];
         serviceConfig = {
-          ExecStart = lib.escapeShellArgs ([(lib.getExe' cfg.package "pocketnix-agent") "--guest-socket" "/run/pocketnix/guest.sock" "--state-dir" "/var/lib/pocketnix"] ++ lib.concatMap (a: ["--listen" a]) cfg.agent.listen);
-          RuntimeDirectory = "pocketnix";
+          ExecStart = lib.escapeShellArgs (
+            [(lib.getExe' cfg.package "pocketnix-agent") "--guest-socket" "/run/pocketnix/guest.sock" "--state-dir" "/var/lib/pocketnix"]
+            ++ lib.concatMap (a: ["--listen" a]) cfg.agent.listen
+            ++ lib.optionals cfg.display.enable [
+              "--display-helper"
+              (lib.getExe' capture "pocketnix-capture")
+              "--display-compositor"
+              "${lib.getExe pkgs.sway} -c /etc/pocketnix/sway.conf"
+              "--display-env"
+              "XDG_RUNTIME_DIR=/run/pocketnix-display"
+              "--display-env"
+              "WAYLAND_DISPLAY=wayland-1"
+              "--display-env"
+              "WLR_BACKENDS=headless"
+              "--display-env"
+              "WLR_RENDERER=${cfg.display.renderer}"
+              "--display-env"
+              "WLR_HEADLESS_OUTPUTS=1"
+            ]
+          );
+          # The compositor's socket lives here; the agent starts it as root.
+          RuntimeDirectory = ["pocketnix"] ++ lib.optional cfg.display.enable "pocketnix-display";
           RuntimeDirectoryMode = "0755";
           StateDirectory = "pocketnix";
           StateDirectoryMode = "0700";

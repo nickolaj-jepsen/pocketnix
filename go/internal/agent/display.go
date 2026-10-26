@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"os"
@@ -35,6 +34,9 @@ type Display struct {
 	// Helper is a long-lived capture client (capture/pocketnix-capture) that
 	// prints damage rects and pixels itself; see display_helper.go.
 	Helper []string
+	// Input is the virtual device the app's touches and keys land on; nil
+	// streams the screen without input.
+	Input *Input
 	// Interval is the quiet time between captures; zero means 100 ms.
 	Interval time.Duration
 
@@ -70,8 +72,24 @@ func (d *Display) serve(c net.Conn) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		// The app sends nothing but input events on a display stream; a read
+		// that ends means it closed us, and input stops with it.
 		defer c.Close()
-		io.Copy(io.Discard, c)
+		for {
+			typ, payload, err := protocol.ReadFrame(c)
+			if err != nil {
+				return
+			}
+			if typ != protocol.FrameDisplayInput {
+				continue
+			}
+			kind, a, b, err := protocol.DecodeDisplayInput(payload)
+			if err != nil {
+				log.Printf("display: %v", err)
+				continue
+			}
+			d.Input.Apply(kind, a, b)
+		}
 	}()
 	var (
 		prev       []byte // last frame, for the band diff

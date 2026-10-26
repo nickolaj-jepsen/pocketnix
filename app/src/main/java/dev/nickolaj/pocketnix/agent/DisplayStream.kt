@@ -37,6 +37,17 @@ class DisplayStream(
         stream?.let { runCatching { it.close() } }
     }
 
+    /** Sends one input event; false once the stream is gone. */
+    fun sendInput(kind: Int, a: Int, b: Int): Boolean {
+        val s = stream ?: return false
+        return runCatching {
+            synchronized(s) {
+                s.output.write(Frames.displayInput(kind, a, b))
+                s.output.flush()
+            }
+        }.isSuccess
+    }
+
     private fun run() {
         var reason: String? = null
         try {

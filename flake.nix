@@ -17,6 +17,8 @@
         # One Go module builds both: the guest agent and the host-side CLI.
         pocketnix = pkgs.callPackage ./nix/go.nix {};
         pocketnix-cli = pkgs.callPackage ./nix/cli.nix {inherit (own) pocketnix;};
+        # The agent's screencopy client; the guest module installs it.
+        pocketnix-capture = pkgs.callPackage ./nix/capture.nix {};
         default = own.pocketnix-cli;
         # The example guest's disk image, assembled by this system's tools.
         example-image = self.nixosConfigurations.example.config.system.build.pocketnixImage.${pkgs.stdenv.hostPlatform.system};
@@ -43,6 +45,7 @@
     overlays.default = final: _prev: {
       pocketnix = final.callPackage ./nix/go.nix {};
       pocketnix-cli = final.callPackage ./nix/cli.nix {};
+      pocketnix-capture = final.callPackage ./nix/capture.nix {};
     };
 
     nixosModules.guest = import ./nix/module.nix {inherit self;};

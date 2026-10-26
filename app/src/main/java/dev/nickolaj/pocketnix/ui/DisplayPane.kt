@@ -24,7 +24,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -32,6 +34,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.nickolaj.pocketnix.Vm
 import dev.nickolaj.pocketnix.agent.DisplayStream
+import dev.nickolaj.pocketnix.agent.Frames
 import java.nio.ByteBuffer
 
 /**
@@ -50,21 +53,49 @@ fun DisplayPane(vm: Vm, modifier: Modifier = Modifier) {
         }
     }
     val renderer = remember(view) { DisplayRenderer(view) }
+    var stream by remember { mutableStateOf<DisplayStream?>(null) }
     var status by remember { mutableStateOf("waiting for the guest's screen") }
     var size by remember { mutableStateOf("") }
 
     DisposableEffect(Unit) {
         renderer.status = { status = it }
         renderer.size = { size = it }
-        val stream = vm.startDisplay(renderer)
-        stream?.start()
+        val s = vm.startDisplay(renderer)
+        stream = s
+        s?.start()
         onDispose {
-            stream?.close()
+            s?.close()
+            stream = null
             renderer.release()
         }
     }
 
-    Box(modifier.background(Color.Black)) {
+    // Tap is a click, a drag is a drag: pointer events go through the agent's
+    // uinput device, so the guest's compositor sees a real mouse.
+    Box(
+        modifier
+            .background(Color.Black)
+            .pointerInput(stream) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val down = awaitFirstDown()
+                        renderer.toFrame(down.position.x, down.position.y)?.let { (fx, fy) ->
+                            stream?.sendInput(Frames.INPUT_POINTER, fx, fy)
+                            stream?.sendInput(Frames.INPUT_BUTTON, Frames.BTN_LEFT, 1)
+                        }
+                        do {
+                            val event = awaitPointerEvent()
+                            for (change in event.changes) {
+                                renderer.toFrame(change.position.x, change.position.y)?.let { (fx, fy) ->
+                                    stream?.sendInput(Frames.INPUT_POINTER, fx, fy)
+                                }
+                            }
+                        } while (event.changes.any { it.pressed })
+                        stream?.sendInput(Frames.INPUT_BUTTON, Frames.BTN_LEFT, 0)
+                    }
+                }
+            },
+    ) {
         AndroidView(factory = { view }, modifier = Modifier.fillMaxSize())
         Row(
             Modifier.fillMaxWidth().padding(4.dp),
@@ -171,6 +202,15 @@ private class DisplayRenderer(private val view: SurfaceView) : DisplayStream.Sin
             frames = 0
             lastStats = lastDraw
         }
+    }
+
+    /** A view point as frame coordinates (0..65535), or null outside the frame. */
+    fun toFrame(x: Float, y: Float): Pair<Int, Int>? {
+        val dst = fit(view.width, view.height) ?: return null
+        if (x < dst.left || x >= dst.right || y < dst.top || y >= dst.bottom) return null
+        val fx = ((x - dst.left) * 65535f / dst.width()).toInt().coerceIn(0, 65535)
+        val fy = ((y - dst.top) * 65535f / dst.height()).toInt().coerceIn(0, 65535)
+        return fx to fy
     }
 
     /** Where the frame goes: the whole view, aspect kept. */
