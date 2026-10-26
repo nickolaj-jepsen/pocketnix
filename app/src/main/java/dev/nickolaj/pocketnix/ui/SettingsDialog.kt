@@ -39,6 +39,7 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
     var wakeLocks by remember { mutableStateOf(s.wakeLocks) }
     var tcp by remember { mutableStateOf(s.tcpBackend) }
     var tcpAddress by remember { mutableStateOf(s.tcpAddress) }
+    var sharedFolders by remember { mutableStateOf(false) }
     val stopped = vm.state.value == VmState.Stopped || vm.state.value is VmState.Failed
     val maxDisk = remember { DiskImage.maxGb(context) }
     val memoryError = memory.toIntOrNull().let { if (it == null || it !in MIN_MEMORY_MB..Settings.MAX_MEMORY_MB) "$MIN_MEMORY_MB–${Settings.MAX_MEMORY_MB} MB" else null }
@@ -63,6 +64,7 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
                 Toggle("Network", network) { network = it }
                 Toggle("Start when the phone boots", onBoot) { onBoot = it }
                 Toggle("Stay awake while the guest inhibits sleep", wakeLocks) { wakeLocks = it }
+                TextButton(onClick = { sharedFolders = true }) { Text("Android folders in the guest…") }
                 if (BuildConfig.DEBUG) {
                     Toggle("TCP agent backend (debug)", tcp) { tcp = it }
                     if (tcp) {
@@ -87,6 +89,7 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+    if (sharedFolders) SharedFoldersDialog(vm) { sharedFolders = false }
 }
 
 private const val MIN_MEMORY_MB = 512

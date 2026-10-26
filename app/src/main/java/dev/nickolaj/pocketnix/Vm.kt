@@ -26,6 +26,9 @@ import dev.nickolaj.pocketnix.engine.TcpEngine
 import dev.nickolaj.pocketnix.engine.VmEngine
 import dev.nickolaj.pocketnix.engine.VmState
 import dev.nickolaj.pocketnix.forward.PortForwards
+import dev.nickolaj.pocketnix.hostfs.HostFolderLinks
+import dev.nickolaj.pocketnix.hostfs.SafFolder
+import dev.nickolaj.pocketnix.hostfs.SharedFolders
 import dev.nickolaj.pocketnix.service.VmService
 import dev.nickolaj.pocketnix.terminal.Tab
 import dev.nickolaj.pocketnix.terminal.TabAlerts
@@ -120,6 +123,10 @@ class Vm(private val app: Context) {
         _wakeLocks.value = allowed
     }
 
+    /** Android folders mounted in the guest. */
+    val sharedFolders = SharedFolders(app)
+    val hostFolders = HostFolderLinks(control, appVersion) { SafFolder(app.contentResolver, android.net.Uri.parse(it.uri)) }
+
     init {
         tabs.alerts = TabAlerts(app) { control.config.value?.hostname }
         scope.launch {
@@ -184,6 +191,12 @@ class Vm(private val app: Context) {
                         _forwardErrors.value = withContext(Dispatchers.IO) { forwards.apply(fw, dialer) }
                     }
                 }
+        }
+        scope.launch {
+            combine(control.link, sharedFolders.folders) { link, folders -> link to folders }.collectLatest { (link, folders) ->
+                val dialer = _engine.value.dialer
+                if (link is ControlChannel.Link.Up && dialer != null) hostFolders.share(link, dialer, folders)
+            }
         }
         scope.launch {
             control.config.map { it?.theme }.distinctUntilChanged().collect { theme ->
