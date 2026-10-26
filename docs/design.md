@@ -56,8 +56,8 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 
 - The module owns what changes with the system: port forwards, terminal
   profiles (tab commands), extra-keys rows, theme colors and font file,
-  notification rules, command-palette snippets, the file-provider root. The
-  agent sends them on connect and they apply live.
+  command-palette snippets, the file-provider root. The agent sends them on
+  connect and they apply live. Tab notifications follow fixed rules (below).
 - The app UI owns set-once hardware needed before boot: RAM, vCPUs, disk size, image.
 - The font file is served over its own stream and cached by the app by hash;
   colors use Termux's property names.

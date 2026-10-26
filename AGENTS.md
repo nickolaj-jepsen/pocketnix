@@ -38,11 +38,13 @@ and the same for `android.permission.USE_CUSTOM_VIRTUAL_MACHINE`.
 
 ## The test phone
 
-Pixel 8 Pro, GrapheneOS, Android 17. Its real NixOS host (phone-vm) currently
-lives in the Podroid fork's debug app (`com.excp.podroid.debug`): never
-uninstall it or clear its data, as that deletes the VM's disk. Only one
-networked VM can run on the device at a time, so stop Podroid's VM before
-testing a networked pocketnix VM, and start it again afterwards.
+Pixel 8 Pro, GrapheneOS, Android 17. Its real NixOS host (phone-vm) lives in
+pocketnix's own debug app (`dev.nickolaj.pocketnix.debug`), running the
+`wayland-poc` build: never uninstall it, clear its data or provision over it,
+as that deletes the VM's disk. To test a build there, back up the installed
+APK (`pm path` + `adb pull`), stop the VM through `ControlActivity`, `adb
+install -r -d` (`-d`: versionCode now comes from VERSION), and reinstall the
+backup the same way afterwards.
 
 Never build anything inside a guest: an unthrottled build pegs the whole phone.
 
