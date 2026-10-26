@@ -168,8 +168,11 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 ## Integrations and UX
 
 - Guest notifications and `xdg-open` reach Android.
-- Clipboard: OSC 52 plus an agent CLI; Android → guest on paste or app focus.
-- Share sheet → guest inbox or a configured command; a Quick Settings tile.
+- Clipboard: OSC 52 plus an agent CLI; Android → guest on paste or app focus;
+  types beyond text cross only when a paste asks.
+- Share sheet → guest inbox or a configured command, and back: the guest
+  shares to Android's share sheet, and picks or saves files through Android's
+  document pickers (also as the FileChooser portal). A Quick Settings tile.
 - A DocumentsProvider exposes a guest directory (default: the user's home)
   read-write in the Files app and every file picker; shows "start the VM"
   while stopped.
@@ -183,7 +186,10 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
   (`/run/pocketnix/guest.sock`), which admits root and the session user by
   peer credentials. `pocketnix-guest` speaks it, and the module installs it as
   `xdg-open` (on by default, above xdg-utils). With no app connected a
-  request fails rather than queues.
+  request fails rather than queues. A request may pass descriptors
+  (SCM_RIGHTS): a save or typed copy reads a file the program opened, a
+  typed paste writes to its stdout, so these reach whatever the user can
+  and the root agent never opens a path for them.
 - `xdg-open <url>` opens on Android; `xdg-open <file>` opens the file through
   the file provider, so only files under its root. From the background
   Android won't start an activity, so both become a notification to tap.
@@ -207,9 +213,30 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 - Clipboard: a guest copy (`pocketnix-guest copy`, or OSC 52 in a tab) sets
   Android's. Android's goes to the agent whenever the app gains focus (the
   only time Android lets it read), and `pocketnix-guest paste` prints it.
+  Other types are lazy both ways: on focus only Android's MIME types cross,
+  and `paste --type` has the app send that type's bytes (from the clip it
+  kept at focus); `copy --type` hands stdin's bytes (capped at 32 MiB, kept
+  by the agent for a guest paste) to the app, which caches them behind its
+  own FileProvider URI on the clipboard.
 - Shares land in `share.directory` (default `~/Inbox`) under a free name,
   owned by the user; `share.command` then runs through /bin/sh on each, the
   path its last argument. Text arrives as a `.txt` file.
+- `pocketnix-guest share` offers files under the file provider's root (as
+  its URIs, read-granted) or text to Android's share sheet, a notification
+  from the background like `open`.
+- `pocketnix-guest pick` and `save` wait on the user (10 min at most; the
+  guest connection has no idle deadline meanwhile, and hanging up cancels).
+  A pick shows the document picker; its files land like shares, minus the
+  share command, and the CLI moves them to `--dest` as the user. A save
+  stores the file the program passed at a place the user creates with the
+  picker. Each is an event with a ref, answered by streams carrying that ref
+  and a `guest-done` request.
+- The FileChooser portal backend (`integrations.portal`, on with
+  `xdg.portal`) is `pocketnix-guest portal`, a D-Bus-activated user service.
+  OpenFile is a pick (no directories). SaveFile asks Android where first,
+  answers a path under `~/.cache/pocketnix/saves`, and sends the file once
+  the app has written it and left it alone for half a second; a file that
+  never goes stays there.
 - The file provider (`files.root`, default the user's home) goes through an
   `os.Root`: no path or symlink leaves it, and new files belong to the user.
   Opened documents are seekable proxy descriptors served by ranged reads
