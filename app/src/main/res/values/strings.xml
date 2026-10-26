@@ -4,5 +4,7 @@
     <string name="notification_channel">Running VM</string>
     <string name="terminal_channel">Terminal tabs</string>
     <string name="guest_channel">Guest notifications</string>
+    <string name="guest_low_channel">Guest notifications, low urgency</string>
+    <string name="guest_critical_channel">Guest notifications, critical</string>
     <string name="share_label">Send to pocketnix</string>
 </resources>

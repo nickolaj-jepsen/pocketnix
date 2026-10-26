@@ -80,6 +80,11 @@
             </intent-filter>
         </activity>
 
+        <!-- A guest notification's actions and dismissal; only its own PendingIntents reach it. -->
+        <receiver
+            android:name=".GuestNotificationReceiver"
+            android:exported="false" />
+
         <receiver
             android:name=".service.BootReceiver"
             android:exported="true">

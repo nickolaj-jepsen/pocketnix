@@ -19,13 +19,14 @@ import org.json.JSONObject
 
 /**
  * Guest programs reaching Android (design.md, Integrations and UX):
- * `notify-send` becomes a notification, `xdg-open` opens a URL or a file
+ * a notification becomes one (with ids and actions: [GuestNotifications]), `xdg-open` opens a URL or a file
  * (through the file provider), and a guest copy sets the clipboard.
  */
 class GuestBridge(private val context: Context, private val hostname: () -> String?) {
     private val manager = context.getSystemService(NotificationManager::class.java)
     private val clipboard = context.getSystemService(ClipboardManager::class.java)
     private var nextId = NOTIFICATION_BASE
+    private val notifications = GuestNotifications(context, hostname)
 
     /** What a guest copy last put on the clipboard, so it isn't handed straight back. */
     @Volatile var lastGuestCopy: String? = null
@@ -40,7 +41,9 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
     /** Acts on an agent push; [appVisible] decides whether an open can start an activity. */
     fun onEvent(msg: JSONObject, appVisible: Boolean) {
         when (msg.optString("type")) {
-            "notify" -> notify(msg.optString("title"), msg.optString("body"), null)
+            "notify" -> GuestNotification.parse(msg)?.let { notifications.post(it) }
+                ?: notify(msg.optString("title"), msg.optString("body"), null)
+            "notify-close" -> notifications.cancel(msg.optLong("notification"))
             "open" -> open(msg, appVisible)
             "guest-clipboard" -> {
                 // A clip goes through one binder transaction (~1 MB, UTF-16): more throws.

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Typeface
 import android.util.Log
+import dev.nickolaj.pocketnix.agent.AgentException
 import dev.nickolaj.pocketnix.agent.ControlChannel
 import dev.nickolaj.pocketnix.agent.FontCache
 import dev.nickolaj.pocketnix.agent.GuestConfig
@@ -106,6 +107,7 @@ class Vm(private val app: Context) {
         // The Files app lists the root either way, but says when it can't be opened.
         scope.launch {
             control.link.map { it is ControlChannel.Link.Up }.distinctUntilChanged().collect { up ->
+                if (up) notifyAnswersRefused = false
                 GuestDocumentsProvider.rootsChanged(app)
                 // A boot lands in a shell, not the console; a reconnect keeps the tabs it has.
                 if (up && tabs.all().none { it.kind is Tab.Kind.Pty && it.session.isRunning }) openTab()
@@ -256,6 +258,29 @@ class Vm(private val app: Context) {
         }
     }
 
+    /** An agent on this connection answered notify-action with "unknown request": an older one. */
+    @Volatile private var notifyAnswersRefused = false
+
+    /**
+     * Tells the guest what became of its notification [id]: the user chose
+     * action [key], or (null) dismissed it. Dropped while the agent can't be
+     * reached.
+     */
+    fun answerNotification(id: Long, key: String?) {
+        if (control.link.value !is ControlChannel.Link.Up || notifyAnswersRefused) return
+        val req = if (key != null) {
+            JSONObject().put("type", "notify-action").put("notification", id).put("key", key)
+        } else {
+            JSONObject().put("type", "notify-closed").put("notification", id).put("reason", CLOSED_DISMISSED)
+        }
+        scope.launch {
+            runCatching { control.call(req) }.onFailure {
+                if (it is AgentException && it.message.orEmpty().startsWith("unknown request")) notifyAnswersRefused = true
+                Log.w(TAG, "${req.optString("type")}: ${it.message}")
+            }
+        }
+    }
+
     /** Shares text as the share sheet does; returns where it landed, or throws. */
     suspend fun shareText(text: String): String =
         control.call(JSONObject().put("type", "share-text").put("text", text)).optString("path")
@@ -344,5 +369,7 @@ class Vm(private val app: Context) {
         const val FORWARD_RETRY_MS = 30_000L
         const val FORWARD_RETRY_MAX_MS = 600_000L
         const val HISTORY_LIMIT = 1000
+        // org.freedesktop.Notifications' "dismissed by the user".
+        const val CLOSED_DISMISSED = 2
     }
 }

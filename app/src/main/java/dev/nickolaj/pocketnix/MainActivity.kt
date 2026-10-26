@@ -21,6 +21,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         openTab(intent)
+        guestNotificationOpened(intent)
         // Tab notifications; `pocketnix provision` grants it, this asks otherwise. Asked once.
         if (savedInstanceState == null && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
@@ -41,6 +42,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         openTab(intent)
+        guestNotificationOpened(intent)
     }
 
     override fun onStart() {
@@ -69,7 +71,15 @@ class MainActivity : ComponentActivity() {
         if (id >= 0) vm.tabs.select(id)
     }
 
+    /** A tapped guest notification without a default action is gone, which its program may wait for. */
+    private fun guestNotificationOpened(intent: Intent?) {
+        val id = intent?.getLongExtra(EXTRA_GUEST_NOTIFICATION, 0L) ?: 0L
+        // Recents replays the launching intent: that tap was answered already.
+        if (id != 0L && intent!!.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY == 0) vm.answerNotification(id, null)
+    }
+
     companion object {
         const val EXTRA_TAB = "dev.nickolaj.pocketnix.extra.TAB"
+        const val EXTRA_GUEST_NOTIFICATION = "dev.nickolaj.pocketnix.extra.GUEST_NOTIFICATION"
     }
 }
