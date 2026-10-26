@@ -75,6 +75,14 @@ func (s *Server) handleGuest(c net.Conn) {
 		var reply protocol.GuestReply
 		if err := json.Unmarshal(line, &req); err != nil {
 			reply.Error = "bad request: " + err.Error()
+		} else if req.Type == protocol.GuestSubscribe {
+			s.subscribe(c, r)
+			return
+		} else if req.Type == protocol.GuestNotify || req.Type == protocol.GuestNotifyClose {
+			var err error
+			if reply, err = s.guestNotify(req); err != nil {
+				reply.Error = err.Error()
+			}
 		} else if text, err := s.guest(req); err != nil {
 			reply.Error = err.Error()
 		} else {
@@ -115,11 +123,6 @@ func (s *Server) guestAllowed(c net.Conn) error {
 
 func (s *Server) guest(req protocol.GuestRequest) (string, error) {
 	switch req.Type {
-	case protocol.GuestNotify:
-		if req.Title == "" && req.Body == "" {
-			return "", errors.New("an empty notification")
-		}
-		return "", s.event(protocol.Event{Type: protocol.TypeNotify, Title: req.Title, Body: req.Body})
 	case protocol.GuestOpen:
 		if req.URL != "" {
 			u, err := url.Parse(req.URL)

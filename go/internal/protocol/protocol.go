@@ -93,6 +93,10 @@ type Request struct {
 	// ID, when set, comes back in the answer's "id": requests are answered in
 	// order, but a requester that gave up on one can tell its late answer apart.
 	ID int `json:"id,omitempty"`
+	// Notify-action and notify-closed (notify.go).
+	Notification uint32 `json:"notification,omitempty"`
+	Key          string `json:"key,omitempty"`
+	Reason       uint32 `json:"reason,omitempty"`
 }
 
 // Envelope is the part of every JSON message a receiver reads first.

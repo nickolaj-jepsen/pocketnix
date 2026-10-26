@@ -30,6 +30,12 @@ type Event struct {
 	URL   string `json:"url,omitempty"`
 	Path  string `json:"path,omitempty"`
 	Text  string `json:"text,omitempty"`
+	// A notify's id (notify.go), and the one a notify-close withdraws. Not
+	// "id": that pairs answers with requests.
+	Notification uint32         `json:"notification,omitempty"`
+	AppName      string         `json:"appName,omitempty"`
+	Urgency      string         `json:"urgency,omitempty"`
+	Actions      []NotifyAction `json:"actions,omitempty"`
 }
 
 // Streams for shared files and the file provider.
@@ -114,7 +120,7 @@ type Done struct {
 // way per request, as many as the connection likes. The agent answers with
 // [GuestReply].
 const (
-	GuestNotify = "notify" // Title, Body
+	GuestNotify = "notify" // Title, Body; more in notify.go
 	GuestOpen   = "open"   // URL, or Path (absolute in the guest)
 	GuestCopy   = "copy"   // Text
 	GuestPaste  = "paste"  // answers Text
@@ -128,12 +134,21 @@ type GuestRequest struct {
 	URL   string `json:"url,omitempty"`
 	Path  string `json:"path,omitempty"`
 	Text  string `json:"text,omitempty"`
+	// Notifications (notify.go): Replaces is the id a notify takes over (0
+	// for a new one), ID the one a notify-close withdraws.
+	Replaces uint32         `json:"replaces,omitempty"`
+	ID       uint32         `json:"id,omitempty"`
+	AppName  string         `json:"appName,omitempty"`
+	Urgency  string         `json:"urgency,omitempty"`
+	Actions  []NotifyAction `json:"actions,omitempty"`
 }
 
 // GuestReply answers a GuestRequest: Error is set when it failed.
 type GuestReply struct {
 	Error string `json:"error,omitempty"`
 	Text  string `json:"text,omitempty"`
+	// ID is a notify's notification id.
+	ID uint32 `json:"id,omitempty"`
 }
 
 // GuestSocket is where the module's agent serves guest requests.

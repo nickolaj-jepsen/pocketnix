@@ -50,6 +50,8 @@ commands:
   share-text <text>      share text
   ls [path] | cat <path> | put <path>   the file provider (put reads stdin)
   patch <path> <offset>  write stdin into a file at offset, as an in-place edit does
+  notify-action <id> <key>       choose a guest notification's action
+  notify-closed <id> [reason]    dismiss a guest notification (reason 2 unless given)
 `
 
 func runAgent(args []string) error {
@@ -216,10 +218,38 @@ func runAgent(args []string) error {
 			return err
 		}
 		return os.WriteFile(rest[0], b, 0o644)
+	case "notify-action", "notify-closed":
+		return agentNotify(c, cmd, rest)
 	default:
 		fs.Usage()
 		return errUsage
 	}
+}
+
+// agentNotify answers a guest notification as the app does when the user acts on it.
+func agentNotify(c *client.Client, cmd string, args []string) error {
+	if len(args) < 1 || len(args) > 2 || (cmd == "notify-action" && len(args) != 2) {
+		return errUsage
+	}
+	id, err := strconv.ParseUint(args[0], 10, 32)
+	if err != nil {
+		return err
+	}
+	ctl, err := c.Control()
+	if err != nil {
+		return err
+	}
+	defer ctl.Close()
+	if cmd == "notify-action" {
+		return ctl.NotifyAction(uint32(id), args[1])
+	}
+	reason := uint64(protocol.ClosedDismissed)
+	if len(args) == 2 {
+		if reason, err = strconv.ParseUint(args[1], 10, 32); err != nil {
+			return err
+		}
+	}
+	return ctl.NotifyClosed(uint32(id), uint32(reason))
 }
 
 func agentUpdates(ctl *client.Control, cmd string, args []string) error {

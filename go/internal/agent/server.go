@@ -41,6 +41,7 @@ type Server struct {
 	controls map[*lockedWriter]struct{}
 	// clipboard is the latest of Android's clipboard and a guest copy.
 	clipboard string
+	notes     notifications
 }
 
 // New loads the config file at path.
@@ -302,6 +303,8 @@ func (s *Server) request(req protocol.Request) (any, error) {
 	case protocol.TypeShareText:
 		p, err := s.shareText(req.Text)
 		return protocol.Done{Type: protocol.TypeShareText, Path: p}, err
+	case protocol.TypeNotifyAction, protocol.TypeNotifyClosed:
+		return ack, s.notifyFromApp(req)
 	default:
 		// Answered, so a newer app's later requests still pair with their replies.
 		return nil, fmt.Errorf("unknown request %q", req.Type)

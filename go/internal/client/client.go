@@ -149,7 +149,7 @@ func (c *Control) read() {
 				c.uchange = make(chan struct{})
 				c.umu.Unlock()
 			}
-		case protocol.TypeNotify, protocol.TypeOpen, protocol.TypeGuestClipboard:
+		case protocol.TypeNotify, protocol.TypeOpen, protocol.TypeGuestClipboard, protocol.TypeNotifyClose:
 			var ev protocol.Event
 			if json.Unmarshal(line, &ev) == nil {
 				select {
@@ -311,7 +311,7 @@ func (c *Control) History(limit int) ([]string, error) {
 	return h.Entries, nil
 }
 
-// Events delivers the agent's notify, open and guest-clipboard pushes (the
+// Events delivers the agent's notify, notify-close, open and guest-clipboard pushes (the
 // last 64 unread); closed when the stream ends.
 func (c *Control) Events() <-chan protocol.Event { return c.events }
 
