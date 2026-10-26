@@ -3,4 +3,6 @@
     <string name="app_name">pocketnix</string>
     <string name="notification_channel">Running VM</string>
     <string name="terminal_channel">Terminal tabs</string>
+    <string name="guest_channel">Guest notifications</string>
+    <string name="share_label">Send to pocketnix</string>
 </resources>

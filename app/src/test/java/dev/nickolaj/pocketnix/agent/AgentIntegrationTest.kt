@@ -5,6 +5,7 @@ import dev.nickolaj.pocketnix.forward.PortForwards
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -21,6 +22,9 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.UnixDomainSocketAddress
+import java.nio.ByteBuffer
+import java.nio.channels.SocketChannel
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -56,6 +60,7 @@ class AgentIntegrationTest {
         File(dir, "agent.json").writeText(
             """
             {"shell":"/bin/sh", "history":"${File(dir, "history").path}",
+             "filesRoot":"${File(dir, "files").apply { mkdirs() }.path}", "share":{"directory":"${File(dir, "inbox").path}"},
              "forwards":[{"name":"echo","guestPort":${echo.localPort},"hostPort":${freePort()}}],
              "terminal":{"profiles":[{"name":"shell"},
                {"name":"exit4","command":"echo hi; exit 4"},
@@ -64,7 +69,10 @@ class AgentIntegrationTest {
             """.trimIndent(),
         )
         port = freePort()
-        agent = ProcessBuilder(bin, "--config", File(dir, "agent.json").path, "--listen", "tcp:127.0.0.1:$port", "--no-power")
+        agent = ProcessBuilder(
+            bin, "--config", File(dir, "agent.json").path, "--listen", "tcp:127.0.0.1:$port", "--no-power",
+            "--guest-socket", File(dir, "guest.sock").path,
+        )
             .redirectErrorStream(true).redirectOutput(File(dir, "agent.log")).start()
         // Wait for the listener.
         val deadline = System.currentTimeMillis() + 10_000
@@ -111,6 +119,61 @@ class AgentIntegrationTest {
         ctl.refreshUpdates()
         assertTrue(ctl.request("ping"))
         ctl.stop()
+    }
+
+    @Test
+    fun fileProviderAndShares() {
+        val files = GuestFiles(dialer, "test")
+        files.write("notes.txt").use { it.write("hello".toByteArray()) }
+        assertEquals("hello", files.read("notes.txt").use { it.readBytes().decodeToString() })
+        assertEquals("hello", File(dir, "files/notes.txt").readText())
+        val made = files.create("", "notes.txt", isDir = false)
+        assertEquals("notes (1).txt", made.name)
+        val dir2 = files.create("", "sub", isDir = true)
+        assertTrue(dir2.dir)
+        assertEquals("moved.txt", files.rename("notes (1).txt", "moved.txt").path)
+        assertEquals(listOf("moved.txt", "notes.txt", "sub"), files.list("").map { it.name }.sorted())
+        files.delete("sub")
+        assertEquals(listOf("moved.txt", "notes.txt"), files.list("").map { it.name }.sorted())
+        // Refused paths surface as AgentException.
+        assertTrue(runCatching { files.read("../agent.json") }.exceptionOrNull() is AgentException)
+
+        val landed = files.share("photo.jpg", 4, "JPEG".byteInputStream())
+        assertEquals(File(dir, "inbox/photo.jpg").path, landed)
+        assertEquals("JPEG", File(landed).readText())
+    }
+
+    @Test
+    fun guestEventsReachTheApp() = runBlocking {
+        val ctl = ControlChannel(scope, "test")
+        ctl.start(dialer)
+        withTimeout(10_000) { ctl.updates.filterNotNull().first() }
+        val event = scope.async { withTimeout(10_000) { ctl.events.first() } }
+        // Give the collector a moment to subscribe before the push.
+        Thread.sleep(100)
+        val reply = guest("""{"type":"notify","title":"make","body":"done"}""")
+        assertEquals("{}", reply)
+        val ev = event.await()
+        assertEquals(listOf("notify", "make", "done"), listOf(ev.getString("type"), ev.getString("title"), ev.getString("body")))
+        // Android's clipboard reaches a guest paste.
+        ctl.call(JSONObject().put("type", "set-clipboard").put("text", "from android"))
+        assertEquals("from android", JSONObject(guest("""{"type":"paste"}""")).getString("text"))
+        ctl.stop()
+    }
+
+    /** One request on the agent's guest socket, as pocketnix-guest sends it. */
+    private fun guest(line: String): String {
+        SocketChannel.open(UnixDomainSocketAddress.of(File(dir, "guest.sock").path)).use { ch ->
+            ch.write(ByteBuffer.wrap("$line\n".toByteArray()))
+            val buf = ByteBuffer.allocate(4096)
+            val out = StringBuilder()
+            while (!out.endsWith("\n")) {
+                buf.clear()
+                if (ch.read(buf) < 0) break
+                out.append(String(buf.array(), 0, buf.position()))
+            }
+            return out.toString().trim()
+        }
     }
 
     private class Recorder : TerminalBackend.Sink {

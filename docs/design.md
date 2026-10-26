@@ -150,6 +150,26 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
   modifiers, a command palette (module snippets + shell history), and
   session-aware tabs (BEL / OSC 9 / OSC 777 in a background tab → badge +
   notification).
+- Guest programs reach the agent on a guest-local unix socket
+  (`/run/pocketnix/guest.sock`), which admits root and the session user by
+  peer credentials. `pocketnix-guest` speaks it, and the module installs it as
+  `xdg-open` and `notify-send` (both on by default, above xdg-utils and
+  libnotify). With no app connected a request fails rather than queues.
+- `xdg-open <url>` opens on Android; `xdg-open <file>` opens the file through
+  the file provider, so only files under its root. From the background
+  Android won't start an activity, so both become a notification to tap.
+- Clipboard: a guest copy (`pocketnix-guest copy`, or OSC 52 in a tab) sets
+  Android's. Android's goes to the agent whenever the app gains focus (the
+  only time Android lets it read), and `pocketnix-guest paste` prints it.
+- Shares land in `share.directory` (default `~/Inbox`) under a free name,
+  owned by the user; `share.command` then runs through /bin/sh on each, the
+  path its last argument. Text arrives as a `.txt` file.
+- The file provider (`files.root`, default the user's home) goes through an
+  `os.Root`: no path or symlink leaves it, and new files belong to the user.
+  Opened documents are local copies (apps want seekable descriptors) that are
+  uploaded when a writer closes them.
+- The Quick Settings tile starts the VM through ControlActivity (a foreground
+  service may only start from the foreground) and stops it gracefully.
 - The palette's history is the user's shell history file, read by the agent
   (bash, zsh or fish format, or `terminal.historyFile`), newest first, each
   command once; snippets come first.

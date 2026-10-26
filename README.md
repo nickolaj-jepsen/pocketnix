@@ -37,6 +37,11 @@ programs.ssh.knownHosts.desktop.publicKey = "ssh-ed25519 …";
 To push from a desktop over USB instead, use `pocketnix ssh-proxy` as an ssh
 ProxyCommand (`pocketnix ssh-proxy -h`).
 
+In the guest, `notify-send` and `xdg-open` reach Android, `pocketnix-guest
+copy`/`paste` the clipboard; Android's share sheet drops into `~/Inbox`
+(`pocketnix.guest.share`), and the Files app shows the user's home
+(`pocketnix.guest.files.root`). A Quick Settings tile starts and stops the VM.
+
 ## Requirements
 
 - A phone with AVF and non-protected VM support (tested on a Pixel 8 Pro running

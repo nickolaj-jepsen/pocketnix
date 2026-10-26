@@ -17,7 +17,9 @@ class ControlActivity : Activity() {
         when (intent?.action) {
             ACTION_START -> {
                 start(intent)
-                startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                if (intent.getBooleanExtra(EXTRA_OPEN, true)) {
+                    startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                }
             }
             ACTION_STOP -> vm.stop()
             // Debug builds: drive tabs from adb while the phone stays locked.
@@ -48,6 +50,8 @@ class ControlActivity : Activity() {
         const val ACTION_STOP = "dev.nickolaj.pocketnix.action.STOP"
         const val ACTION_TAB = "dev.nickolaj.pocketnix.action.DEBUG_TAB"
         const val ACTION_DUMP = "dev.nickolaj.pocketnix.action.DEBUG_DUMP"
+        /** START opens the app afterwards unless false (the Quick Settings tile). */
+        const val EXTRA_OPEN = "open"
         const val EXTRA_NETWORK = "network"
         const val EXTRA_TCP = "tcp"
         const val EXTRA_MEMORY = "memoryMb"

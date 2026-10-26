@@ -1,6 +1,7 @@
 package dev.nickolaj.pocketnix
 
 import android.Manifest
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -50,6 +51,14 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         vm.tabs.visible = false
         super.onStop()
+    }
+
+    // Android lets an app read the clipboard only while it has focus.
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus) return
+        val clip = getSystemService(ClipboardManager::class.java)?.primaryClip?.takeIf { it.itemCount > 0 } ?: return
+        vm.syncClipboard(clip.getItemAt(0).coerceToText(this)?.toString())
     }
 
     /** A tab notification opens its tab. */

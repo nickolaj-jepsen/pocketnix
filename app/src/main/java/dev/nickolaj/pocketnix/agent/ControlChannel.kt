@@ -6,7 +6,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
@@ -40,10 +44,17 @@ class ControlChannel(private val scope: CoroutineScope, private val appVersion: 
     /** The agent's update state; pushed on connect and on every change. */
     val updates: StateFlow<Updates?> = _updates.asStateFlow()
 
+    private val _events = MutableSharedFlow<JSONObject>(extraBufferCapacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    /** The agent's other pushes: a guest's notify, open and guest-clipboard (go/internal/protocol/integrations.go). */
+    val events: SharedFlow<JSONObject> = _events.asSharedFlow()
+
     private var job: Job? = null
     @Volatile private var stream: AgentStream? = null
     private val requests = Mutex()
-    @Volatile private var pending: CompletableDeferred<Result<JSONObject>>? = null
+
+    /** The request waiting for its answer, which has [type]'s type (pong for ping) or is an error. */
+    private class Pending(val type: String, val answer: CompletableDeferred<Result<JSONObject>>)
+    @Volatile private var pending: Pending? = null
 
     fun start(dialer: AgentDialer) {
         stop()
@@ -68,7 +79,7 @@ class ControlChannel(private val scope: CoroutineScope, private val appVersion: 
                 } finally {
                     stream?.let { runCatching { it.close() } }
                     stream = null
-                    pending?.complete(Result.failure(IOException("control stream closed")))
+                    pending?.answer?.complete(Result.failure(IOException("control stream closed")))
                     if (_link.value is Link.Up) _link.value = Link.Down
                 }
                 delay(backoff)
@@ -80,12 +91,16 @@ class ControlChannel(private val scope: CoroutineScope, private val appVersion: 
     private fun readLoop(s: AgentStream) {
         while (true) {
             val msg = JSONObject(Protocol.readLine(s.input))
-            when (msg.optString("type")) {
-                "config" -> _config.value = GuestConfig.parse(msg)
+            val type = msg.optString("type")
+            val p = pending
+            when {
+                type == "config" -> _config.value = GuestConfig.parse(msg)
                 // Pushed, and the answer to [refreshUpdates]; never a pending request's reply.
-                "updates" -> _updates.value = Updates.parse(msg)
-                "error" -> pending?.complete(Result.failure(AgentException(msg.optString("message"))))
-                else -> pending?.complete(Result.success(msg))
+                type == "updates" -> _updates.value = Updates.parse(msg)
+                type == "error" -> p?.answer?.complete(Result.failure(AgentException(msg.optString("message"))))
+                    ?: Log.w(TAG, "agent error: ${msg.optString("message")}")
+                p != null && type == p.type -> p.answer.complete(Result.success(msg))
+                else -> _events.tryEmit(msg)
             }
         }
     }
@@ -99,17 +114,14 @@ class ControlChannel(private val scope: CoroutineScope, private val appVersion: 
         val s = stream ?: throw IOException("the agent isn't connected")
         val type = req.getString("type")
         val answer = CompletableDeferred<Result<JSONObject>>()
-        pending = answer
+        pending = Pending(if (type == "ping") "pong" else type, answer)
         try {
             scope.launch(Dispatchers.IO) {
                 runCatching { synchronized(s) { Protocol.writeJson(s.output, req) } }
                     .onFailure { answer.complete(Result.failure(it)) }
             }
-            val reply = withTimeoutOrNull(timeoutMs) { answer.await() }?.getOrThrow()
+            withTimeoutOrNull(timeoutMs) { answer.await() }?.getOrThrow()
                 ?: throw IOException("$type: no answer in ${timeoutMs / 1000}s")
-            val want = if (type == "ping") "pong" else type
-            if (reply.optString("type") != want) throw IOException("$type: the agent answered ${reply.optString("type")}")
-            reply
         } finally {
             pending = null
         }

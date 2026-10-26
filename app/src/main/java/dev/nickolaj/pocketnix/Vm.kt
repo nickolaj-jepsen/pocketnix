@@ -7,7 +7,9 @@ import android.util.Log
 import dev.nickolaj.pocketnix.agent.ControlChannel
 import dev.nickolaj.pocketnix.agent.FontCache
 import dev.nickolaj.pocketnix.agent.GuestConfig
+import dev.nickolaj.pocketnix.agent.GuestFiles
 import dev.nickolaj.pocketnix.agent.PtyBackend
+import dev.nickolaj.pocketnix.files.GuestDocumentsProvider
 import dev.nickolaj.pocketnix.agent.Updates
 import dev.nickolaj.pocketnix.engine.AvfEngine
 import dev.nickolaj.pocketnix.engine.BootMenu
@@ -85,8 +87,14 @@ class Vm(private val app: Context) {
 
     val updates: StateFlow<Updates?> get() = control.updates
 
+    private val bridge = GuestBridge(app) { control.config.value?.hostname }
+    private var lastClipboardSent: String? = null
+
     init {
         tabs.alerts = TabAlerts(app) { control.config.value?.hostname }
+        scope.launch { control.events.collect { bridge.onEvent(it, tabs.visible) } }
+        // The Files app lists the root either way, but says when it can't be opened.
+        scope.launch { control.link.map { it is ControlChannel.Link.Up }.distinctUntilChanged().collect { GuestDocumentsProvider.rootsChanged(app) } }
         scope.launch {
             combine(state, control.link) { s, link -> s == VmState.Running && link !is ControlChannel.Link.Up }
                 .distinctUntilChanged()
@@ -187,6 +195,28 @@ class Vm(private val app: Context) {
         if (generation != null) req.put("generation", generation)
         return runCatching { control.call(req) }.exceptionOrNull()?.message
     }
+
+    /** The guest's files (the file provider and shares), or null while the agent can't be reached. */
+    fun files(): GuestFiles? {
+        if (control.link.value !is ControlChannel.Link.Up) return null
+        return _engine.value.dialer?.let { GuestFiles(it, appVersion) }
+    }
+
+    /**
+     * Hands Android's clipboard to the agent for a guest paste; called when
+     * the app gains focus, the only time Android lets it read the clipboard.
+     */
+    fun syncClipboard(text: String?) {
+        if (text == null || text == lastClipboardSent || text == bridge.lastGuestCopy) return
+        if (control.link.value !is ControlChannel.Link.Up) return
+        scope.launch {
+            if (runCatching { control.call(JSONObject().put("type", "set-clipboard").put("text", text)) }.isSuccess) lastClipboardSent = text
+        }
+    }
+
+    /** Shares text as the share sheet does; returns where it landed, or throws. */
+    suspend fun shareText(text: String): String =
+        control.call(JSONObject().put("type", "share-text").put("text", text)).optString("path")
 
     /** The user's shell history for the command palette, newest first; empty while the agent can't be reached. */
     suspend fun history(): List<String> = runCatching {
