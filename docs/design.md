@@ -154,7 +154,13 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 ## Lifecycle
 
 - Runs until stopped: started from the app, tile or a terminal; a foreground
-  service keeps it up (no wake lock). Stop is graceful via the agent (`systemctl poweroff`)
+  service keeps it up, with no wake lock unless the guest holds a logind
+  sleep or idle inhibitor (mode block; `power.wakeLocks`, on by default,
+  `ignore` for daemons that hold one for good). Then the app holds a partial
+  wake lock, its notification naming who and why, until the inhibitor goes
+  or the agent's stream drops; an app setting refuses it. The agent follows
+  logind's change signals, so idle costs no polling. Updates take an
+  inhibitor for fetch and switch. Stop is graceful via the agent (`systemctl poweroff`)
   with a hard stop after a timeout (30 s). Stop and Reboot ask first. Opt-in
   start on phone boot. A memory balloon returns free guest RAM to Android:
   AVF's auto balloon, whose free page reporting does the work. Its inflation

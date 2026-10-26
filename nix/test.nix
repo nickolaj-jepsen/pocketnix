@@ -377,6 +377,14 @@ in
           client.wait_until_succeeds("grep -qx saved-by-app /tmp/portal-saved.txt", timeout=60)
           phone.wait_until_succeeds(f"! test -e {path}", timeout=30)
 
+      with subtest("a sleep inhibitor in a tab asks the phone to stay awake"):
+          client.succeed(f"systemd-run --unit=wake sh -c '{A} wake > /tmp/wake'")
+          client.wait_until_succeeds("grep -q '\"held\":false' /tmp/wake", timeout=30)
+          # A tab has no logind session: the module's polkit rule lets the user inhibit anyway.
+          client.succeed(f"systemd-run --unit=inhibit {A} exec --input $'systemd-inhibit --what=sleep --who=rsync --why=backup sleep 5; exit\\r'")
+          client.wait_until_succeeds("grep -qF '\"held\":true,\"holders\":[{\"who\":\"rsync\",\"why\":\"backup\"}]' /tmp/wake", timeout=30)
+          client.wait_until_succeeds("tail -n1 /tmp/wake | grep -q '\"held\":false'", timeout=30)
+
       with subtest("an update from the build host arrives over ssh and switches"):
           # Test VMs boot without a system profile; a real guest has one from its first boot.
           phone.succeed("nix-env -p /nix/var/nix/profiles/system --set $(readlink -f /run/current-system)")
@@ -387,6 +395,7 @@ in
           u = json.loads(client.succeed(f"{A} update"))
           assert u["current"] == "${next."1"}" and "available" not in u, u
           assert any("copying from pocketnix-build@builder" in l for l in u["log"]), u["log"]
+          client.succeed("grep -qF '{\"who\":\"pocketnix\",\"why\":\"Updating the system\"}' /tmp/wake")
           phone.succeed("grep -qx 1 /etc/pocketnix-test-generation")
           assert phone.succeed("systemctl show -P MainPID pocketnix-agent") == pid
 

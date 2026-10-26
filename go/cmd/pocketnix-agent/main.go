@@ -49,6 +49,7 @@ func main() {
 	if !*noPower {
 		srv.Power = systemdPower{}
 	}
+	srv.Updates.Inhibit = agent.LogindInhibit
 
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
@@ -63,6 +64,7 @@ func main() {
 	}()
 
 	go srv.Updates.Periodic(context.Background())
+	go srv.WatchInhibitors(context.Background())
 	if *guestSocket != "" {
 		l, err := agent.ListenGuest(*guestSocket)
 		if err != nil {

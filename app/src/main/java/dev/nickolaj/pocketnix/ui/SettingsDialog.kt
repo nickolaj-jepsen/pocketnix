@@ -36,6 +36,7 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
     var allCpus by remember { mutableStateOf(s.cpus != 1) }
     var network by remember { mutableStateOf(s.network) }
     var onBoot by remember { mutableStateOf(s.startOnBoot) }
+    var wakeLocks by remember { mutableStateOf(s.wakeLocks) }
     var tcp by remember { mutableStateOf(s.tcpBackend) }
     var tcpAddress by remember { mutableStateOf(s.tcpAddress) }
     val stopped = vm.state.value == VmState.Stopped || vm.state.value is VmState.Failed
@@ -61,6 +62,7 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
                 Toggle("One vCPU per host core", allCpus) { allCpus = it }
                 Toggle("Network", network) { network = it }
                 Toggle("Start when the phone boots", onBoot) { onBoot = it }
+                Toggle("Stay awake while the guest inhibits sleep", wakeLocks) { wakeLocks = it }
                 if (BuildConfig.DEBUG) {
                     Toggle("TCP agent backend (debug)", tcp) { tcp = it }
                     if (tcp) {
@@ -76,6 +78,7 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
                 s.cpus = if (allCpus) 0 else 1
                 s.network = network
                 s.startOnBoot = onBoot
+                vm.setWakeLocks(wakeLocks)
                 s.tcpBackend = tcp
                 s.tcpAddress = tcpAddress.trim()
                 vm.reloadEngine()

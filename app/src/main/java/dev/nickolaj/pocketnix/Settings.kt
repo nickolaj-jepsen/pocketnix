@@ -49,6 +49,11 @@ class Settings(context: Context) {
         get() = prefs.getInt("textSize", 0)
         set(v) = prefs.edit { putInt("textSize", v) }
 
+    /** The guest's sleep inhibitors may hold a wake lock; off overrides the module. */
+    var wakeLocks: Boolean
+        get() = prefs.getBoolean("wakeLocks", true)
+        set(v) = prefs.edit { putBoolean("wakeLocks", v) }
+
     fun vm() = VmSettings(memoryMb = memoryMb, cpus = cpus, diskGb = diskGb, network = network)
 
     companion object {

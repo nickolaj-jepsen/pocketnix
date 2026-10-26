@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -40,9 +41,10 @@ func newFakeGuest(t *testing.T) *fakeGuest {
 		must(t, os.WriteFile(filepath.Join(top, "nixos-version"), fmt.Appendf(nil, "26.05.%d\n", i+1), 0o644))
 		g.script(t, filepath.Join(top, "bin", "switch-to-configuration"), fmt.Sprintf(`
 [ "$1" = switch ] || exit 2
+[ -f %[3]s/inhibited ] || { echo "switching while the phone may sleep" >&2; exit 3; }
 echo "activating %[1]s"
 ln -sfn %[1]s %[2]s
-`, top, g.current))
+`, top, g.current, dir))
 		g.systems = append(g.systems, top)
 	}
 	must(t, os.Symlink(g.systems[0], g.profile+"-1-link"))
@@ -61,6 +63,7 @@ cat %[1]s/answer
 	// The guest's caches have a path when $dir/cached lists it.
 	g.script(t, g.bin("nix-store"), fmt.Sprintf(`
 [ "$1" = --realise ] || exit 2
+[ -f %[1]s/inhibited ] || { echo "fetching while the phone may sleep" >&2; exit 3; }
 case "$*" in *"--max-jobs 0"*) ;; *) echo "realise may build" >&2; exit 2 ;; esac
 for p; do :; done
 grep -qxF "$p" %[1]s/cached 2>/dev/null || { echo "error: don't know how to build these paths: $p" >&2; exit 1; }
@@ -101,6 +104,25 @@ func (g *fakeGuest) cache(t *testing.T, path string) {
 	must(t, os.WriteFile(filepath.Join(g.dir, "cached"), []byte(path+"\n"), 0o644))
 }
 
+// inhibit stands in for logind: $dir/inhibited exists while held, and the
+// fake fetch and switch fail without it.
+func (g *fakeGuest) inhibit(why string) (io.Closer, error) {
+	f := filepath.Join(g.dir, "inhibited")
+	if err := os.WriteFile(f, []byte(why), 0o644); err != nil {
+		return nil, err
+	}
+	return closeFunc(func() error { return os.Remove(f) }), nil
+}
+
+func (g *fakeGuest) inhibited() bool {
+	_, err := os.Stat(filepath.Join(g.dir, "inhibited"))
+	return err == nil
+}
+
+type closeFunc func() error
+
+func (f closeFunc) Close() error { return f() }
+
 func (g *fakeGuest) copied() bool {
 	_, err := os.Stat(filepath.Join(g.dir, "copied"))
 	return err == nil
@@ -124,6 +146,7 @@ func startUpdates(t *testing.T, g *fakeGuest, updates map[string]any, tls ...*ht
 	u := h.srv.Updates
 	u.SSH, u.NixStore, u.Nix, u.NixEnv, u.SystemdRun = g.bin("ssh"), g.bin("nix-store"), g.bin("nix"), g.bin("nix-env"), ""
 	u.Profile, u.Current, u.Booted, u.StoreDir = g.profile, g.current, g.booted(), g.store
+	u.Inhibit = g.inhibit
 	if len(tls) > 0 {
 		u.HTTP = tls[0].Client()
 	}
@@ -168,6 +191,9 @@ func TestUpdateFromBuildHost(t *testing.T) {
 	}
 	if u.Current != g.systems[1] || u.Available != "" {
 		t.Errorf("after apply: current %q, available %q", u.Current, u.Available)
+	}
+	if g.inhibited() {
+		t.Error("the update still keeps the phone awake")
 	}
 	// Not in the guest's caches, so it came over ssh, with the configured key.
 	if !g.copied() {
@@ -324,6 +350,9 @@ func TestSwitchGenerationRollsBack(t *testing.T) {
 	}
 	if u.Current != g.systems[0] || currentGeneration(u) != 1 || len(u.Generations) != 2 {
 		t.Errorf("after rollback: current %q, generations %+v", u.Current, u.Generations)
+	}
+	if g.inhibited() {
+		t.Error("the rollback still keeps the phone awake")
 	}
 	if err := ctl.SwitchGeneration(7); err == nil {
 		t.Error("switched to a generation that doesn't exist")

@@ -50,6 +50,7 @@ commands:
   pick-answer <ref> [file…]   answer a pick event with files; none cancels
   save-answer <ref> [file]    store a save's (or a typed copy's) bytes in file; none cancels
   paste-answer <ref> [file]   answer a clipboard request with file's bytes; none fails it
+  wake                   print whether the guest asks the phone to stay awake, one JSON per change
   share <file>           share a file, as Android's share sheet does
   share-text <text>      share text
   ls [path] | cat <path> | put <path>   the file provider (put reads stdin)
@@ -109,6 +110,13 @@ func runAgent(args []string) error {
 		}
 		defer ctl.Close()
 		return agentUpdates(ctl, cmd, rest)
+	case "wake":
+		ctl, err := c.Control()
+		if err != nil {
+			return err
+		}
+		defer ctl.Close()
+		return agentHost(ctl, cmd, rest)
 	case "events", "set-clipboard", "share-text":
 		ctl, err := c.Control()
 		if err != nil {
@@ -315,6 +323,16 @@ func agentUpdates(ctl *client.Control, cmd string, args []string) error {
 		err = encErr
 	}
 	return err
+}
+
+func agentHost(ctl *client.Control, cmd string, args []string) error {
+	enc := json.NewEncoder(os.Stdout)
+	for w := range ctl.Wakes() {
+		if err := enc.Encode(w); err != nil {
+			return err
+		}
+	}
+	return errors.New("control stream closed")
 }
 
 func parseSize(s string) (rows, cols int, err error) {

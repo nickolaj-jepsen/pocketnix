@@ -43,6 +43,8 @@ type Server struct {
 	clipboard string
 	notes     notifications
 	transfers transfers
+
+	wakes wakeTracker
 }
 
 // New loads the config file at path.
@@ -69,6 +71,7 @@ func (s *Server) Reload() error {
 	s.mu.Unlock()
 	s.pushLatest(func() any { return configMessage(s.config()) })
 	s.Updates.Configure(cfg.Updates)
+	s.wakeChanged()
 	return nil
 }
 
@@ -233,6 +236,9 @@ func (s *Server) serveControl(c net.Conn) {
 	}
 	if err == nil {
 		err = protocol.WriteJSON(unlocked{w}, s.Updates.State())
+	}
+	if err == nil {
+		err = protocol.WriteJSON(unlocked{w}, s.wake())
 	}
 	w.mu.Unlock()
 	if err != nil {

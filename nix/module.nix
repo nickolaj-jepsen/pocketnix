@@ -65,6 +65,7 @@
         // lib.optionalAttrs (upd.published.url != null) {published = {inherit (upd.published) url;};}
         // lib.optionalAttrs (upd.checkInterval != null) {inherit (upd) checkInterval;};
       share = lib.filterAttrs (_: v: v != null) {inherit (cfg.share) directory command;};
+      power.wakeLocks = {inherit (cfg.power.wakeLocks) enable ignore;};
     }
     // lib.optionalAttrs (cfg.terminal.historyFile != null) {history = cfg.terminal.historyFile;}
     // lib.optionalAttrs (cfg.files.root != null) {filesRoot = cfg.files.root;};
@@ -544,6 +545,26 @@ in {
       description = "Directory the Files app and Android's file pickers see, read-write. Null is the user's home.";
     };
 
+    power.wakeLocks = {
+      enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Keep the phone out of deep sleep while anything in the guest holds a
+          logind sleep or idle inhibitor (`systemd-inhibit --what=sleep …`),
+          as the app's notification then says. The app has a setting to
+          refuse. Enables polkit, and lets `pocketnix.guest.user` take such
+          inhibitors from the app's tabs, which have no logind session.
+        '';
+      };
+      ignore = mkOption {
+        type = types.listOf types.str;
+        default = [];
+        example = ["ModemManager"];
+        description = "Inhibitors whose *who* is one of these never keep the phone awake: daemons that hold one for good.";
+      };
+    };
+
     avf.enable = mkOption {
       type = types.bool;
       default = true;
@@ -645,6 +666,22 @@ in {
           ExecStart = "${lib.getExe' cfg.package "pocketnix-guest"} portal";
         };
       };
+    })
+
+    (mkIf cfg.power.wakeLocks.enable {
+      # Without polkit logind refuses every inhibitor but root's; with it,
+      # the tabs (no logind session) still count as "any" and are refused.
+      security.polkit.enable = mkDefault true;
+      security.polkit.extraConfig = lib.mkIf (cfg.user != "root") ''
+        polkit.addRule(function(action, subject) {
+          if ((action.id == "org.freedesktop.login1.inhibit-block-sleep" ||
+               action.id == "org.freedesktop.login1.inhibit-block-idle") &&
+              subject.user == ${builtins.toJSON cfg.user}) {
+            return polkit.Result.YES;
+          }
+        });
+      '';
+      warnings = lib.optional (!config.security.polkit.enable && cfg.user != "root") "pocketnix.guest.power.wakeLocks: without polkit only root's sleep inhibitors keep the phone awake";
     })
 
     (mkIf cfg.avf.enable {

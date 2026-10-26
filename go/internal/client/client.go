@@ -55,6 +55,7 @@ type Control struct {
 
 	configs chan protocol.Config
 	events  chan protocol.Event
+	wakes   chan protocol.Wake
 	ended   chan struct{}
 	wmu     sync.Mutex
 
@@ -94,6 +95,7 @@ func (c *Client) Control() (*Control, error) {
 		conn: conn, Agent: hello.Agent,
 		configs: make(chan protocol.Config, 16), uchange: make(chan struct{}),
 		events: make(chan protocol.Event, 64), ended: make(chan struct{}),
+		wakes: make(chan protocol.Wake, 16),
 	}
 	go ctl.read()
 	return ctl, nil
@@ -103,6 +105,7 @@ func (c *Control) read() {
 	defer close(c.ended)
 	defer close(c.configs)
 	defer close(c.events)
+	defer close(c.wakes)
 	defer func() {
 		c.umu.Lock()
 		close(c.uchange)
@@ -155,6 +158,14 @@ func (c *Control) read() {
 			if json.Unmarshal(line, &ev) == nil {
 				select {
 				case c.events <- ev:
+				default: // nobody reads them
+				}
+			}
+		case protocol.TypeWake:
+			var w protocol.Wake
+			if json.Unmarshal(line, &w) == nil {
+				select {
+				case c.wakes <- w:
 				default: // nobody reads them
 				}
 			}
@@ -332,6 +343,10 @@ func (c *Control) ShareText(text string) (string, error) {
 	err = json.Unmarshal(line, &d)
 	return d.Path, err
 }
+
+// Wakes delivers the agent's wake states, on connect and on every change
+// (the last 16 unread); closed when the stream ends.
+func (c *Control) Wakes() <-chan protocol.Wake { return c.wakes }
 
 func (c *Control) Close() error { return c.conn.Close() }
 

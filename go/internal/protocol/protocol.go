@@ -6,8 +6,8 @@
 // with its own [Hello] or an [Error] before the stream's own traffic starts:
 //
 //   - control: newline-delimited JSON messages both ways for the app's
-//     lifetime; the agent pushes [Config] and [Updates] first, then [Config]
-//     again on every reload and [Updates] whenever the update state changes.
+//     lifetime; the agent pushes [Config], [Updates] and [Wake] first, then
+//     each again whenever it changes.
 //     Requests are answered in order, with a message of the request's own
 //     type or an [Error].
 //   - pty: binary frames (see frame.go) carrying one terminal session.

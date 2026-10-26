@@ -1,5 +1,6 @@
 package dev.nickolaj.pocketnix.service
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -8,8 +9,11 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
+import android.os.PowerManager
+import android.util.Log
 import dev.nickolaj.pocketnix.MainActivity
 import dev.nickolaj.pocketnix.R
+import dev.nickolaj.pocketnix.agent.WakeHolder
 import dev.nickolaj.pocketnix.engine.VmState
 import dev.nickolaj.pocketnix.vm
 import kotlinx.coroutines.CoroutineScope
@@ -25,6 +29,11 @@ class VmService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var watch: Job? = null
     private var lastStartId = 0
+    private var wakeWatch: Job? = null
+    private var wakeLock: PowerManager.WakeLock? = null
+    /** Why the phone is kept awake, for the notification; null while it may sleep. */
+    private var wakeLine: String? = null
+    private var lastText = "Starting"
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -63,15 +72,44 @@ class VmService : Service() {
                     }
             }
         }
+        if (wakeWatch == null) {
+            wakeWatch = scope.launch { vm.wakeHolders.collect { holdWake(it) } }
+        }
         return START_NOT_STICKY
+    }
+
+    /** Holds the wake lock while the guest asks for it (design.md, Lifecycle), and says so. */
+    @SuppressLint("WakelockTimeout") // held exactly as long as the guest's inhibitor; released on every way out
+    private fun holdWake(holders: List<WakeHolder>?) {
+        val lock = wakeLock ?: getSystemService(PowerManager::class.java)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "pocketnix:guest")
+            .apply { setReferenceCounted(false) }
+            .also { wakeLock = it }
+        if (holders != null) {
+            if (!lock.isHeld) Log.i(TAG, "wake lock for $holders")
+            lock.acquire()
+        } else if (lock.isHeld) {
+            Log.i(TAG, "wake lock released")
+            lock.release()
+        }
+        val line = holders?.let(::wakeText)
+        if (line == wakeLine) return
+        wakeLine = line
+        val s = vm.state.value
+        if (s != VmState.Stopped && s !is VmState.Failed) {
+            getSystemService(NotificationManager::class.java).notify(NOTIFICATION, notification(lastText))
+        }
     }
 
     override fun onDestroy() {
         scope.cancel()
+        wakeLock?.takeIf { it.isHeld }?.release()
         super.onDestroy()
     }
 
     private fun notification(text: String): Notification {
+        lastText = text
+        val line = wakeLine?.let { "$text · $it" } ?: text
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val stop = PendingIntent.getService(
             this, 1, Intent(this, VmService::class.java).setAction(ACTION_STOP),
@@ -80,7 +118,8 @@ class VmService : Service() {
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_menu_manage)
             .setContentTitle(getString(R.string.app_name))
-            .setContentText(text)
+            .setContentText(line)
+            .setStyle(Notification.BigTextStyle().bigText(line))
             .setContentIntent(open)
             .setOngoing(true)
             .addAction(Notification.Action.Builder(null, "Stop", stop).build())
@@ -91,5 +130,6 @@ class VmService : Service() {
         const val ACTION_STOP = "dev.nickolaj.pocketnix.action.STOP"
         private const val CHANNEL = "vm"
         private const val NOTIFICATION = 1
+        private const val TAG = "VmService"
     }
 }

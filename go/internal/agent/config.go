@@ -32,6 +32,20 @@ type File struct {
 	// FilesRoot is the directory the app's file provider exposes; empty is
 	// the session user's home.
 	FilesRoot string `json:"filesRoot,omitempty"`
+
+	Power PowerConfig `json:"power"`
+}
+
+// PowerConfig is how the guest keeps the phone awake.
+type PowerConfig struct {
+	WakeLocks WakeLocksConfig `json:"wakeLocks"`
+}
+
+// WakeLocksConfig turns the guest's logind sleep and idle inhibitors into
+// the app's wake lock, except those whose who is in Ignore.
+type WakeLocksConfig struct {
+	Enable bool     `json:"enable"`
+	Ignore []string `json:"ignore,omitempty"`
 }
 
 // ShareConfig delivers shared text and files: into Directory, then (when

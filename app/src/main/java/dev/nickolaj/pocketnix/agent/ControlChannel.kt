@@ -49,6 +49,10 @@ class ControlChannel(
     /** The agent's update state; pushed on connect and on every change. */
     val updates: StateFlow<Updates?> = _updates.asStateFlow()
 
+    private val _wake = MutableStateFlow<Wake?>(null)
+    /** The agent's last wake push; it comes on connect, so a stale one only outlives a dropped stream. */
+    val wake: StateFlow<Wake?> = _wake.asStateFlow()
+
     private val _events = MutableSharedFlow<JSONObject>(extraBufferCapacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     /** The agent's other pushes: a guest's notify, open and guest-clipboard (go/internal/protocol/integrations.go). */
     val events: SharedFlow<JSONObject> = _events.asSharedFlow()
@@ -163,6 +167,7 @@ class ControlChannel(
             type == "config" -> _config.value = GuestConfig.parse(msg)
             // Pushed, and the answer to [refreshUpdates]; never a pending request's reply.
             type == "updates" -> _updates.value = Updates.parse(msg)
+            type == "wake" -> _wake.value = Wake.parse(msg)
             type == "error" -> p?.takeIf { it.answers(msg) }?.answer?.complete(Result.failure(AgentException(msg.optString("message"))))
                 ?: Log.w(TAG, "agent error: ${msg.optString("message")}")
             p != null && type == p.type && p.answers(msg) -> p.answer.complete(Result.success(msg))
@@ -227,6 +232,7 @@ class ControlChannel(
     fun clear() {
         _config.value = null
         _updates.value = null
+        _wake.value = null
     }
 
     private companion object {

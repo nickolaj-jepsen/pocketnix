@@ -11,6 +11,8 @@ import dev.nickolaj.pocketnix.agent.FontCache
 import dev.nickolaj.pocketnix.agent.GuestConfig
 import dev.nickolaj.pocketnix.agent.GuestFiles
 import dev.nickolaj.pocketnix.agent.PtyBackend
+import dev.nickolaj.pocketnix.agent.WakeHolder
+import dev.nickolaj.pocketnix.service.wakeHoldersOf
 import dev.nickolaj.pocketnix.files.GuestDocumentsProvider
 import dev.nickolaj.pocketnix.files.PendingUploads
 import dev.nickolaj.pocketnix.files.Transfers
@@ -100,6 +102,18 @@ class Vm(private val app: Context) {
     private val bridge = GuestBridge(app) { control.config.value?.hostname }
     val transfers = Transfers(app, scope, control, bridge, ::files) { control.config.value?.hostname }
     private var lastClipboardSent: Pair<String, List<String>>? = null
+
+    private val _wakeLocks = MutableStateFlow(settings.wakeLocks)
+    /** Who the phone stays awake for (see [wakeHoldersOf]), or null. */
+    val wakeHolders: StateFlow<List<WakeHolder>?> =
+        combine(control.wake, control.link, state, _wakeLocks) { wake, link, s, allowed ->
+            wakeHoldersOf(wake, link is ControlChannel.Link.Up, s == VmState.Running, allowed)
+        }.stateIn(scope, SharingStarted.Eagerly, null)
+
+    fun setWakeLocks(allowed: Boolean) {
+        settings.wakeLocks = allowed
+        _wakeLocks.value = allowed
+    }
 
     init {
         tabs.alerts = TabAlerts(app) { control.config.value?.hostname }

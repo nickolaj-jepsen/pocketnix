@@ -159,3 +159,9 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
 - Tabs have no login session, so without lingering there is no user manager
   and no `/run/user/<uid>/bus`; the module lingers the user, which brings the
   session bus up with no login (the NixOS test checks it).
+- NixOS leaves polkit off, and without it logind refuses every sleep
+  inhibitor but root's ("Access denied"). With it, a user without a logind
+  session (a tab, `runuser`, a unit's `User=`) still needs authentication
+  for `inhibit-block-sleep`: `wakeLocks.enable` turns polkit on and allows
+  `pocketnix.guest.user`. logind (systemd 260) does signal `BlockInhibited`
+  and `NCurrentInhibitors` changes.

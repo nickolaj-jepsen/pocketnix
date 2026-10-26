@@ -42,6 +42,9 @@ type Updater struct {
 
 	// Changed is called after every state change, with the mutex released.
 	Changed func()
+	// Inhibit, when set, keeps the guest (and so the phone) awake until the
+	// returned closer is closed; fetches and switches take it.
+	Inhibit func(why string) (io.Closer, error)
 
 	mu        sync.Mutex
 	cfg       UpdatesConfig
@@ -185,6 +188,7 @@ func (u *Updater) Apply() error {
 		if path == "" {
 			return nil
 		}
+		defer u.inhibit("Updating the system")()
 		u.setState(protocol.UpdateFetching)
 		if err := u.fetch(c, src, path); err != nil {
 			return err
@@ -221,6 +225,7 @@ func (u *Updater) SwitchGeneration(n int) error {
 	}
 	op := func(UpdatesConfig) error {
 		u.logf("switching to generation %d (%s)", n, path)
+		defer u.inhibit(fmt.Sprintf("Switching to generation %d", n))()
 		if err := u.cmd(envTimeout, u.NixEnv, "-p", u.Profile, "--switch-generation", strconv.Itoa(n)); err != nil {
 			return err
 		}
@@ -478,6 +483,20 @@ func (u *Updater) fetch(c UpdatesConfig, src, path string) error {
 	// host's own builds cross ssh.
 	return u.runCmd(fetchTimeout, nil, env, u.Nix, "--extra-experimental-features", "nix-command", "copy", "-v", "--no-check-sigs",
 		"--substitute-on-destination", "--to", "daemon", "--from", "ssh-ng://"+b.Host, path)
+}
+
+// inhibit takes Inhibit's lock and returns its release. Without one the
+// operation runs anyway: a phone that may sleep beats no update.
+func (u *Updater) inhibit(why string) func() {
+	if u.Inhibit == nil {
+		return func() {}
+	}
+	c, err := u.Inhibit(why)
+	if err != nil {
+		u.logf("can't keep the phone awake: %v", err)
+		return func() {}
+	}
+	return func() { c.Close() }
 }
 
 func (u *Updater) switchTo(path string) error {
