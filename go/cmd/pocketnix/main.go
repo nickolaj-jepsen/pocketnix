@@ -1,8 +1,9 @@
-// Command pocketnix is the host-side CLI: provisioning a phone over adb and,
-// later, an ssh ProxyCommand into the guest.
+// Command pocketnix is the host-side CLI: provisioning a phone over adb, and
+// talking to a guest agent directly for debugging.
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -11,26 +12,42 @@ import (
 
 var version = "dev"
 
-const usage = `usage: pocketnix <command>
+const usage = `usage: pocketnix <command> [args]
 
 commands:
-  provision   install the app, grant AVF permissions, push and boot an image (not implemented yet)
+  provision   install the app, grant AVF permissions, push and boot an image
+  agent       talk to a guest agent directly (debugging; see pocketnix agent -h)
   version     print the CLI and protocol versions
 `
+
+var errUsage = errors.New("usage")
 
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
 	}
+	var err error
 	switch os.Args[1] {
 	case "version":
 		fmt.Printf("pocketnix %s (protocol %d)\n", version, protocol.Version)
 	case "provision":
-		fmt.Fprintln(os.Stderr, "provision: not implemented yet (milestone M0)")
-		os.Exit(1)
+		err = runProvision(os.Args[2:])
+	case "agent":
+		err = runAgent(os.Args[2:])
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
+	}
+	var status exitStatus
+	switch {
+	case err == nil:
+	case errors.Is(err, errUsage):
+		os.Exit(2)
+	case errors.As(err, &status):
+		os.Exit(int(status) & 0xff)
+	default:
+		fmt.Fprintln(os.Stderr, "pocketnix:", err)
+		os.Exit(1)
 	}
 }

@@ -1,41 +1,378 @@
-# What a NixOS guest provides to the pocketnix app: a login on the hvc0
-# console (the recovery tab) and the agent the app dials over vsock.
+# What a NixOS guest provides to the pocketnix app: the agent the app dials
+# over vsock with the terminal configuration it serves, and (avf.enable) the
+# AVF platform: Google's guest kernel, the raw disk image u-boot boots,
+# first-boot setup and a login on the hvc0 console (the app's recovery tab).
 {self}: {
   config,
   lib,
   pkgs,
+  extendModules,
+  modulesPath,
   ...
 }: let
   cfg = config.pocketnix.guest;
+  inherit (lib) mkOption mkEnableOption mkIf mkDefault mkMerge types;
+
+  extraKey = types.submodule {
+    options = {
+      key = mkOption {
+        type = types.str;
+        description = "Termux extra-keys name (ESC, TAB, CTRL, ALT, UP, PGUP, F1, …) or a literal character.";
+      };
+      popup = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Key sent on a swipe up from this one.";
+      };
+      label = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Text shown on the button instead of the key's name.";
+      };
+    };
+  };
+
+  agentConfig = {
+    user = cfg.user;
+    hostname = config.networking.hostName;
+    forwards =
+      lib.mapAttrsToList (name: f: {
+        inherit name;
+        inherit (f) guestPort hostPort lan;
+      })
+      cfg.forwards;
+    terminal = {
+      profiles = lib.mapAttrsToList (name: p: {inherit name;} // lib.optionalAttrs (p.command != null) {inherit (p) command;}) cfg.terminal.profiles;
+      inherit (cfg.terminal) defaultProfile;
+      extraKeys = map (map (k: lib.filterAttrs (_: v: v != null) k)) cfg.terminal.extraKeys;
+      theme =
+        {inherit (cfg.terminal.theme) colors;}
+        // lib.optionalAttrs (cfg.terminal.theme.font != null) {font = "${cfg.terminal.theme.font}";};
+    };
+  };
+  agentConfigFile = (pkgs.formats.json {}).generate "pocketnix-agent.json" agentConfig;
+
+  # Mirrors systemd-boot-builder.py's copy_from_file naming, so the first
+  # `switch` adopts generation 1's files instead of leaving strays behind.
+  efiName = path: builtins.unsafeDiscardStringContext "/EFI/nixos/${baseNameOf (dirOf path)}-${baseNameOf path}.efi";
+
+  # extendModules keeps nixpkgs' repart module (it sets system.build.image
+  # unconditionally) out of the guest's own system.
+  image =
+    (extendModules {
+      modules = [
+        (modulesPath + "/image/repart.nix")
+        ({config, ...}: let
+          inherit (config.system.build) toplevel;
+          kernel = "${config.boot.kernelPackages.kernel}/${config.system.boot.loader.kernelFile}";
+          initrd = "${config.system.build.initialRamdisk}/${config.system.boot.loader.initrdFile}";
+          efiArch = pkgs.stdenv.hostPlatform.efiArch;
+          systemdBoot = "${pkgs.systemd}/lib/systemd/boot/efi/systemd-boot${efiArch}.efi";
+        in {
+          image.repart = {
+            name = "${config.networking.hostName}-pocketnix";
+            sectorSize = 512;
+            partitions = {
+              "10-esp" = {
+                contents = {
+                  # u-boot runs the removable path; bootctl (every switch) wants the EFI/systemd copy.
+                  "/EFI/BOOT/BOOT${lib.toUpper efiArch}.EFI".source = systemdBoot;
+                  "/EFI/systemd/systemd-boot${efiArch}.efi".source = systemdBoot;
+                  ${efiName kernel}.source = kernel;
+                  ${efiName initrd}.source = initrd;
+                  "/loader/loader.conf".source = pkgs.writeText "loader.conf" ''
+                    timeout ${toString config.boot.loader.timeout}
+                    default nixos-generation-1.conf
+                  '';
+                  "/loader/entries/nixos-generation-1.conf".source = pkgs.writeText "nixos-generation-1.conf" ''
+                    title NixOS
+                    version Generation 1
+                    linux ${efiName kernel}
+                    initrd ${efiName initrd}
+                    options init=${toplevel}/init ${toString config.boot.kernelParams}
+                  '';
+                };
+                repartConfig = {
+                  Type = "esp";
+                  Format = "vfat";
+                  Label = "ESP";
+                  # Room for several generations' kernel + initrd.
+                  SizeMinBytes = "512M";
+                };
+              };
+              "20-root" = {
+                storePaths = [toplevel];
+                contents."/nix-path-registration".source = "${pkgs.closureInfo {rootPaths = [toplevel];}}/registration";
+                repartConfig = {
+                  Type = "root";
+                  Format = "ext4";
+                  Label = "nixos";
+                  Minimize = "guess";
+                };
+              };
+            };
+          };
+        })
+      ];
+    }).config.system.build.image;
+
+  # The same image assembled by another system's tools: systemd-repart needs
+  # `unshare --map-root-user`, which fails under multithreaded qemu-user, so a
+  # binfmt host must assemble it natively.
+  imageArgs = removeAttrs (lib.functionArgs (import (modulesPath + "/image/repart-image.nix"))) [
+    "name"
+    "version"
+    "baseName"
+    "compression"
+    "fileSystems"
+    "finalPartitions"
+    "split"
+    "seed"
+    "definitionsDirectory"
+    "imageSize"
+    "sectorSize"
+    "mkfsEnv"
+    "createEmpty"
+  ];
+  imageBuiltOn = system:
+    if system == pkgs.stdenv.buildPlatform.system
+    then image
+    else
+      (image.override (lib.intersectAttrs imageArgs (import pkgs.path {inherit system;}))).overrideAttrs {
+        # The override's stdenv sets --architecture, which picks the root partition's GPT type.
+        inherit (image) systemdRepartFlags;
+        # Host-tool repart's CopyFiles= follows a store path that is itself a
+        # symlink and copies its target.
+        postPatch = ''
+          chmod u+w $finalRepartDefinitions/
+          for conf in $finalRepartDefinitions/*.conf; do
+            links=$(sed -n 's|^CopyFiles=\(/nix/store/[^:]*\).*|\1|p' "$conf" | while read -r p; do if [ -L "$p" ]; then echo "$p"; fi; done)
+            for p in $links; do
+              sed -i "s|^CopyFiles=$p\(:$p\)\?\$|MakeSymlinks=$p:$(readlink "$p")|" "$conf"
+            done
+          done
+        '';
+      };
 in {
   options.pocketnix.guest = {
-    enable = lib.mkEnableOption "the pocketnix guest side";
-    package = lib.mkOption {
-      type = lib.types.package;
+    enable = mkEnableOption "the pocketnix guest side";
+    package = mkOption {
+      type = types.package;
       default = self.packages.${pkgs.stdenv.hostPlatform.system}.pocketnix;
       defaultText = lib.literalExpression "pocketnix.packages.\${system}.pocketnix";
       description = "The pocketnix package providing `pocketnix-agent`.";
     };
-  };
+    user = mkOption {
+      type = types.str;
+      default = "root";
+      example = "alice";
+      description = "User that the app's terminal tabs run as, and that the hvc0 console logs in.";
+    };
 
-  config = lib.mkIf cfg.enable {
-    boot.kernelParams = ["console=hvc0"];
-    boot.kernelModules = ["vmw_vsock_virtio_transport"];
+    agent.listen = mkOption {
+      type = types.listOf types.str;
+      default = ["vsock:9100"];
+      example = ["vsock:9100" "tcp:0.0.0.0:9100"];
+      description = ''
+        Addresses the agent serves. Only vsock is limited to the app: a TCP
+        listener hands a shell to anyone who reaches it, so add one only for
+        tests.
+      '';
+    };
 
-    # The app's terminal speaks xterm, not serial-getty's default vt220.
-    systemd.services."serial-getty@hvc0".environment.TERM = "xterm-256color";
+    forwards = mkOption {
+      default = {};
+      example = lib.literalExpression ''{ ssh = { guestPort = 22; hostPort = 2222; }; }'';
+      description = "TCP ports the app exposes on the phone, on 127.0.0.1 unless `lan` is set.";
+      type = types.attrsOf (types.submodule ({config, ...}: {
+        options = {
+          guestPort = mkOption {
+            type = types.port;
+            description = "Port on the guest's 127.0.0.1.";
+          };
+          hostPort = mkOption {
+            type = types.port;
+            default = config.guestPort;
+            defaultText = lib.literalExpression "guestPort";
+            description = "Port the app listens on.";
+          };
+          lan = mkOption {
+            type = types.bool;
+            default = false;
+            description = "Listen on every interface instead of 127.0.0.1.";
+          };
+        };
+      }));
+    };
 
-    systemd.services.pocketnix-agent = {
-      description = "pocketnix guest agent";
-      wantedBy = ["multi-user.target"];
-      after = ["systemd-modules-load.service"];
-      serviceConfig = {
-        ExecStart = "${cfg.package}/bin/pocketnix-agent";
-        Restart = "always";
-        RestartSec = 1;
-        # The app's only way into a wedged guest besides the console.
-        OOMScoreAdjust = -1000;
+    terminal = {
+      profiles = mkOption {
+        default = {shell = {};};
+        description = "Kinds of terminal tab; each runs through the user's login shell.";
+        type = types.attrsOf (types.submodule {
+          options.command = mkOption {
+            type = types.nullOr types.str;
+            default = null;
+            example = "tmux new-session -A -s main";
+            description = "Command the tab runs (`$SHELL -l -c`); null runs the login shell itself.";
+          };
+        });
+      };
+      defaultProfile = mkOption {
+        type = types.str;
+        default = "shell";
+        description = "Profile a new tab runs.";
+      };
+      extraKeys = mkOption {
+        type = types.listOf (types.listOf (types.coercedTo types.str (key: {inherit key;}) extraKey));
+        default = [
+          [
+            "ESC"
+            {
+              key = "/";
+              popup = "\\";
+            }
+            {
+              key = "-";
+              popup = "|";
+            }
+            "HOME"
+            "UP"
+            "END"
+            "PGUP"
+          ]
+          ["TAB" "CTRL" "ALT" "LEFT" "DOWN" "RIGHT" "PGDN"]
+        ];
+        description = "Rows of keys above the keyboard, in Termux's extra-keys vocabulary.";
+      };
+      theme = {
+        colors = mkOption {
+          type = types.attrsOf (types.strMatching "#[0-9a-fA-F]{6}");
+          default = {};
+          example = {
+            background = "#1e1e2e";
+            foreground = "#cdd6f4";
+            color1 = "#f38ba8";
+          };
+          description = "Terminal colors by Termux property name: foreground, background, cursor, color0 to color15.";
+        };
+        font = mkOption {
+          type = types.nullOr types.path;
+          default = null;
+          example = lib.literalExpression ''"''${pkgs.jetbrains-mono}/share/fonts/truetype/JetBrainsMono-Regular.ttf"'';
+          description = "TTF or OTF file the terminal renders with.";
+        };
       };
     };
+
+    avf.enable = mkOption {
+      type = types.bool;
+      default = true;
+      description = "The AVF platform: kernel, disk image, boot loader, first boot and the hvc0 console. Off for other hypervisors, such as NixOS tests.";
+    };
   };
+
+  options.system.build.pocketnixImage = mkOption {
+    type = types.attrsOf types.package;
+    readOnly = true;
+    description = "Raw GPT disk image for the pocketnix app, keyed by the system that assembles it.";
+  };
+
+  config = mkIf cfg.enable (mkMerge [
+    {
+      assertions = [
+        {
+          assertion = cfg.terminal.profiles ? ${cfg.terminal.defaultProfile};
+          message = "pocketnix.guest.terminal.defaultProfile `${cfg.terminal.defaultProfile}` is not a profile";
+        }
+      ];
+
+      boot.kernelModules = ["vmw_vsock_virtio_transport"];
+      environment.etc."pocketnix/agent.json".source = agentConfigFile;
+
+      systemd.services.pocketnix-agent = {
+        description = "pocketnix guest agent";
+        wantedBy = ["multi-user.target"];
+        after = ["systemd-modules-load.service"];
+        # Terminal tabs run under the agent, and a switch is usually run from
+        # one: restarting the agent mid-switch would kill the switch. Config
+        # changes reload instead, and reach the app live.
+        restartIfChanged = false;
+        reloadTriggers = [agentConfigFile];
+        serviceConfig = {
+          ExecStart = lib.escapeShellArgs ([(lib.getExe' cfg.package "pocketnix-agent")] ++ lib.concatMap (a: ["--listen" a]) cfg.agent.listen);
+          ExecReload = "${lib.getExe' pkgs.coreutils "kill"} -HUP $MAINPID";
+          Restart = "always";
+          RestartSec = 1;
+          # The app's only way into a wedged guest besides the console.
+          OOMScoreAdjust = -1000;
+        };
+      };
+    }
+
+    (mkIf cfg.avf.enable {
+      system.build.pocketnixImage = lib.genAttrs ["aarch64-linux" "x86_64-linux"] imageBuiltOn;
+
+      boot.kernelPackages = mkDefault (pkgs.linuxPackagesFor (pkgs.callPackage ./avf-kernel/package.nix {}));
+      boot.kernelParams = [
+        "console=hvc0"
+        # Pixel 8 Pro's hypervisor advertises MPAM but traps MPAMIDR_EL1: an
+        # oops in init_cpu_features at t=0 with more than one vCPU.
+        "arm64.nompam"
+      ];
+      # The defaults name PC storage/USB drivers this kernel doesn't ship; virtio is built in.
+      boot.initrd.includeDefaultModules = false;
+      # Other modules still ask for drivers (tpm-crb, …) this fixed kernel lacks.
+      boot.initrd.allowMissingModules = true;
+      boot.initrd.availableKernelModules = ["virtio_pci" "virtio_blk"];
+
+      boot.loader.systemd-boot.enable = true;
+      # u-boot's EFI variables don't persist; systemd-boot lives at the removable path.
+      boot.loader.efi.canTouchEfiVariables = false;
+      # The app's boot-menu start taps a key on hvc0 to show the menu.
+      boot.loader.timeout = mkDefault 0;
+
+      fileSystems."/" = {
+        device = "/dev/disk/by-label/nixos";
+        fsType = "ext4";
+        # The app grows the image file to the configured disk size.
+        autoResize = true;
+      };
+      fileSystems."/boot" = {
+        device = "/dev/disk/by-label/ESP";
+        fsType = "vfat";
+        options = ["umask=0077"];
+      };
+      boot.growPartition = true;
+
+      # The app's terminal speaks xterm, not serial-getty's default vt220.
+      systemd.services."serial-getty@hvc0".environment.TERM = "xterm-256color";
+      # The console is the recovery tab; the phone's lock screen is the gate.
+      services.getty.autologinUser = mkDefault cfg.user;
+
+      # The image ships an unregistered store; register it once, like sd-image.
+      # Early boot: nix-daemon.socket is part of sockets.target, before basic.target.
+      systemd.services.pocketnix-first-boot = {
+        wantedBy = ["sysinit.target"];
+        before = ["sysinit.target" "shutdown.target" "nix-daemon.socket" "nix-daemon.service"];
+        after = ["local-fs.target"];
+        conflicts = ["shutdown.target"];
+        unitConfig = {
+          DefaultDependencies = false;
+          ConditionPathExists = "/nix-path-registration";
+        };
+        restartIfChanged = false;
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+        };
+        script = ''
+          ${lib.getExe' config.nix.package.out "nix-store"} --load-db < /nix-path-registration
+          touch /etc/NIXOS
+          ${lib.getExe' config.nix.package.out "nix-env"} -p /nix/var/nix/profiles/system --set /run/current-system
+          rm -f /nix-path-registration
+        '';
+      };
+    })
+  ]);
 }

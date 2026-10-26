@@ -1,6 +1,7 @@
 {
   lib,
   buildGoModule,
+  e2fsprogs,
 }:
 buildGoModule (finalAttrs: {
   pname = "pocketnix";
@@ -14,6 +15,8 @@ buildGoModule (finalAttrs: {
 
   # The agent runs in the guest from a NixOS store path; no cgo keeps it a single static binary.
   env.CGO_ENABLED = 0;
+  # The --inject tests edit a real ext4 image.
+  nativeCheckInputs = [e2fsprogs];
   ldflags = [
     "-s"
     "-X main.version=${finalAttrs.version}"

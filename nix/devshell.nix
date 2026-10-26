@@ -12,7 +12,7 @@
   sdkRoot = "${sdk}/libexec/android-sdk";
 in
   pkgs.mkShell {
-    packages = [pkgs.jdk21 pkgs.android-tools pkgs.go pkgs.gopls pkgs.alejandra];
+    packages = [pkgs.jdk21 pkgs.android-tools pkgs.go pkgs.gopls pkgs.alejandra pkgs.e2fsprogs];
     ANDROID_HOME = sdkRoot;
     ANDROID_SDK_ROOT = sdkRoot;
     JAVA_HOME = pkgs.jdk21.home;
