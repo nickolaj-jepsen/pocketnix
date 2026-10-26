@@ -27,6 +27,20 @@ type File struct {
 	// empty picks the login shell's default.
 	History string        `json:"history,omitempty"`
 	Updates UpdatesConfig `json:"updates"`
+	// Share is where Android's share sheet delivers to.
+	Share ShareConfig `json:"share"`
+	// FilesRoot is the directory the app's file provider exposes; empty is
+	// the session user's home.
+	FilesRoot string `json:"filesRoot,omitempty"`
+}
+
+// ShareConfig delivers shared text and files: into Directory, then (when
+// set) running Command as the session user with the delivered file as its
+// argument.
+type ShareConfig struct {
+	// Directory is absolute, or relative to the session user's home; empty is "Inbox".
+	Directory string `json:"directory,omitempty"`
+	Command   string `json:"command,omitempty"`
 }
 
 // UpdatesConfig names where updated systems come from (design.md, Updates

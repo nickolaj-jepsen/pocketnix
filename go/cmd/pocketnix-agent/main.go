@@ -31,6 +31,7 @@ func main() {
 	config := flag.String("config", "/etc/pocketnix/agent.json", "config file, as the NixOS module writes it")
 	noPower := flag.Bool("no-power", false, "refuse the app's poweroff and reboot requests (desktop development)")
 	flag.Var(&listen, "listen", "address to serve (vsock:<port>, tcp:<host>:<port>, unix:<path>); repeatable")
+	guestSocket := flag.String("guest-socket", "", "unix socket for guest programs (pocketnix-guest), e.g. "+protocol.GuestSocket+"; empty serves none")
 	flag.Parse()
 	if len(listen) == 0 {
 		listen = listFlag{"vsock:" + strconv.Itoa(protocol.ControlPort)}
@@ -59,6 +60,13 @@ func main() {
 	}()
 
 	go srv.Updates.Periodic(context.Background())
+	if *guestSocket != "" {
+		l, err := agent.ListenGuest(*guestSocket)
+		if err != nil {
+			log.Fatalf("guest socket: %v", err)
+		}
+		go func() { log.Fatalf("guest socket: %v", srv.ServeGuest(l)) }()
+	}
 	for _, addr := range listen {
 		go serve(srv, addr)
 	}

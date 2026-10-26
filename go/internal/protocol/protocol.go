@@ -63,6 +63,7 @@ type Request struct {
 	Type       string `json:"type"`
 	Generation int    `json:"generation,omitempty"`
 	Limit      int    `json:"limit,omitempty"`
+	Text       string `json:"text,omitempty"`
 }
 
 // Envelope is the part of every JSON message a receiver reads first.
@@ -87,8 +88,16 @@ type Hello struct {
 	// Forward: the guest TCP port on 127.0.0.1.
 	Port int `json:"port,omitempty"`
 
-	// Agent's reply to a font stream: the byte count that follows.
+	// The byte count that follows: the agent's on a font or file read, the
+	// app's on a share; on a file list, the entry count.
 	Size int64 `json:"size,omitempty"`
+
+	// Share and file streams (integrations.go).
+	Op   string    `json:"op,omitempty"`
+	Path string    `json:"path,omitempty"`
+	Name string    `json:"name,omitempty"`
+	Dir  bool      `json:"dir,omitempty"`
+	File *FileInfo `json:"file,omitempty"`
 }
 
 // Error rejects a Hello, or reports a failed control request.

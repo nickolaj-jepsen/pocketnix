@@ -1,0 +1,202 @@
+package agent
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"net"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+
+	"github.com/nickolaj-jepsen/pocketnix/go/internal/protocol"
+)
+
+// maxClipboard bounds clipboard text both ways; Android's binder can't carry much more.
+const maxClipboard = 512 << 10
+
+// ServeGuest serves guest programs on l, a unix socket inside the guest:
+// notifications, opening URLs and files, and the clipboard, all through the
+// app. Only root and the session user may use it.
+func (s *Server) ServeGuest(l net.Listener) error {
+	for {
+		c, err := l.Accept()
+		if err != nil {
+			return err
+		}
+		go s.handleGuest(c)
+	}
+}
+
+func (s *Server) handleGuest(c net.Conn) {
+	defer c.Close()
+	if err := s.guestAllowed(c); err != nil {
+		protocol.WriteJSON(c, protocol.GuestReply{Error: err.Error()})
+		return
+	}
+	for {
+		line, err := protocol.ReadLine(c)
+		if err != nil {
+			return
+		}
+		var req protocol.GuestRequest
+		var reply protocol.GuestReply
+		if err := json.Unmarshal(line, &req); err != nil {
+			reply.Error = "bad request: " + err.Error()
+		} else if text, err := s.guest(req); err != nil {
+			reply.Error = err.Error()
+		} else {
+			reply.Text = text
+		}
+		if protocol.WriteJSON(c, reply) != nil {
+			return
+		}
+	}
+}
+
+// guestAllowed admits root and the session user, by the socket's peer credentials.
+func (s *Server) guestAllowed(c net.Conn) error {
+	uc, ok := c.(*net.UnixConn)
+	if !ok {
+		return nil // tests over other transports
+	}
+	raw, err := uc.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var cred *syscall.Ucred
+	var credErr error
+	raw.Control(func(fd uintptr) {
+		cred, credErr = syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
+	})
+	if credErr != nil {
+		return credErr
+	}
+	if cred.Uid == 0 || int(cred.Uid) == os.Getuid() {
+		return nil
+	}
+	if u, err := sessionUser(s.config().User); err == nil && int(cred.Uid) == u.uid {
+		return nil
+	}
+	return fmt.Errorf("uid %d may not use the pocketnix agent", cred.Uid)
+}
+
+func (s *Server) guest(req protocol.GuestRequest) (string, error) {
+	switch req.Type {
+	case protocol.GuestNotify:
+		if req.Title == "" && req.Body == "" {
+			return "", errors.New("an empty notification")
+		}
+		return "", s.event(protocol.Event{Type: protocol.TypeNotify, Title: req.Title, Body: req.Body})
+	case protocol.GuestOpen:
+		if req.URL != "" {
+			u, err := url.Parse(req.URL)
+			if err != nil || u.Scheme == "" {
+				return "", fmt.Errorf("%q is not a URL", req.URL)
+			}
+			return "", s.event(protocol.Event{Type: protocol.TypeOpen, URL: req.URL})
+		}
+		rel, err := s.underFilesRoot(req.Path)
+		if err != nil {
+			return "", err
+		}
+		return "", s.event(protocol.Event{Type: protocol.TypeOpen, Path: rel})
+	case protocol.GuestCopy:
+		if len(req.Text) > maxClipboard {
+			return "", fmt.Errorf("clipboard text over %d KiB", maxClipboard>>10)
+		}
+		s.setClipboard(req.Text)
+		return "", s.event(protocol.Event{Type: protocol.TypeGuestClipboard, Text: req.Text})
+	case protocol.GuestPaste:
+		return s.clipboardText(), nil
+	default:
+		return "", fmt.Errorf("unknown request %q", req.Type)
+	}
+}
+
+// event pushes ev to every control stream, failing when the app isn't connected.
+func (s *Server) event(ev protocol.Event) error {
+	s.mu.Lock()
+	n := len(s.controls)
+	s.mu.Unlock()
+	if n == 0 {
+		return errors.New("the pocketnix app isn't connected")
+	}
+	s.push(ev)
+	return nil
+}
+
+func (s *Server) setClipboard(text string) {
+	s.mu.Lock()
+	s.clipboard = text
+	s.mu.Unlock()
+}
+
+func (s *Server) clipboardText() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.clipboard
+}
+
+// filesRoot is the file provider's root directory.
+func (s *Server) filesRoot() (string, error) {
+	cfg := s.config()
+	if cfg.FilesRoot != "" {
+		return cfg.FilesRoot, nil
+	}
+	u, err := sessionUser(cfg.User)
+	if err != nil {
+		return "", err
+	}
+	return u.home, nil
+}
+
+// underFilesRoot turns an absolute guest path into one relative to the file
+// provider's root, which is how the app names files.
+func (s *Server) underFilesRoot(path string) (string, error) {
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("%q is not an absolute path", path)
+	}
+	root, err := s.filesRoot()
+	if err != nil {
+		return "", err
+	}
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(realRoot, real)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+		return "", fmt.Errorf("%s is outside %s, which is all the app can open (pocketnix.guest.files.root)", path, root)
+	}
+	if rel == "." {
+		rel = ""
+	}
+	return filepath.ToSlash(rel), nil
+}
+
+// ListenGuest opens the guest socket at path, usable by everyone: the agent
+// checks each peer's credentials itself.
+func ListenGuest(path string) (net.Listener, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	os.Remove(path)
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(path, 0o666); err != nil {
+		l.Close()
+		return nil, err
+	}
+	log.Printf("guest socket on %s", path)
+	return l, nil
+}

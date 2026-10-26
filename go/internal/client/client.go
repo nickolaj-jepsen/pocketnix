@@ -4,6 +4,7 @@
 package client
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,6 +52,7 @@ type Control struct {
 
 	configs chan protocol.Config
 	replies chan reply
+	events  chan protocol.Event
 	wmu     sync.Mutex
 
 	umu     sync.Mutex
@@ -73,6 +75,7 @@ func (c *Client) Control() (*Control, error) {
 	ctl := &Control{
 		conn: conn, Agent: hello.Agent,
 		configs: make(chan protocol.Config, 16), replies: make(chan reply, 4), uchange: make(chan struct{}),
+		events: make(chan protocol.Event, 64),
 	}
 	go ctl.read()
 	return ctl, nil
@@ -81,6 +84,7 @@ func (c *Client) Control() (*Control, error) {
 func (c *Control) read() {
 	defer close(c.configs)
 	defer close(c.replies)
+	defer close(c.events)
 	defer func() {
 		c.umu.Lock()
 		close(c.uchange)
@@ -113,6 +117,14 @@ func (c *Control) read() {
 				close(c.uchange)
 				c.uchange = make(chan struct{})
 				c.umu.Unlock()
+			}
+		case protocol.TypeNotify, protocol.TypeOpen, protocol.TypeGuestClipboard:
+			var ev protocol.Event
+			if json.Unmarshal(line, &ev) == nil {
+				select {
+				case c.events <- ev:
+				default: // nobody reads them
+				}
 			}
 		case protocol.TypeError:
 			c.replies <- reply{err: &protocol.RemoteError{Message: env.Message}}
@@ -231,7 +243,125 @@ func (c *Control) History(limit int) ([]string, error) {
 	return h.Entries, nil
 }
 
+// Events delivers the agent's notify, open and guest-clipboard pushes (the
+// last 64 unread); closed when the stream ends.
+func (c *Control) Events() <-chan protocol.Event { return c.events }
+
+// SetClipboard hands the agent Android's clipboard.
+func (c *Control) SetClipboard(text string) error {
+	_, err := c.request(protocol.Request{Type: protocol.TypeSetClipboard, Text: text})
+	return err
+}
+
+// ShareText delivers text as the share sheet does, returning the file it landed in.
+func (c *Control) ShareText(text string) (string, error) {
+	line, err := c.request(protocol.Request{Type: protocol.TypeShareText, Text: text})
+	if err != nil {
+		return "", err
+	}
+	var d protocol.Done
+	err = json.Unmarshal(line, &d)
+	return d.Path, err
+}
+
 func (c *Control) Close() error { return c.conn.Close() }
+
+// File runs a file-provider operation that has no data: stat, create,
+// delete, rename. It returns the agent's Hello, whose File describes the result.
+func (c *Client) File(h protocol.Hello) (protocol.Hello, error) {
+	h.Stream = protocol.StreamFile
+	conn, reply, err := c.open(h)
+	if err != nil {
+		return reply, err
+	}
+	conn.Close()
+	return reply, nil
+}
+
+// List lists a directory under the file provider's root.
+func (c *Client) List(path string) ([]protocol.FileInfo, error) {
+	conn, reply, err := c.open(protocol.Hello{Stream: protocol.StreamFile, Op: protocol.FileList, Path: path})
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	out := make([]protocol.FileInfo, 0, reply.Size)
+	for range reply.Size {
+		line, err := protocol.ReadLine(conn)
+		if err != nil {
+			return nil, err
+		}
+		var fi protocol.FileInfo
+		if err := json.Unmarshal(line, &fi); err != nil {
+			return nil, err
+		}
+		out = append(out, fi)
+	}
+	return out, nil
+}
+
+// ReadFile reads a file under the file provider's root.
+func (c *Client) ReadFile(path string) ([]byte, error) {
+	conn, reply, err := c.open(protocol.Hello{Stream: protocol.StreamFile, Op: protocol.FileRead, Path: path})
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	b := make([]byte, reply.Size)
+	_, err = io.ReadFull(conn, b)
+	return b, err
+}
+
+// WriteFile replaces a file under the file provider's root with r's bytes.
+func (c *Client) WriteFile(path string, r io.Reader) error {
+	conn, _, err := c.open(protocol.Hello{Stream: protocol.StreamFile, Op: protocol.FileWrite, Path: path})
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	return sendAndAwaitDone(conn, r, nil)
+}
+
+// Share sends a file as the share sheet does, returning where it landed.
+func (c *Client) Share(name string, data []byte) (string, error) {
+	conn, _, err := c.open(protocol.Hello{Stream: protocol.StreamShare, Name: name, Size: int64(len(data))})
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	var d protocol.Done
+	err = sendAndAwaitDone(conn, bytes.NewReader(data), &d)
+	return d.Path, err
+}
+
+// sendAndAwaitDone sends r, half-closes, and reads the agent's Done or Error.
+func sendAndAwaitDone(conn net.Conn, r io.Reader, done *protocol.Done) error {
+	if _, err := io.Copy(conn, r); err != nil {
+		return err
+	}
+	if cw, ok := conn.(interface{ CloseWrite() error }); ok {
+		cw.CloseWrite()
+	}
+	line, err := protocol.ReadLine(conn)
+	if err != nil {
+		return err
+	}
+	var env struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+		Path    string `json:"path"`
+	}
+	if err := json.Unmarshal(line, &env); err != nil {
+		return err
+	}
+	if env.Type == protocol.TypeError {
+		return &protocol.RemoteError{Message: env.Message}
+	}
+	if done != nil {
+		*done = protocol.Done{Type: env.Type, Path: env.Path}
+	}
+	return nil
+}
 
 // PTY is an open terminal session.
 type PTY struct {

@@ -34,6 +34,8 @@ type Server struct {
 	path     string
 	cfg      *File
 	controls map[*lockedWriter]struct{}
+	// clipboard is the latest of Android's clipboard and a guest copy.
+	clipboard string
 }
 
 // New loads the config file at path.
@@ -133,6 +135,10 @@ func (s *Server) handle(c net.Conn) {
 		s.serveForward(c, hello.Port)
 	case protocol.StreamFont:
 		s.serveFont(c)
+	case protocol.StreamFile:
+		s.serveFile(c, hello)
+	case protocol.StreamShare:
+		s.serveShare(c, hello)
 	default:
 		reject(c, fmt.Sprintf("unknown stream %q", hello.Stream))
 	}
@@ -216,6 +222,15 @@ func (s *Server) request(req protocol.Request) (any, error) {
 	case protocol.TypeHistory:
 		entries, err := history(s.config(), req.Limit)
 		return protocol.History{Type: protocol.TypeHistory, Entries: entries}, err
+	case protocol.TypeSetClipboard:
+		if len(req.Text) > maxClipboard {
+			return nil, fmt.Errorf("clipboard text over %d KiB", maxClipboard>>10)
+		}
+		s.setClipboard(req.Text)
+		return ack, nil
+	case protocol.TypeShareText:
+		p, err := s.shareText(req.Text)
+		return protocol.Done{Type: protocol.TypeShareText, Path: p}, err
 	default:
 		// Answered, so a newer app's later requests still pair with their replies.
 		return nil, fmt.Errorf("unknown request %q", req.Type)

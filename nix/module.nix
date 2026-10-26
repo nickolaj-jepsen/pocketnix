@@ -64,9 +64,19 @@
         }
         // lib.optionalAttrs (upd.published.url != null) {published = {inherit (upd.published) url;};}
         // lib.optionalAttrs (upd.checkInterval != null) {inherit (upd) checkInterval;};
+      share = lib.filterAttrs (_: v: v != null) {inherit (cfg.share) directory command;};
     }
-    // lib.optionalAttrs (cfg.terminal.historyFile != null) {history = cfg.terminal.historyFile;};
+    // lib.optionalAttrs (cfg.terminal.historyFile != null) {history = cfg.terminal.historyFile;}
+    // lib.optionalAttrs (cfg.files.root != null) {filesRoot = cfg.files.root;};
   upd = cfg.updates;
+
+  # Only the guest command on PATH, not the agent or the host CLI.
+  guestTools = pkgs.runCommand "pocketnix-guest-tools" {} ''
+    mkdir -p $out/bin
+    ln -s ${lib.getExe' cfg.package "pocketnix-guest"} $out/bin/pocketnix-guest
+    ${lib.optionalString cfg.integrations.xdgOpen "ln -s ${lib.getExe' cfg.package "pocketnix-guest"} $out/bin/xdg-open"}
+    ${lib.optionalString cfg.integrations.notifySend "ln -s ${lib.getExe' cfg.package "pocketnix-guest"} $out/bin/notify-send"}
+  '';
   agentConfigFile = (pkgs.formats.json {}).generate "pocketnix-agent.json" agentConfig;
 
   # Mirrors systemd-boot-builder.py's copy_from_file naming, so the first
@@ -370,6 +380,41 @@ in {
       };
     };
 
+    integrations = {
+      xdgOpen = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Put an `xdg-open` on PATH (and default `$BROWSER` to it) that opens URLs, and files under `files.root`, on Android.";
+      };
+      notifySend = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Put a `notify-send` on PATH that posts Android notifications. `pocketnix-guest` is there either way.";
+      };
+    };
+
+    share = {
+      directory = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "Downloads";
+        description = "Where Android's share sheet drops text and files: absolute, or relative to the user's home. Null is `~/Inbox`.";
+      };
+      command = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "notify-send shared";
+        description = "Run (by /bin/sh, as `pocketnix.guest.user`) on each delivered file, its path the last argument.";
+      };
+    };
+
+    files.root = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "/home/alice/shared";
+      description = "Directory the Files app and Android's file pickers see, read-write. Null is the user's home.";
+    };
+
     avf.enable = mkOption {
       type = types.bool;
       default = true;
@@ -398,6 +443,9 @@ in {
 
       boot.kernelModules = ["vmw_vsock_virtio_transport"];
       environment.etc."pocketnix/agent.json".source = agentConfigFile;
+      # Above xdg-utils and libnotify, which a desktop-ish config may pull in.
+      environment.systemPackages = [(lib.hiPrio guestTools)];
+      environment.sessionVariables.BROWSER = mkIf cfg.integrations.xdgOpen (mkDefault "xdg-open");
 
       systemd.services.pocketnix-agent = {
         description = "pocketnix guest agent";
@@ -411,7 +459,9 @@ in {
         # Updates: ssh to the build host, nix to fetch, systemd-run to switch.
         path = [config.nix.package config.programs.ssh.package config.systemd.package];
         serviceConfig = {
-          ExecStart = lib.escapeShellArgs ([(lib.getExe' cfg.package "pocketnix-agent")] ++ lib.concatMap (a: ["--listen" a]) cfg.agent.listen);
+          ExecStart = lib.escapeShellArgs ([(lib.getExe' cfg.package "pocketnix-agent") "--guest-socket" "/run/pocketnix/guest.sock"] ++ lib.concatMap (a: ["--listen" a]) cfg.agent.listen);
+          RuntimeDirectory = "pocketnix";
+          RuntimeDirectoryMode = "0755";
           ExecReload = "${lib.getExe' pkgs.coreutils "kill"} -HUP $MAINPID";
           Restart = "always";
           RestartSec = 1;

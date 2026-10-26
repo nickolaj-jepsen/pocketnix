@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -38,6 +39,11 @@ commands:
   update                 check, fetch and switch to a newer system
   switch-generation <n>  switch to generation <n> (a rollback, or forward again)
   history [limit]        print the user's shell history, newest first
+  events                 print the guest's notify/open/clipboard pushes, one JSON per line
+  set-clipboard <text>   hand the agent a clipboard, as the app does on focus
+  share <file>           share a file, as Android's share sheet does
+  share-text <text>      share text
+  ls [path] | cat <path> | put <path>   the file provider (put reads stdin)
 `
 
 func runAgent(args []string) error {
@@ -91,6 +97,67 @@ func runAgent(args []string) error {
 		}
 		defer ctl.Close()
 		return agentUpdates(ctl, cmd, rest)
+	case "events", "set-clipboard", "share-text":
+		ctl, err := c.Control()
+		if err != nil {
+			return err
+		}
+		defer ctl.Close()
+		switch cmd {
+		case "events":
+			enc := json.NewEncoder(os.Stdout)
+			for ev := range ctl.Events() {
+				if err := enc.Encode(ev); err != nil {
+					return err
+				}
+			}
+			return errors.New("control stream closed")
+		case "set-clipboard":
+			return ctl.SetClipboard(strings.Join(rest, " "))
+		default:
+			p, err := ctl.ShareText(strings.Join(rest, " "))
+			if err == nil {
+				fmt.Println(p)
+			}
+			return err
+		}
+	case "share":
+		if len(rest) != 1 {
+			return errUsage
+		}
+		b, err := os.ReadFile(rest[0])
+		if err != nil {
+			return err
+		}
+		p, err := c.Share(filepath.Base(rest[0]), b)
+		if err == nil {
+			fmt.Println(p)
+		}
+		return err
+	case "ls":
+		entries, err := c.List(strings.Join(rest, ""))
+		if err != nil {
+			return err
+		}
+		enc := json.NewEncoder(os.Stdout)
+		for _, e := range entries {
+			enc.Encode(e)
+		}
+		return nil
+	case "cat":
+		if len(rest) != 1 {
+			return errUsage
+		}
+		b, err := c.ReadFile(rest[0])
+		if err == nil {
+			_, err = os.Stdout.Write(b)
+		}
+		return err
+	case "put":
+		if len(rest) != 1 {
+			return errUsage
+		}
+		return c.WriteFile(rest[0], os.Stdin)
 	case "exec":
 		return agentExec(c, rest)
 	case "forward":

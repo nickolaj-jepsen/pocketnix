@@ -162,6 +162,33 @@ in
           out = client.succeed(f"{A} history").splitlines()
           assert out == ["ls", "uname -a"], out
 
+      with subtest("guest programs notify, open and copy through the app"):
+          client.succeed(f"systemd-run --unit=events sh -c '{A} events > /tmp/events'")
+          # Refused until the events stream is connected.
+          phone.wait_until_succeeds("runuser -u nixos -- notify-send -u low build 'all done'", timeout=30)
+          client.wait_until_succeeds("grep -q '\"title\":\"build\",\"body\":\"all done\"' /tmp/events", timeout=30)
+          phone.succeed("runuser -u nixos -- xdg-open https://nixos.org")
+          client.wait_until_succeeds("grep -q '\"url\":\"https://nixos.org\"' /tmp/events", timeout=30)
+          phone.succeed("runuser -u nixos -- sh -c 'echo -n copied | pocketnix-guest copy'")
+          client.wait_until_succeeds("grep -q '\"type\":\"guest-clipboard\",\"text\":\"copied\"' /tmp/events", timeout=30)
+          client.succeed(f"{A} set-clipboard from-android")
+          assert phone.succeed("runuser -u nixos -- pocketnix-guest paste") == "from-android"
+          # Only root and the session user may use the guest socket.
+          phone.fail("runuser -u nobody -- ${nodes.phone.pocketnix.guest.package}/bin/pocketnix-guest paste")
+
+      with subtest("shares and the file provider reach the user's files"):
+          client.succeed("echo picture > /tmp/pic.jpg")
+          out = client.succeed(f"{A} share /tmp/pic.jpg").strip()
+          assert out == "/home/nixos/Inbox/pic.jpg", out
+          phone.succeed("test \"$(stat -c %U /home/nixos/Inbox/pic.jpg)\" = nixos")
+          client.succeed(f"echo doc | {A} put notes.txt")
+          phone.succeed("grep -qx doc /home/nixos/notes.txt")
+          phone.succeed("test \"$(stat -c %U /home/nixos/notes.txt)\" = nixos")
+          assert client.succeed(f"{A} cat Inbox/pic.jpg") == "picture\n"
+          names = [json.loads(l)["name"] for l in client.succeed(f"{A} ls").splitlines()]
+          assert "notes.txt" in names and "Inbox" in names, names
+          client.fail(f"{A} cat ../../etc/shadow")
+
       with subtest("an update from the build host arrives over ssh and switches"):
           # Test VMs boot without a system profile; a real guest has one from its first boot.
           phone.succeed("nix-env -p /nix/var/nix/profiles/system --set $(readlink -f /run/current-system)")
