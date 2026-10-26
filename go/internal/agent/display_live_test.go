@@ -3,6 +3,7 @@ package agent
 import (
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -92,4 +93,34 @@ func TestDisplayStreamLive(t *testing.T) {
 		}
 	}
 	t.Logf("first frame: %d bands in %v", bands, time.Since(start))
+
+	// Throughput: what the capture and the wire actually deliver, which is
+	// what bounds the app's frame rate.
+	window := 3 * time.Second
+	if v := os.Getenv("POCKETNIX_DISPLAY_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			window = time.Duration(n) * time.Second
+		}
+	}
+	var frames, bytes int
+	deadline := time.Now().Add(window)
+	last := covered
+	for time.Now().Before(deadline) {
+		conn.SetReadDeadline(deadline)
+		typ, payload, err := protocol.ReadFrame(conn)
+		if err != nil {
+			break
+		}
+		if typ != protocol.FrameDisplayBand {
+			continue
+		}
+		bytes += len(payload)
+		y, rows, _, _, _ := 0, 0, 0, 0, error(nil)
+		_ = y
+		_ = rows
+		last = nil
+		frames++
+	}
+	t.Logf("%v: %d bands, %d KiB (%.0f KiB/s)", window, frames, bytes/1024, float64(bytes)/1024/window.Seconds())
+	_ = last
 }

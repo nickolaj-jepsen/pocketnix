@@ -88,7 +88,10 @@ private class DisplayRenderer(private val view: SurfaceView) : DisplayStream.Sin
 
     private val handler = Handler(Looper.getMainLooper())
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
-    private var frame: ByteBuffer? = null
+    // Bands are written on the reader thread while the main thread copies the
+    // frame into the bitmap, so both sides hold this.
+    private val lock = Any()
+    private var frame: ByteArray? = null
     private var bitmap: Bitmap? = null
     private var width = 0
     private var height = 0
@@ -109,7 +112,7 @@ private class DisplayRenderer(private val view: SurfaceView) : DisplayStream.Sin
             if (released || (this.width == width && this.height == height)) return@post
             this.width = width
             this.height = height
-            frame = ByteBuffer.allocate(width * height * 4)
+            frame = ByteArray(width * height * 4)
             bitmap?.recycle()
             bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             status("")
@@ -121,11 +124,10 @@ private class DisplayRenderer(private val view: SurfaceView) : DisplayStream.Sin
     }
 
     override fun onBand(y: Int, height: Int, stride: Int, pixels: ByteArray) {
-        val buf = frame ?: return
-        if (stride != this.width * 4 || y + height > this.height) return
-        for (row in 0 until height) {
-            buf.position((y + row) * stride)
-            buf.put(pixels, row * stride, stride)
+        synchronized(lock) {
+            val buf = frame ?: return
+            if (stride != width * 4 || y + height > this.height) return
+            for (row in 0 until height) System.arraycopy(pixels, row * stride, buf, (y + row) * stride, stride)
         }
         handler.post { if (!released) scheduleDraw() }
     }
@@ -138,22 +140,22 @@ private class DisplayRenderer(private val view: SurfaceView) : DisplayStream.Sin
     }
 
     private fun drawFrame() {
-        val bmp = bitmap ?: return
-        val buf = frame ?: return
         val canvas = runCatching { view.holder.lockCanvas() }.getOrNull() ?: return
         try {
-            buf.position(0)
-            buf.limit(bmp.byteCount)
-            bmp.copyPixelsFromBuffer(buf)
-            val dst = fit(canvas.width, canvas.height)
-            if (dst != null) canvas.drawBitmap(bmp, null, dst, paint)
+            synchronized(lock) {
+                val bmp = bitmap ?: return
+                bmp.copyPixelsFromBuffer(ByteBuffer.wrap(frame ?: return))
+                val dst = fit(canvas.width, canvas.height)
+                if (dst != null) canvas.drawBitmap(bmp, null, dst, paint)
+            }
         } finally {
             view.holder.unlockCanvasAndPost(canvas)
         }
         lastDraw = SystemClock.uptimeMillis()
         frames++
-        if (lastDraw - lastStats >= 1000) {
-            size("${width}x$height · ${frames * 1000 / (lastDraw - lastStats)} fps")
+        val elapsed = lastDraw - lastStats
+        if (elapsed >= 1000) {
+            size("${width}x$height · ${"%.1f".format(frames * 1000f / elapsed)} fps")
             frames = 0
             lastStats = lastDraw
         }
@@ -178,9 +180,11 @@ private class DisplayRenderer(private val view: SurfaceView) : DisplayStream.Sin
     fun release() {
         released = true
         handler.removeCallbacks(draw)
-        bitmap?.recycle()
-        bitmap = null
-        frame = null
+        synchronized(lock) {
+            bitmap?.recycle()
+            bitmap = null
+            frame = null
+        }
     }
 
     private companion object {
