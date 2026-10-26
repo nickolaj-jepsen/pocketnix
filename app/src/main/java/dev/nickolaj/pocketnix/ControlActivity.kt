@@ -26,6 +26,10 @@ class ControlActivity : Activity() {
             // Debug builds: drive tabs from adb while the phone stays locked.
             ACTION_TAB -> if (BuildConfig.DEBUG) vm.debugOpenTab(intent.getStringExtra(EXTRA_PROFILE), intent.getStringExtra(EXTRA_INPUT))
             ACTION_DUMP -> if (BuildConfig.DEBUG) vm.debugDumpTabs()
+            ACTION_DISPLAY -> if (BuildConfig.DEBUG) {
+                vm.setDisplayVisible(intent.getBooleanExtra(EXTRA_ON, true))
+                startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
         }
         finish()
     }
@@ -58,6 +62,8 @@ class ControlActivity : Activity() {
         const val ACTION_STOP = "dev.nickolaj.pocketnix.action.STOP"
         const val ACTION_TAB = "dev.nickolaj.pocketnix.action.DEBUG_TAB"
         const val ACTION_DUMP = "dev.nickolaj.pocketnix.action.DEBUG_DUMP"
+        const val ACTION_DISPLAY = "dev.nickolaj.pocketnix.action.DEBUG_DISPLAY"
+        const val EXTRA_ON = "on"
         /** START opens the app afterwards unless false (the Quick Settings tile). */
         const val EXTRA_OPEN = "open"
         const val EXTRA_NETWORK = "network"

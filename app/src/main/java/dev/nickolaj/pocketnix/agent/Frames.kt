@@ -18,6 +18,10 @@ object Frames {
     const val FILE_COMMIT: Int = 0x13
     const val FILE_OK: Int = 0x20
     const val FILE_ERROR: Int = 0x21
+    // Display streams (go/internal/protocol display.go).
+    const val DISPLAY_GEOMETRY: Int = 3
+    const val DISPLAY_BAND: Int = 4
+    const val DISPLAY_RGBA: Int = 1
     const val MAX_PAYLOAD = 1 shl 20
 
     class Frame(val type: Int, val payload: ByteArray)
@@ -67,6 +71,36 @@ object Frames {
     fun exitStatus(payload: ByteArray): Int {
         if (payload.size != 4) throw IOException("exit payload ${payload.size} bytes")
         return ByteBuffer.wrap(payload).int
+    }
+
+    /** The frame size a display stream starts with. */
+    class Geometry(val width: Int, val height: Int, val format: Int)
+
+    fun geometry(payload: ByteArray): Geometry {
+        if (payload.size != 5) throw IOException("geometry payload ${payload.size} bytes")
+        val b = ByteBuffer.wrap(payload)
+        val width = b.short.toInt() and 0xffff
+        val height = b.short.toInt() and 0xffff
+        val format = payload[4].toInt() and 0xff
+        if (width == 0 || height == 0) throw IOException("geometry ${width}x$height")
+        if (format != DISPLAY_RGBA) throw IOException("display format $format")
+        return Geometry(width, height, format)
+    }
+
+    /** Rows of a display frame that changed, RGBA in ARGB_8888 byte order. */
+    class Band(val y: Int, val height: Int, val stride: Int, val pixels: ByteArray)
+
+    fun band(payload: ByteArray): Band {
+        if (payload.size < 8) throw IOException("band payload ${payload.size} bytes")
+        val b = ByteBuffer.wrap(payload)
+        val y = b.short.toInt() and 0xffff
+        val height = b.short.toInt() and 0xffff
+        val stride = b.int
+        val pixels = payload.copyOfRange(8, payload.size)
+        if (height == 0 || stride <= 0 || pixels.size != height * stride) {
+            throw IOException("band at $y: ${pixels.size} bytes for $height rows of $stride")
+        }
+        return Band(y, height, stride, pixels)
     }
 }
 

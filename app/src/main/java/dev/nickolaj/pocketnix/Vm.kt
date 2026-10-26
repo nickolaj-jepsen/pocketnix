@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.Typeface
 import android.util.Log
 import dev.nickolaj.pocketnix.agent.ControlChannel
+import dev.nickolaj.pocketnix.agent.DisplayStream
 import dev.nickolaj.pocketnix.agent.FontCache
 import dev.nickolaj.pocketnix.agent.GuestConfig
 import dev.nickolaj.pocketnix.agent.GuestFiles
@@ -297,6 +298,18 @@ class Vm(private val app: Context) {
         val name = profile ?: cfg?.defaultProfile?.takeIf { it.isNotEmpty() } ?: "shell"
         tabs.open(name, PtyBackend(dialer, name, appVersion))
     }
+
+    /** Debug builds: shows the guest compositor in place of the terminal. */
+    private val _displayVisible = MutableStateFlow(false)
+    val displayVisible: StateFlow<Boolean> = _displayVisible.asStateFlow()
+
+    fun setDisplayVisible(on: Boolean) {
+        _displayVisible.value = on
+    }
+
+    /** A display stream into [sink], or null while no agent is reachable. */
+    fun startDisplay(sink: DisplayStream.Sink): DisplayStream? =
+        _engine.value.dialer?.let { DisplayStream(it, appVersion, sink) }
 
     val config: StateFlow<GuestConfig?> get() = control.config
 

@@ -76,6 +76,7 @@ fun MainScreen(vm: Vm) {
     val forwardErrors by vm.forwardErrors.collectAsState()
     val updates by vm.updates.collectAsState()
     val agentLate by vm.agentLate.collectAsState()
+    val displayVisible by vm.displayVisible.collectAsState()
     val serviceRefused by vm.serviceRefused.collectAsState()
     var showSettings by remember { mutableStateOf(false) }
     var showUpdates by remember { mutableStateOf(false) }
@@ -201,19 +202,23 @@ fun MainScreen(vm: Vm) {
             },
             onOpen = vm::openTab,
         )
-        AndroidView(
-            factory = { controller.create().also { controller.show(vm.tabs.current()) } },
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-        )
-        modifierRevision.let {}
-        ExtraKeysBar(
-            rows = config?.extraKeys?.takeIf { it.isNotEmpty() } ?: defaultExtraKeys,
-            modifiers = controller.modifiers,
-            revision = modifierRevision,
-            foreground = foreground,
-            onKey = controller::press,
-        )
-        if (composerOpen) Composer(controller, foreground)
+        if (displayVisible) {
+            DisplayPane(vm, Modifier.weight(1f).fillMaxWidth())
+        } else {
+            AndroidView(
+                factory = { controller.create().also { controller.show(vm.tabs.current()) } },
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            )
+            modifierRevision.let {}
+            ExtraKeysBar(
+                rows = config?.extraKeys?.takeIf { it.isNotEmpty() } ?: defaultExtraKeys,
+                modifiers = controller.modifiers,
+                revision = modifierRevision,
+                foreground = foreground,
+                onKey = controller::press,
+            )
+            if (composerOpen) Composer(controller, foreground)
+        }
     }
 }
 
