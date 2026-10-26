@@ -66,6 +66,9 @@ class ControlChannel(
     @Volatile private var pending: Pending? = null
     private var nextId = 0
 
+    /** Request types this stream's agent answered as unknown (it's older): not sent to it again. */
+    private val unsupported: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
     private fun Pending.answers(msg: JSONObject): Boolean = !msg.has("id") || msg.optInt("id") == id
 
     fun start(dialer: AgentDialer) {
@@ -81,6 +84,7 @@ class ControlChannel(
                     // stop() ran while this dialed: the stream is no one's.
                     if (!isActive) break
                     stream = s
+                    unsupported.clear()
                     _link.value = Link.Up(hello.optString("agent"))
                     Log.i(TAG, "control stream up (agent ${hello.optString("agent")})")
                     backoff = MIN_BACKOFF_MS
@@ -178,6 +182,7 @@ class ControlChannel(
     suspend fun call(req: JSONObject, timeoutMs: Long = 5_000): JSONObject = requests.withLock {
         val s = stream ?: throw IOException("the agent isn't connected")
         val type = req.getString("type")
+        if (type in unsupported) throw AgentException("unknown request \"$type\" (an older agent)")
         val answer = CompletableDeferred<Result<JSONObject>>()
         val id = ++nextId
         req.put("id", id)
@@ -187,8 +192,9 @@ class ControlChannel(
                 runCatching { synchronized(s) { Protocol.writeJson(s.output, req) } }
                     .onFailure { answer.complete(Result.failure(it)) }
             }
-            withTimeoutOrNull(timeoutMs) { answer.await() }?.getOrThrow()
-                ?: throw IOException("$type: no answer in ${timeoutMs / 1000}s")
+            val result = withTimeoutOrNull(timeoutMs) { answer.await() } ?: throw IOException("$type: no answer in ${timeoutMs / 1000}s")
+            if (result.exceptionOrNull()?.message.orEmpty().startsWith("unknown request")) unsupported += type
+            result.getOrThrow()
         } finally {
             pending = null
         }

@@ -1,5 +1,6 @@
 package dev.nickolaj.pocketnix
 
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.graphics.Typeface
@@ -12,6 +13,7 @@ import dev.nickolaj.pocketnix.agent.GuestFiles
 import dev.nickolaj.pocketnix.agent.PtyBackend
 import dev.nickolaj.pocketnix.files.GuestDocumentsProvider
 import dev.nickolaj.pocketnix.files.PendingUploads
+import dev.nickolaj.pocketnix.files.Transfers
 import dev.nickolaj.pocketnix.agent.Updates
 import dev.nickolaj.pocketnix.engine.AvfEngine
 import dev.nickolaj.pocketnix.engine.BootMenu
@@ -45,6 +47,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
@@ -95,13 +98,15 @@ class Vm(private val app: Context) {
     val updates: StateFlow<Updates?> get() = control.updates
 
     private val bridge = GuestBridge(app) { control.config.value?.hostname }
-    private var lastClipboardSent: String? = null
+    val transfers = Transfers(app, scope, control, bridge, ::files) { control.config.value?.hostname }
+    private var lastClipboardSent: Pair<String, List<String>>? = null
 
     init {
         tabs.alerts = TabAlerts(app) { control.config.value?.hostname }
         scope.launch {
             control.events.collect { ev ->
-                runCatching { bridge.onEvent(ev, tabs.visible) }.onFailure { Log.e(TAG, "agent push ${ev.optString("type")}", it) }
+                runCatching { if (!transfers.onEvent(ev, tabs.visible)) bridge.onEvent(ev, tabs.visible) }
+                    .onFailure { Log.e(TAG, "agent push ${ev.optString("type")}", it) }
             }
         }
         // The Files app lists the root either way, but says when it can't be opened.
@@ -247,14 +252,23 @@ class Vm(private val app: Context) {
     }
 
     /**
-     * Hands Android's clipboard to the agent for a guest paste; called when
+     * Hands Android's clipboard to the agent for a guest paste: its text and
+     * MIME types, the data only when a paste asks ([Transfers]). Called when
      * the app gains focus, the only time Android lets it read the clipboard.
      */
-    fun syncClipboard(text: String?) {
-        if (text == null || text == lastClipboardSent || text == bridge.lastGuestCopy) return
+    fun syncClipboard(clip: ClipData) {
+        // A guest's own copy, handed straight back.
+        if (clip.getItemAt(0).uri?.authority == Transfers.clipAuthority(app)) return
+        transfers.clip = clip
+        val desc = clip.description
+        val types = (0 until desc.mimeTypeCount).map { desc.getMimeType(it) }.distinct()
+        // An image's "text" is its URI.
+        val text = if (types.any { it.startsWith("text/") }) clip.getItemAt(0).coerceToText(app)?.toString().orEmpty() else ""
+        if (text == bridge.lastGuestCopy || text to types == lastClipboardSent) return
         if (control.link.value !is ControlChannel.Link.Up) return
         scope.launch {
-            if (runCatching { control.call(JSONObject().put("type", "set-clipboard").put("text", text)) }.isSuccess) lastClipboardSent = text
+            val req = JSONObject().put("type", "set-clipboard").put("text", text).put("types", JSONArray(types))
+            if (runCatching { control.call(req) }.isSuccess) lastClipboardSent = text to types
         }
     }
 

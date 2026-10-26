@@ -62,7 +62,7 @@ class MainActivity : ComponentActivity() {
         super.onWindowFocusChanged(hasFocus)
         if (!hasFocus) return
         val clip = getSystemService(ClipboardManager::class.java)?.primaryClip?.takeIf { it.itemCount > 0 } ?: return
-        vm.syncClipboard(clip.getItemAt(0).coerceToText(this)?.toString())
+        vm.syncClipboard(clip)
     }
 
     /** A tab notification opens its tab. */

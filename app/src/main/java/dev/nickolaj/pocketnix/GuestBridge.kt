@@ -20,7 +20,8 @@ import org.json.JSONObject
 /**
  * Guest programs reaching Android (design.md, Integrations and UX):
  * a notification becomes one (with ids and actions: [GuestNotifications]), `xdg-open` opens a URL or a file
- * (through the file provider), and a guest copy sets the clipboard.
+ * (through the file provider), a share goes to the share sheet, and a guest
+ * copy sets the clipboard.
  */
 class GuestBridge(private val context: Context, private val hostname: () -> String?) {
     private val manager = context.getSystemService(NotificationManager::class.java)
@@ -45,6 +46,7 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
                 ?: notify(msg.optString("title"), msg.optString("body"), null)
             "notify-close" -> notifications.cancel(msg.optLong("notification"))
             "open" -> open(msg, appVisible)
+            "share" -> share(msg, appVisible)
             "guest-clipboard" -> {
                 // A clip goes through one binder transaction (~1 MB, UTF-16): more throws.
                 val text = msg.optString("text").take(MAX_CLIP_CHARS)
@@ -65,10 +67,39 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
             Intent(Intent.ACTION_VIEW).setDataAndType(uri, mimeType(path)).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         val chooser = Intent.createChooser(intent, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        // Android stops background apps starting activities; a notification can.
-        if (appVisible && runCatching { context.startActivity(chooser) }.isSuccess) return
-        val what = url.ifEmpty { msg.optString("path") }
-        notify("Open from ${hostname() ?: "the guest"}", what, PendingIntent.getActivity(context, nextId, chooser, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+        startOrNotify(chooser, appVisible, "Open from ${hostname() ?: "the guest"}", url.ifEmpty { msg.optString("path") })
+    }
+
+    /** Offers files under the file provider's root, or text, through the share sheet. */
+    private fun share(msg: JSONObject, appVisible: Boolean) {
+        val paths = msg.optJSONArray("paths")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty()
+        val send = if (paths.isEmpty()) {
+            Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, msg.optString("text"))
+        } else {
+            val uris = paths.map { DocumentsContract.buildDocumentUri(GuestDocumentsProvider.authority(context), GuestDocumentsProvider.docId(it)) }
+            val types = paths.map(::mimeType).distinct()
+            val type = types.singleOrNull() ?: types.map { it.substringBefore('/') }.distinct().singleOrNull()?.let { "$it/*" } ?: "*/*"
+            val intent = if (uris.size == 1) {
+                Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, uris[0])
+            } else {
+                Intent(Intent.ACTION_SEND_MULTIPLE).putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+            }
+            intent.setType(type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION).apply {
+                clipData = ClipData.newRawUri(null, uris[0]).apply { uris.drop(1).forEach { addItem(ClipData.Item(it)) } }
+            }
+        }
+        val what = if (paths.isEmpty()) msg.optString("text").take(200) else paths.joinToString(", ")
+        val chooser = Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startOrNotify(chooser, appVisible, "Share from ${hostname() ?: "the guest"}", what)
+    }
+
+    /**
+     * Starts [intent] while the app is visible; Android stops background apps
+     * starting activities, so otherwise a notification titled [title] does.
+     */
+    fun startOrNotify(intent: Intent, appVisible: Boolean, title: String, body: String) {
+        if (appVisible && runCatching { context.startActivity(intent) }.isSuccess) return
+        notify(title, body, PendingIntent.getActivity(context, nextId, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
     }
 
     private fun notify(title: String, body: String, action: PendingIntent?) {

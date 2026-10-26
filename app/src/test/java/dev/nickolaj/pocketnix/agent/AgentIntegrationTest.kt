@@ -17,6 +17,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Test
 import java.io.ByteArrayOutputStream
@@ -224,6 +225,28 @@ class AgentIntegrationTest {
         // Android's clipboard reaches a guest paste.
         ctl.call(JSONObject().put("type", "set-clipboard").put("text", "from android"))
         assertEquals("from android", JSONObject(guest("""{"type":"paste"}""")).getString("text"))
+        ctl.stop()
+    }
+
+    @Test
+    fun aGuestPickGetsTheAppsFiles() = runBlocking {
+        val ctl = ControlChannel(scope, "test")
+        ctl.start(dialer)
+        withTimeout(10_000) { ctl.updates.filterNotNull().first() }
+        val event = scope.async { withTimeout(10_000) { ctl.events.first() } }
+        Thread.sleep(100)
+        val reply = scope.async { guest("""{"type":"pick","types":["image/*"]}""") }
+        val ev = event.await()
+        assertEquals("pick", ev.getString("type"))
+        val ref = ev.getString("ref")
+        val landed = GuestFiles(dialer, "test").share("cat.jpg", 4, "JPEG".byteInputStream(), ref)
+        ctl.call(JSONObject().put("type", "guest-done").put("ref", ref))
+        val paths = JSONObject(reply.await()).getJSONArray("paths")
+        assertEquals(landed, paths.getString(0))
+        assertEquals("JPEG", File(landed).readText())
+        // Android's clipboard types reach the guest; its bytes stay put until a paste asks.
+        ctl.call(JSONObject().put("type", "set-clipboard").put("text", "").put("types", JSONArray(listOf("image/png"))))
+        assertEquals("image/png", JSONObject(guest("""{"type":"clipboard-types"}""")).getJSONArray("types").getString(0))
         ctl.stop()
     }
 

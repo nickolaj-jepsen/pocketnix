@@ -85,6 +85,25 @@
             android:name=".GuestNotificationReceiver"
             android:exported="false" />
 
+        <!-- A guest's pick or save: Android's document picker, then the transfer. -->
+        <activity
+            android:name=".files.PickerActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- A guest's typed copy (an image, …) on Android's clipboard. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.clipboard"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/clipboard_paths" />
+        </provider>
+
         <receiver
             android:name=".service.BootReceiver"
             android:exported="true">

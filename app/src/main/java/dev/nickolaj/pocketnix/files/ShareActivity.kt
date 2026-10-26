@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.provider.OpenableColumns
 import android.util.Log
 import android.widget.Toast
 import dev.nickolaj.pocketnix.vm
@@ -72,25 +71,6 @@ class ShareActivity : Activity() {
         return ok
     }
 
-    private fun share(files: dev.nickolaj.pocketnix.agent.GuestFiles, uri: Uri): String {
-        var name = "shared"
-        var size = -1L
-        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { c ->
-            if (c.moveToFirst()) {
-                c.getString(0)?.let { name = it }
-                if (!c.isNull(1)) size = c.getLong(1)
-            }
-        }
-        if (size < 0) {
-            // The share protocol sends the size first; a provider that won't say gets copied first.
-            val tmp = File.createTempFile("share", null, cacheDir)
-            try {
-                contentResolver.openInputStream(uri)!!.use { input -> tmp.outputStream().use { input.copyTo(it) } }
-                return tmp.inputStream().use { files.share(name, tmp.length(), it) }
-            } finally {
-                tmp.delete()
-            }
-        }
-        return contentResolver.openInputStream(uri)!!.use { files.share(name, size, it) }
-    }
+    private fun share(files: dev.nickolaj.pocketnix.agent.GuestFiles, uri: Uri): String =
+        withSize(this, uri) { name, size, input -> files.share(name, size, input) }
 }

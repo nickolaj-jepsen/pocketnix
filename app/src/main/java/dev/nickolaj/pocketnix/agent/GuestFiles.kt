@@ -106,15 +106,47 @@ class GuestFiles(private val dialer: AgentDialer, private val appVersion: String
 
     fun rename(path: String, name: String): GuestFile = simple("rename", path) { put("name", name) }.file()
 
-    /** Shares [size] bytes from [input] as [name]; returns where it landed in the guest. */
-    fun share(name: String, size: Long, input: InputStream): String {
-        val (s, _) = dialer.open(Protocol.hello("share", appVersion) { put("name", name); put("size", size) })
+    /**
+     * Shares [size] bytes from [input] as [name]; returns where it landed in
+     * the guest. With [ref], they answer that guest request (a pick's file, a
+     * paste's data) instead.
+     */
+    fun share(name: String, size: Long, input: InputStream, ref: String? = null): String {
+        val (s, _) = dialer.open(
+            Protocol.hello("share", appVersion) {
+                put("name", name)
+                put("size", size)
+                if (ref != null) put("ref", ref)
+            },
+        )
         return s.use {
             val copied = input.copyTo(s.output, COPY_BUFFER)
             if (copied != size) throw IOException("read $copied of $size bytes")
             s.output.flush()
             s.shutdownOutput()
             done(s)
+        }
+    }
+
+    /**
+     * Takes the bytes of the guest request [ref] (a save, a typed copy),
+     * waiting until the guest has them, and hands [store] their name, size
+     * and bytes, which it must read to the end. The agent learns whether
+     * [store] succeeded; its exception is rethrown.
+     */
+    fun fetch(ref: String, store: (name: String, size: Long, input: InputStream) -> Unit) {
+        val (s, hello) = dialer.open(Protocol.hello("save", appVersion) { put("ref", ref) })
+        s.use {
+            val size = hello.optLong("size")
+            val input = LimitedInput(s.input, size)
+            try {
+                store(hello.optString("name"), size, input)
+                if (input.read() >= 0) throw IOException("the store read fewer than $size bytes")
+            } catch (e: Exception) {
+                runCatching { Protocol.writeJson(s.output, JSONObject().put("type", "error").put("message", e.message ?: e.toString())) }
+                throw e
+            }
+            Protocol.writeJson(s.output, JSONObject().put("type", "done"))
         }
     }
 
