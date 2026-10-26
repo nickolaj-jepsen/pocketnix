@@ -348,6 +348,13 @@ func (c *Control) ShareText(text string) (string, error) {
 // (the last 16 unread); closed when the stream ends.
 func (c *Control) Wakes() <-chan protocol.Wake { return c.wakes }
 
+// HostState tells the agent the phone's state, as the app does on connect
+// and on changes. It holds until this stream ends.
+func (c *Control) HostState(st protocol.HostState) error {
+	_, err := c.request(protocol.Request{Type: protocol.TypeHostState, Host: &st})
+	return err
+}
+
 func (c *Control) Close() error { return c.conn.Close() }
 
 // File runs a file-provider operation that has no data: stat, create,

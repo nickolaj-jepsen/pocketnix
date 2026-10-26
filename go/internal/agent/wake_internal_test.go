@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -31,5 +33,24 @@ func TestWakeOf(t *testing.T) {
 	}
 	if w := wakeOf(nil, on); w.Held || w.Holders == nil {
 		t.Errorf("no inhibitors: %+v (holders must be an empty list)", w)
+	}
+}
+
+func TestValidZone(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "Europe"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Europe", "Copenhagen"), []byte("TZif"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dirs := []string{filepath.Join(dir, "missing"), dir}
+	if err := validZone("Europe/Copenhagen", dirs); err != nil {
+		t.Error(err)
+	}
+	for _, bad := range []string{"Europe", "Europe/Atlantis", "../etc/passwd", "/etc/passwd", "Europe/../Europe/Copenhagen", ""} {
+		if validZone(bad, dirs) == nil {
+			t.Errorf("%q accepted", bad)
+		}
 	}
 }

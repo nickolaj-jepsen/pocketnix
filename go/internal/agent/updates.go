@@ -42,6 +42,8 @@ type Updater struct {
 
 	// Changed is called after every state change, with the mutex released.
 	Changed func()
+	// Offline, when set and true, skips a background check.
+	Offline func() bool
 	// Inhibit, when set, keeps the guest (and so the phone) awake until the
 	// returned closer is closed; fetches and switches take it.
 	Inhibit func(why string) (io.Closer, error)
@@ -125,8 +127,8 @@ func (u *Updater) Periodic(ctx context.Context) {
 				u.nextCheck = now.Add(u.cfg.interval)
 			}
 			u.mu.Unlock()
-			if run {
-				// A busy updater skips this round; the next interval tries again.
+			// A busy or offline updater skips this round; the next interval tries again.
+			if run && (u.Offline == nil || !u.Offline()) {
 				u.Check()
 			}
 		}

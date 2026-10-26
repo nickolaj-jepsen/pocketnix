@@ -42,6 +42,8 @@ fun UpdatesDialog(vm: Vm, onDismiss: () -> Unit) {
     val updates by vm.updates.collectAsState()
     val scope = rememberCoroutineScope()
     var refused by remember { mutableStateOf<String?>(null) }
+    val host by vm.host.state.collectAsState()
+    var confirmingMetered by remember { mutableStateOf(false) }
     // A desktop's `switch` changes generations without telling the agent.
     LaunchedEffect(Unit) { vm.control.refreshUpdates() }
 
@@ -67,7 +69,16 @@ fun UpdatesDialog(vm: Vm, onDismiss: () -> Unit) {
                     // A check or download can hang on a build host that went away; a switch must finish.
                     if (u.busy && u.state != "switching") TextButton(onClick = { send("update-cancel") }) { Text("Cancel") }
                     TextButton(enabled = !u.busy, onClick = { send("update-check") }) { Text("Check") }
-                    Button(enabled = !u.busy, onClick = { send("update-apply") }) { Text("Update") }
+                    // A system's closure can be gigabytes: on a metered network the first tap only asks.
+                    val metered = host?.metered == true
+                    Button(enabled = !u.busy, onClick = {
+                        if (metered && !confirmingMetered) {
+                            confirmingMetered = true
+                        } else {
+                            confirmingMetered = false
+                            send("update-apply")
+                        }
+                    }) { Text(if (metered && confirmingMetered) "Metered: update?" else "Update") }
                 }
             }
         },

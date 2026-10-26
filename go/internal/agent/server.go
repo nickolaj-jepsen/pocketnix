@@ -44,7 +44,13 @@ type Server struct {
 	notes     notifications
 	transfers transfers
 
-	wakes wakeTracker
+	// HostFile is where the phone's state goes as JSON; empty writes none.
+	HostFile string
+	// Systemctl drives the module's pocketnix-*.target units from the
+	// phone's state; empty leaves them alone.
+	Systemctl string
+	host      hostTracker
+	wakes     wakeTracker
 }
 
 // New loads the config file at path.
@@ -56,6 +62,7 @@ func New(path string) (*Server, error) {
 	s := &Server{Version: "dev", path: path, cfg: cfg, controls: map[*lockedWriter]struct{}{}, Updates: NewUpdater()}
 	s.Updates.Configure(cfg.Updates)
 	s.Updates.Changed = func() { s.pushLatest(func() any { return s.Updates.State() }) }
+	s.Updates.Offline = s.knownOffline
 	return s, nil
 }
 
@@ -229,6 +236,7 @@ func (s *Server) serveControl(c net.Conn) {
 		s.mu.Lock()
 		delete(s.controls, w)
 		s.mu.Unlock()
+		s.hostLost(w)
 	}()
 	err := protocol.WriteJSON(unlocked{w}, s.hello())
 	if err == nil {
@@ -259,7 +267,7 @@ func (s *Server) serveControl(c net.Conn) {
 			reject(w, "bad message: "+err.Error())
 			continue
 		}
-		if reply, err := s.request(req); err != nil {
+		if reply, err := s.controlRequest(w, req); err != nil {
 			protocol.WriteJSON(w, protocol.Error{Type: protocol.TypeError, Message: err.Error(), ID: req.ID})
 		} else {
 			protocol.WriteJSON(w, withID(reply, req.ID))

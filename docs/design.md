@@ -60,6 +60,15 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
   command-palette snippets, the file-provider root. The agent sends them on
   connect and they apply live. Tab notifications follow fixed rules (below).
 - The app UI owns set-once hardware needed before boot: RAM, vCPUs, disk size, image.
+- The phone's own state flows the other way: the app sends it (`host-state`:
+  timezone, online and metered, charging, battery low, power saving) on
+  connect and on changes, debounced. The agent keeps
+  `pocketnix-{online,unmetered,charging,power-save}.target` active while
+  each holds, for units to bind to, writes `/run/pocketnix/host.json`
+  (`pocketnix-guest host`), and sets the timezone through timedated when
+  `host.timeZone` (the default while `time.timeZone` is null). The state
+  belongs to the stream that sent it: without an app the guest is offline
+  and on battery, and keeps its zone.
 - The font file is served over its own stream and cached by the app by hash;
   colors use Termux's property names.
 - Debug builds can run against an agent over TCP instead of AVF, so the terminal
@@ -130,7 +139,8 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 - Update is check, fetch and switch in one; the switch runs
   `switch-to-configuration` in its own unit through `systemd-run`, as
   nixos-rebuild does. Background checks (`updates.checkInterval`, 6 h) only
-  report "update available"; nothing applies on its own.
+  report "update available"; nothing applies on its own. They skip while the
+  phone says it's offline, and the app asks before Update on a metered network.
 - Generations come from the system profile; rolling back is switching to an
   older one (`nix-env --switch-generation` + `switch`). The app offers a reboot
   when the running system isn't the booted one.

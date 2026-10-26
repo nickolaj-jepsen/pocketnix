@@ -34,6 +34,7 @@ type File struct {
 	FilesRoot string `json:"filesRoot,omitempty"`
 
 	Power PowerConfig `json:"power"`
+	Host  HostConfig  `json:"host"`
 }
 
 // PowerConfig is how the guest keeps the phone awake.
@@ -46,6 +47,12 @@ type PowerConfig struct {
 type WakeLocksConfig struct {
 	Enable bool     `json:"enable"`
 	Ignore []string `json:"ignore,omitempty"`
+}
+
+// HostConfig is what the guest takes from the phone's state.
+type HostConfig struct {
+	// TimeZone sets the guest's timezone to the phone's.
+	TimeZone bool `json:"timeZone,omitempty"`
 }
 
 // ShareConfig delivers shared text and files: into Directory, then (when

@@ -1,4 +1,4 @@
-// The phone and the guest's power; go/internal/protocol/host.go is the contract.
+// The phone and the guest's power and network; go/internal/protocol/host.go is the contract.
 package dev.nickolaj.pocketnix.agent
 
 import org.json.JSONObject
@@ -18,4 +18,30 @@ data class Wake(val held: Boolean, val holders: List<WakeHolder>) {
             return Wake(o.optBoolean("held"), holders)
         }
     }
+}
+
+/** The phone's state as the guest may want it, sent as a host-state request. */
+data class HostState(
+    /** A tz database id. */
+    val timeZone: String,
+    /** A validated default network. */
+    val online: Boolean,
+    val metered: Boolean,
+    /** On external power. */
+    val charging: Boolean,
+    val batteryLow: Boolean,
+    val powerSave: Boolean,
+) {
+    fun request(): JSONObject = JSONObject()
+        .put("type", "host-state")
+        .put(
+            "host",
+            JSONObject()
+                .put("timeZone", timeZone)
+                .put("online", online)
+                .put("metered", metered)
+                .put("charging", charging)
+                .put("batteryLow", batteryLow)
+                .put("powerSave", powerSave),
+        )
 }

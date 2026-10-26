@@ -152,6 +152,9 @@ func (s *Server) guest(req protocol.GuestRequest) (string, error) {
 		return "", s.event(protocol.Event{Type: protocol.TypeGuestClipboard, Text: req.Text})
 	case protocol.GuestPaste:
 		return s.clipboardText(), nil
+	case protocol.GuestHost:
+		b, err := json.Marshal(s.hostState())
+		return string(b), err
 	default:
 		return "", fmt.Errorf("unknown request %q", req.Type)
 	}

@@ -385,6 +385,29 @@ in
           client.wait_until_succeeds("grep -qF '\"held\":true,\"holders\":[{\"who\":\"rsync\",\"why\":\"backup\"}]' /tmp/wake", timeout=30)
           client.wait_until_succeeds("tail -n1 /tmp/wake | grep -q '\"held\":false'", timeout=30)
 
+      with subtest("the phone's state drives targets, host.json and the timezone"):
+          def active(unit):
+              return phone.execute(f"systemctl is-active {unit}")[0] == 0
+          client.succeed(f"""systemd-run --unit=host1 {A} host-state '{{"timeZone":"Europe/Copenhagen","online":true,"charging":true}}'""")
+          phone.wait_until_succeeds("systemctl is-active pocketnix-online.target pocketnix-unmetered.target pocketnix-charging.target", timeout=30)
+          assert not active("pocketnix-power-save.target")
+          phone.wait_until_succeeds("timedatectl show -p Timezone --value | grep -qx Europe/Copenhagen", timeout=30)
+          st = json.loads(phone.succeed("runuser -u nixos -- pocketnix-guest host"))
+          assert st["online"] and st["charging"] and st["connected"] and st["timeZone"] == "Europe/Copenhagen", st
+          assert json.loads(phone.succeed("cat /run/pocketnix/host.json")) == st
+          # A newer stream's state replaces it; a metered network isn't unmetered.
+          client.succeed(f"""systemd-run --unit=host2 {A} host-state '{{"timeZone":"America/New_York","online":true,"metered":true,"powerSave":true}}'""")
+          phone.wait_until_succeeds("systemctl is-active pocketnix-power-save.target", timeout=30)
+          assert active("pocketnix-online.target") and not active("pocketnix-unmetered.target") and not active("pocketnix-charging.target")
+          phone.wait_until_succeeds("timedatectl show -p Timezone --value | grep -qx America/New_York", timeout=30)
+          client.succeed("systemctl stop host1")
+          # Without the app the phone is offline as far as the guest knows; the zone stays.
+          client.succeed("systemctl stop host2")
+          phone.wait_until_fails("systemctl is-active pocketnix-online.target", timeout=30)
+          assert active("pocketnix-power-save.target")
+          assert not json.loads(phone.succeed("cat /run/pocketnix/host.json"))["connected"]
+          phone.succeed("timedatectl show -p Timezone --value | grep -qx America/New_York")
+
       with subtest("an update from the build host arrives over ssh and switches"):
           # Test VMs boot without a system profile; a real guest has one from its first boot.
           phone.succeed("nix-env -p /nix/var/nix/profiles/system --set $(readlink -f /run/current-system)")

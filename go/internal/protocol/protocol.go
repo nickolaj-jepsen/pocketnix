@@ -104,6 +104,9 @@ type Request struct {
 	Cancelled bool     `json:"cancelled,omitempty"`
 	Error     string   `json:"error,omitempty"`
 	Types     []string `json:"types,omitempty"`
+
+	// Host is a host-state request's.
+	Host *HostState `json:"host,omitempty"`
 }
 
 // Envelope is the part of every JSON message a receiver reads first.

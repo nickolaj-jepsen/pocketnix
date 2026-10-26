@@ -66,6 +66,7 @@
         // lib.optionalAttrs (upd.checkInterval != null) {inherit (upd) checkInterval;};
       share = lib.filterAttrs (_: v: v != null) {inherit (cfg.share) directory command;};
       power.wakeLocks = {inherit (cfg.power.wakeLocks) enable ignore;};
+      host = {inherit (cfg.host) timeZone;};
     }
     // lib.optionalAttrs (cfg.terminal.historyFile != null) {history = cfg.terminal.historyFile;}
     // lib.optionalAttrs (cfg.files.root != null) {filesRoot = cfg.files.root;};
@@ -565,6 +566,20 @@ in {
       };
     };
 
+    host.timeZone = mkOption {
+      type = types.bool;
+      default = config.time.timeZone == null;
+      defaultText = lib.literalExpression "config.time.timeZone == null";
+      description = ''
+        Follow the phone's timezone (through timedated). The phone's network
+        and power state are always there: `pocketnix-guest host` prints
+        them, `/run/pocketnix/host.json` holds them, and the targets
+        `pocketnix-online`, `pocketnix-unmetered`, `pocketnix-charging` and
+        `pocketnix-power-save` are active while they hold, for units to
+        `bindsTo`. Without the app, the guest counts as offline and on battery.
+      '';
+    };
+
     avf.enable = mkOption {
       type = types.bool;
       default = true;
@@ -641,7 +656,7 @@ in {
         # Updates: ssh to the build host, nix to fetch, systemd-run to switch.
         path = [config.nix.package config.programs.ssh.package config.systemd.package];
         serviceConfig = {
-          ExecStart = lib.escapeShellArgs ([(lib.getExe' cfg.package "pocketnix-agent") "--guest-socket" "/run/pocketnix/guest.sock" "--state-dir" "/var/lib/pocketnix"] ++ lib.concatMap (a: ["--listen" a]) cfg.agent.listen);
+          ExecStart = lib.escapeShellArgs ([(lib.getExe' cfg.package "pocketnix-agent") "--guest-socket" "/run/pocketnix/guest.sock" "--state-dir" "/var/lib/pocketnix" "--host-state" "/run/pocketnix/host.json"] ++ lib.concatMap (a: ["--listen" a]) cfg.agent.listen);
           RuntimeDirectory = "pocketnix";
           RuntimeDirectoryMode = "0755";
           StateDirectory = "pocketnix";
@@ -667,6 +682,22 @@ in {
         };
       };
     })
+
+    {
+      assertions = [
+        {
+          assertion = cfg.host.timeZone -> config.time.timeZone == null;
+          message = "pocketnix.guest.host.timeZone follows the phone, time.timeZone fixes one: set time.timeZone = null or turn host.timeZone off";
+        }
+      ];
+      # The agent starts and stops them from the phone's state.
+      systemd.targets = lib.mapAttrs (_: description: {inherit description;}) {
+        pocketnix-online = "The phone is online";
+        pocketnix-unmetered = "The phone is on an unmetered network";
+        pocketnix-charging = "The phone is on external power";
+        pocketnix-power-save = "The phone is saving power";
+      };
+    }
 
     (mkIf cfg.power.wakeLocks.enable {
       # Without polkit logind refuses every inhibitor but root's; with it,

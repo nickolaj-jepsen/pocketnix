@@ -51,6 +51,8 @@ commands:
   save-answer <ref> [file]    store a save's (or a typed copy's) bytes in file; none cancels
   paste-answer <ref> [file]   answer a clipboard request with file's bytes; none fails it
   wake                   print whether the guest asks the phone to stay awake, one JSON per change
+  host-state <json>      send the phone's state (protocol.HostState), as the app does,
+                         and hold it until interrupted: a closed stream makes it unknown
   share <file>           share a file, as Android's share sheet does
   share-text <text>      share text
   ls [path] | cat <path> | put <path>   the file provider (put reads stdin)
@@ -110,7 +112,7 @@ func runAgent(args []string) error {
 		}
 		defer ctl.Close()
 		return agentUpdates(ctl, cmd, rest)
-	case "wake":
+	case "wake", "host-state":
 		ctl, err := c.Control()
 		if err != nil {
 			return err
@@ -326,11 +328,26 @@ func agentUpdates(ctl *client.Control, cmd string, args []string) error {
 }
 
 func agentHost(ctl *client.Control, cmd string, args []string) error {
-	enc := json.NewEncoder(os.Stdout)
-	for w := range ctl.Wakes() {
-		if err := enc.Encode(w); err != nil {
-			return err
+	if cmd == "wake" {
+		enc := json.NewEncoder(os.Stdout)
+		for w := range ctl.Wakes() {
+			if err := enc.Encode(w); err != nil {
+				return err
+			}
 		}
+		return errors.New("control stream closed")
+	}
+	if len(args) != 1 {
+		return errUsage
+	}
+	var st protocol.HostState
+	if err := json.Unmarshal([]byte(args[0]), &st); err != nil {
+		return err
+	}
+	if err := ctl.HostState(st); err != nil {
+		return err
+	}
+	for range ctl.Configs() {
 	}
 	return errors.New("control stream closed")
 }

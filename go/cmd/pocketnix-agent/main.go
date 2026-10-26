@@ -33,6 +33,7 @@ func main() {
 	flag.Var(&listen, "listen", "address to serve (vsock:<port>, tcp:<host>:<port>, unix:<path>); repeatable")
 	stateDir := flag.String("state-dir", "", "directory for state that must outlive a crash (unfinished file-provider writes); empty keeps none")
 	guestSocket := flag.String("guest-socket", "", "unix socket for guest programs (pocketnix-guest), e.g. "+protocol.GuestSocket+"; empty serves none")
+	hostState := flag.String("host-state", "", "file to keep the phone's state in as JSON, which also drives the NixOS module's pocketnix-*.target units; empty does neither")
 	flag.Parse()
 	if len(listen) == 0 {
 		listen = listFlag{"vsock:" + strconv.Itoa(protocol.ControlPort)}
@@ -48,6 +49,9 @@ func main() {
 	srv.SweepTemps()
 	if !*noPower {
 		srv.Power = systemdPower{}
+	}
+	if *hostState != "" {
+		srv.HostFile, srv.Systemctl = *hostState, "systemctl"
 	}
 	srv.Updates.Inhibit = agent.LogindInhibit
 

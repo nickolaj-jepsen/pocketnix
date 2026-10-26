@@ -10,8 +10,10 @@ import dev.nickolaj.pocketnix.agent.ControlChannel
 import dev.nickolaj.pocketnix.agent.FontCache
 import dev.nickolaj.pocketnix.agent.GuestConfig
 import dev.nickolaj.pocketnix.agent.GuestFiles
+import dev.nickolaj.pocketnix.agent.HostStateSync
 import dev.nickolaj.pocketnix.agent.PtyBackend
 import dev.nickolaj.pocketnix.agent.WakeHolder
+import dev.nickolaj.pocketnix.host.HostMonitor
 import dev.nickolaj.pocketnix.service.wakeHoldersOf
 import dev.nickolaj.pocketnix.files.GuestDocumentsProvider
 import dev.nickolaj.pocketnix.files.PendingUploads
@@ -103,6 +105,9 @@ class Vm(private val app: Context) {
     val transfers = Transfers(app, scope, control, bridge, ::files) { control.config.value?.hostname }
     private var lastClipboardSent: Pair<String, List<String>>? = null
 
+    /** The phone's network, power and timezone, watched while the agent is connected. */
+    val host = HostMonitor(app)
+
     private val _wakeLocks = MutableStateFlow(settings.wakeLocks)
     /** Who the phone stays awake for (see [wakeHoldersOf]), or null. */
     val wakeHolders: StateFlow<List<WakeHolder>?> =
@@ -135,6 +140,12 @@ class Vm(private val app: Context) {
                 if (f != null) withContext(Dispatchers.IO) { PendingUploads.retry(app, f) }
             }
         }
+        scope.launch {
+            control.link.map { it is ControlChannel.Link.Up }.distinctUntilChanged().collect { up ->
+                if (up) host.start() else host.stop()
+            }
+        }
+        scope.launch { HostStateSync(control, host.state).run() }
         scope.launch {
             // Down, not Refused: an agent that answers (a version mismatch) booted fine.
             combine(state, control.link) { s, link -> s == VmState.Running && link is ControlChannel.Link.Down }

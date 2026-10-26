@@ -26,7 +26,7 @@ commands:
   copy [text]                       set Android's clipboard (stdin without text)
   copy --type <mime>                set it to stdin's bytes, of that type
   paste                             print the clipboard Android last handed over
-  paste --type <mime>             write its data of that type (or type/*)
+  paste --type <mime>               write its data of that type (or type/*)
   paste --list-types                print its types
   share <file>… | --text [text]     offer files under the file provider root,
                                     or text (stdin without), to Android's share sheet
@@ -37,8 +37,10 @@ commands:
                                     store a file on Android, where you pick
   notifyd                           serve org.freedesktop.Notifications on the
                                     session bus (notify-send's daemon)
-  portal                           serve the FileChooser portal backend on
+  portal                            serve the FileChooser portal backend on
                                     the session bus
+  host                              print the phone's state (network, power,
+                                    timezone) as JSON
 
 As xdg-open it opens. $POCKETNIX_GUEST_SOCKET overrides the agent's socket.
 `
@@ -153,6 +155,13 @@ func run(args []string) error {
 		return save(rest)
 	case "portal":
 		return portal(rest)
+	case "host":
+		text, err := send(protocol.GuestRequest{Type: protocol.GuestHost})
+		if err != nil {
+			return err
+		}
+		fmt.Println(text)
+		return nil
 	default:
 		return errUsage
 	}
