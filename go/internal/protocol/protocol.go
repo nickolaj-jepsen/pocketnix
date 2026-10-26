@@ -15,6 +15,8 @@
 //   - udp: datagrams (see datagram.go) relayed to a UDP port on the guest's
 //     loopback, one stream per client address on the phone.
 //   - font: the configured font file's bytes, then EOF.
+//   - display: the guest compositor's output as full-width bands (see
+//     display.go), sent only where the pixels changed.
 package protocol
 
 // Version is bumped on any incompatible change. Additive changes (new
@@ -51,8 +53,9 @@ const (
 	StreamForward = "forward"
 	// StreamUDP is a stream kind of its own, not a forward option, so an
 	// agent without it refuses rather than splicing datagrams into TCP.
-	StreamUDP  = "udp"
-	StreamFont = "font"
+	StreamUDP     = "udp"
+	StreamFont    = "font"
+	StreamDisplay = "display"
 )
 
 // Message types on the control stream, and the Hello/Error replies.

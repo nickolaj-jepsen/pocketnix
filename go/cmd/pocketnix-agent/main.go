@@ -33,6 +33,11 @@ func main() {
 	flag.Var(&listen, "listen", "address to serve (vsock:<port>, tcp:<host>:<port>, unix:<path>); repeatable")
 	stateDir := flag.String("state-dir", "", "directory for state that must outlive a crash (unfinished file-provider writes); empty keeps none")
 	guestSocket := flag.String("guest-socket", "", "unix socket for guest programs (pocketnix-guest), e.g. "+protocol.GuestSocket+"; empty serves none")
+	displayCapture := flag.String("display-capture", "", "print one PPM frame to stdout, e.g. 'grim -t ppm -'; empty serves no display streams")
+	displayCompositor := flag.String("display-compositor", "", "start this once for the display stream, e.g. 'sway -c /etc/pocketnix/sway.conf'; empty uses whatever runs")
+	displayInterval := flag.Duration("display-interval", 100*time.Millisecond, "quiet time between display captures")
+	var displayEnv listFlag
+	flag.Var(&displayEnv, "display-env", "K=V added to the display commands' environment (XDG_RUNTIME_DIR, WLR_BACKENDS, …); repeatable")
 	flag.Parse()
 	if len(listen) == 0 {
 		listen = listFlag{"vsock:" + strconv.Itoa(protocol.ControlPort)}
@@ -63,6 +68,16 @@ func main() {
 	}()
 
 	go srv.Updates.Periodic(context.Background())
+	if *displayCapture != "" {
+		// The command lines are split on spaces, not run through a shell: a
+		// module writing the config never has to quote.
+		srv.Display = &agent.Display{
+			Capture:    strings.Fields(*displayCapture),
+			Compositor: strings.Fields(*displayCompositor),
+			Env:        displayEnv,
+			Interval:   *displayInterval,
+		}
+	}
 	if *guestSocket != "" {
 		l, err := agent.ListenGuest(*guestSocket)
 		if err != nil {

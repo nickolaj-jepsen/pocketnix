@@ -31,6 +31,9 @@ type Server struct {
 	Power   Power // nil refuses power requests
 	// Updates runs the app's update and generation requests.
 	Updates *Updater
+	// Display serves the guest compositor's output; nil refuses display
+	// streams (an agent that has no compositor to capture).
+	Display *Display
 	// StateDir keeps what must outlive a crash (the file provider's
 	// unfinished temporary files); empty keeps nothing.
 	StateDir string
@@ -154,6 +157,8 @@ func (s *Server) handle(c net.Conn) {
 		s.serveUDP(c, hello.Port)
 	case protocol.StreamFont:
 		s.serveFont(c)
+	case protocol.StreamDisplay:
+		s.serveDisplay(c)
 	case protocol.StreamFile:
 		s.serveFile(c, hello)
 	case protocol.StreamShare:
