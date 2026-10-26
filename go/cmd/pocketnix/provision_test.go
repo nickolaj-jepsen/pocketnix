@@ -190,7 +190,7 @@ func TestProvision(t *testing.T) {
 		"install app-debug.apk",
 		"grant dev.nickolaj.pocketnix.debug android.permission.MANAGE_VIRTUAL_MACHINE",
 		"grant dev.nickolaj.pocketnix.debug android.permission.USE_CUSTOM_VIRTUAL_MACHINE",
-		"am start -n dev.nickolaj.pocketnix.debug/dev.nickolaj.pocketnix.MainActivity -a dev.nickolaj.pocketnix.action.START --ez network false",
+		"am start -n dev.nickolaj.pocketnix.debug/dev.nickolaj.pocketnix.ControlActivity -a dev.nickolaj.pocketnix.action.START --ez network false",
 	} {
 		if !strings.Contains(ev, line+"\n") {
 			t.Errorf("device never saw %q; events:\n%s", line, ev)

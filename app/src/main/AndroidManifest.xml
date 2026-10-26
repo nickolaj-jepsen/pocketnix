@@ -37,6 +37,15 @@
             </intent-filter>
         </activity>
 
+        <!-- Scripted control over adb (`pocketnix provision`); invisible, and never replayed. -->
+        <activity
+            android:name=".ControlActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay" />
+
         <service
             android:name=".service.VmService"
             android:exported="false"

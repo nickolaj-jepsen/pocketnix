@@ -38,7 +38,7 @@ flags:
 
 const (
 	releasePackage = "dev.nickolaj.pocketnix"
-	activityClass  = "dev.nickolaj.pocketnix.MainActivity"
+	activityClass  = "dev.nickolaj.pocketnix.ControlActivity"
 	actionStart    = "dev.nickolaj.pocketnix.action.START"
 	// chunkSize bounds one adb push: bulk transfers over USB drop the device
 	// after ~100–200 MB.

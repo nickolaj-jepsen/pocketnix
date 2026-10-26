@@ -12,6 +12,8 @@ writeShellApplication {
   name = "boot-example";
   runtimeInputs = [qemu coreutils];
   text = ''
+    # A library path leaked from elsewhere can pull a newer glibc's libraries into QEMU.
+    unset LD_LIBRARY_PATH
     cid=''${POCKETNIX_CID:-4242}
     dir=$(mktemp -d)
     trap 'rm -rf "$dir"' EXIT
