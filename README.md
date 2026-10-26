@@ -16,9 +16,22 @@ profiles, extra keys, theme and port forwards). Then, with the phone on adb:
 
 ```bash
 nix run github:nickolaj-jepsen/pocketnix#provision -- \
-  --image .#nixosConfigurations.<host>.config.system.build.pocketnixImage.x86_64-linux \
+  --image .#nixosConfigurations.<host> \
   --inject /etc/ssh/ssh_host_ed25519_key=./host_key
 ```
+
+`provision` installs the release APK matching its own version, builds the
+host's disk image with this machine's tools, and pushes it. The guest is
+`aarch64-linux`: on an x86_64 desktop, build it through
+`boot.binfmt.emulatedSystems = ["aarch64-linux"]` or an aarch64 remote
+builder. Most of the closure comes from cache.nixos.org; the agent itself
+builds under emulation.
+
+On the AVF platform the module trims what a phone terminal doesn't use, all
+as `mkDefault`: no flake registry or `NIX_PATH` entry for nixpkgs (its source
+is ~200 MiB, re-copied on every nixpkgs bump), no NixOS/info/doc manuals (man
+pages stay), no `environment.defaultPackages`, no systemd-oomd, and zram swap
+on. Override any of them in the host's config.
 
 The phone never evaluates or builds. Updates come finished, from a build host
 over ssh, or from a store path your CI publishes, and the app's System menu
@@ -54,7 +67,11 @@ copy`/`paste` the clipboard; Android's share sheet drops into `~/Inbox`
 nix develop
 ./gradlew assembleDebug
 nix build .#pocketnix
+nix build .#checks.x86_64-linux.avf-boot   # the example image, booted and switched under QEMU
 ```
+
+Releases: bump `VERSION`, tag `v<VERSION>`; the release workflow signs the APK
+and publishes `pocketnix-<VERSION>.apk`, which `provision` and Obtainium fetch.
 
 ## License
 

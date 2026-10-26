@@ -39,6 +39,12 @@
       };
     });
 
+    # For a consumer's own nixpkgs (e.g. `pocketnix.guest.package = pkgs.pocketnix`); needs Go ≥ go.mod's.
+    overlays.default = final: _prev: {
+      pocketnix = final.callPackage ./nix/go.nix {};
+      pocketnix-cli = final.callPackage ./nix/cli.nix {};
+    };
+
     nixosModules.guest = import ./nix/module.nix {inherit self;};
     nixosModules.default = self.nixosModules.guest;
 
@@ -50,10 +56,17 @@
       ];
     };
 
-    checks.x86_64-linux.agent = import ./nix/test.nix {
-      inherit self;
-      pkgs = nixpkgs.legacyPackages.x86_64-linux;
-    };
+    checks =
+      nixpkgs.lib.recursiveUpdate
+      (forAll (pkgs: {
+        avf-boot = pkgs.callPackage ./nix/avf-boot-test.nix {image = self.packages.${pkgs.stdenv.hostPlatform.system}.example-image;};
+      }))
+      {
+        x86_64-linux.agent = import ./nix/test.nix {
+          inherit self;
+          pkgs = nixpkgs.legacyPackages.x86_64-linux;
+        };
+      };
 
     # `nix develop`, then `./gradlew assembleDebug`.
     devShells.x86_64-linux.default = import ./nix/devshell.nix {

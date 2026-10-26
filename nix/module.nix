@@ -195,12 +195,24 @@
           done
         '';
       };
+
+  # What the app's theme takes (TerminalTheme.kt); it drops anything else.
+  colorKey = "foreground|background|cursor|color([0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])";
+  # time.ParseDuration's syntax without a sign: the agent refuses negative intervals.
+  goDuration = "0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+";
+  hostPorts = lib.mapAttrsToList (_: f: f.hostPort) cfg.forwards;
+  badColors = lib.filter (k: builtins.match colorKey k == null) (lib.attrNames theme.colors);
 in {
   options.pocketnix.guest = {
     enable = mkEnableOption "the pocketnix guest side";
     package = mkOption {
       type = types.package;
-      default = self.packages.${pkgs.stdenv.hostPlatform.system}.pocketnix;
+      # This flake's build, whose nixpkgs has the Go that go.mod wants; when
+      # cross-compiling, this nixpkgs' build, as Go cross-compiles natively.
+      default =
+        if pkgs.stdenv.buildPlatform == pkgs.stdenv.hostPlatform && self.packages ? ${pkgs.stdenv.hostPlatform.system}
+        then self.packages.${pkgs.stdenv.hostPlatform.system}.pocketnix
+        else pkgs.callPackage ./go.nix {};
       defaultText = lib.literalExpression "pocketnix.packages.\${system}.pocketnix";
       description = "The pocketnix package providing `pocketnix-agent`.";
     };
@@ -399,7 +411,7 @@ in {
         };
       };
       published.url = mkOption {
-        type = types.nullOr types.str;
+        type = types.nullOr (types.strMatching "https://.+");
         default = null;
         example = "https://ci.example.com/phone/toplevel";
         description = ''
@@ -410,7 +422,7 @@ in {
         '';
       };
       checkInterval = mkOption {
-        type = types.nullOr types.str;
+        type = types.nullOr (types.strMatching goDuration);
         default = "6h";
         example = "30m";
         description = "How often the agent checks for a newer system in the background (a Go duration); null checks only when asked in the app.";
@@ -487,7 +499,28 @@ in {
           assertion = upd.buildHost.host != null -> upd.buildHost.installable != null;
           message = "pocketnix.guest.updates.buildHost.host needs buildHost.flake (or buildHost.installable)";
         }
+        {
+          assertion = upd.buildHost.host != null && upd.buildHost.sshKey == "/etc/ssh/ssh_host_ed25519_key" -> config.services.openssh.enable;
+          message = "pocketnix.guest.updates.buildHost: the default sshKey is sshd's host key; enable services.openssh or set buildHost.sshKey";
+        }
+        {
+          assertion = cfg.user == "root" || config.users.users ? ${cfg.user};
+          message = "pocketnix.guest.user `${cfg.user}` is not in users.users";
+        }
+        {
+          assertion = lib.allUnique hostPorts;
+          message = "pocketnix.guest.forwards: two forwards share a hostPort";
+        }
+        {
+          assertion = badColors == [];
+          message = "pocketnix.guest.terminal.theme.colors: unknown ${toString badColors} (foreground, background, cursor, color0 to color255)";
+        }
+        {
+          assertion = cfg.avf.enable -> pkgs.stdenv.hostPlatform.isAarch64;
+          message = "pocketnix.guest.avf.enable needs an aarch64-linux guest (Google's kernel is arm64); turn it off for other hypervisors";
+        }
       ];
+      warnings = lib.optional (cfg.avf.enable && lib.any (lib.hasPrefix "tcp:") cfg.agent.listen) "pocketnix.guest.agent.listen has a TCP listener on an AVF guest: anyone who reaches it gets a shell";
 
       boot.kernelModules = ["vmw_vsock_virtio_transport"];
       environment.etc."pocketnix/agent.json".source = agentConfigFile;
@@ -528,12 +561,24 @@ in {
         # Pixel 8 Pro's hypervisor advertises MPAM but traps MPAMIDR_EL1: an
         # oops in init_cpu_features at t=0 with more than one vCPU.
         "arm64.nompam"
+        # Each guest timer wakes a vCPU thread on the phone: no lockup
+        # detectors (an hrtimer per vCPU), and let idle timers batch.
+        "nowatchdog"
+        "kfence.deferrable=1"
+        "rcutree.enable_rcu_lazy=1"
+        "workqueue.power_efficient=1"
       ];
       # The defaults name PC storage/USB drivers this kernel doesn't ship; virtio is built in.
       boot.initrd.includeDefaultModules = false;
       # Other modules still ask for drivers (tpm-crb, …) this fixed kernel lacks.
       boot.initrd.allowMissingModules = true;
       boot.initrd.availableKernelModules = ["virtio_pci" "virtio_blk"];
+      # Plain ext4 on virtio, and no TPM in the kernel: stage 1 needs neither
+      # dbus (which copies in the whole systemd package), lvm2 nor tpm2-tss.
+      boot.initrd.systemd.dbus.enable = mkDefault false;
+      boot.initrd.systemd.tpm2.enable = mkDefault false;
+      systemd.tpm2.enable = mkDefault false;
+      services.lvm.enable = mkDefault false;
 
       boot.loader.systemd-boot.enable = true;
       # u-boot's EFI variables don't persist; systemd-boot lives at the removable path.
@@ -562,9 +607,31 @@ in {
       };
       boot.growPartition = true;
 
-      # Google's kernel brings dummy and ifb devices; dhcpcd waiting on them
-      # was the longest unit on phone-vm's boot (7 of 18 s).
+      # Google's kernel brings dummy, ifb and tunnel devices; dhcpcd waiting
+      # on them was the longest unit on phone-vm's boot (7 of 18 s). Only the
+      # virtio NIC gets DHCP, without an ARP probe of its lease.
+      networking.dhcpcd.allowInterfaces = mkDefault ["en*" "eth*"];
       networking.dhcpcd.denyInterfaces = ["dummy*" "ifb*"];
+      networking.dhcpcd.extraConfig = "noarp";
+
+      # The closure is pushed over adb, and an update copies what changed:
+      # drop what a phone terminal doesn't use. The flake registry alone is a
+      # nixpkgs source (~200 MiB) that changes with every nixpkgs bump.
+      nixpkgs.flake.setFlakeRegistry = mkDefault false;
+      nixpkgs.flake.setNixPath = mkDefault false;
+      environment.defaultPackages = mkDefault [];
+      documentation.nixos.enable = mkDefault false;
+      documentation.doc.enable = mkDefault false;
+      documentation.info.enable = mkDefault false;
+      xdg.mime.enable = mkDefault false;
+
+      # Nothing for oomd to act on (no slice is monitored), yet it polls.
+      systemd.oomd.enable = mkDefault false;
+      # Guest RAM is the phone's: compress before anything gets killed.
+      zramSwap = {
+        enable = mkDefault true;
+        algorithm = mkDefault "zstd";
+      };
       # No display: a login on tty1 is a session nobody sees.
       systemd.services."getty@tty1".enable = false;
       systemd.services."autovt@tty1".enable = false;

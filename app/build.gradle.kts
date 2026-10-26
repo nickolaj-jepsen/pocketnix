@@ -3,6 +3,9 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// The CLI shares it (nix/go.nix): provision installs the release matching its own version.
+val pocketnixVersion = rootProject.file("VERSION").readText().trim()
+
 android {
     namespace = "dev.nickolaj.pocketnix"
     compileSdk {
@@ -16,9 +19,12 @@ android {
         // android.system.virtualmachine arrived in API 34.
         minSdk = 34
         targetSdk = 36
-        versionCode = 1
-        // The CLI shares it (nix/go.nix): provision installs the release matching its own version.
-        versionName = rootProject.file("VERSION").readText().trim()
+        // Android installs only a higher code over an existing app: major.minor.patch, two digits each.
+        versionCode = pocketnixVersion.split(".").map { it.toInt() }.let { (major, minor, patch) ->
+            require(minor < 100 && patch < 100) { "VERSION $pocketnixVersion doesn't fit versionCode" }
+            major * 10000 + minor * 100 + patch
+        }
+        versionName = pocketnixVersion
 
         ndk {
             abiFilters += "arm64-v8a"
@@ -26,11 +32,13 @@ android {
     }
 
     // CI passes the release key as Gradle properties; without them release builds stay unsigned.
+    val releaseStore = project.findProperty("POCKETNIX_RELEASE_STORE_FILE") as? String
     signingConfigs {
-        create("release") {
-            val storePath = project.findProperty("POCKETNIX_RELEASE_STORE_FILE") as? String
-            if (storePath != null && file(storePath).exists()) {
-                storeFile = file(storePath)
+        if (releaseStore != null) {
+            // A wrong path would otherwise publish an unsigned release.
+            require(file(releaseStore).isFile) { "POCKETNIX_RELEASE_STORE_FILE $releaseStore is not a file" }
+            create("release") {
+                storeFile = file(releaseStore)
                 storePassword = project.findProperty("POCKETNIX_RELEASE_STORE_PASSWORD") as? String
                 keyAlias = project.findProperty("POCKETNIX_RELEASE_KEY_ALIAS") as? String
                 keyPassword = project.findProperty("POCKETNIX_RELEASE_KEY_PASSWORD") as? String
@@ -44,7 +52,7 @@ android {
             versionNameSuffix = "-debug"
         }
         release {
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

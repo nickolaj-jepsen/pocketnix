@@ -1,0 +1,46 @@
+name: release
+
+# A `v<VERSION>` tag publishes the signed APK that `pocketnix provision` downloads
+# (releases/download/v<ver>/pocketnix-<ver>.apk) and Obtainium tracks.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag names VERSION
+        run: test "${GITHUB_REF_NAME}" = "v$(cat VERSION)" || { echo "tag ${GITHUB_REF_NAME} but VERSION is $(cat VERSION)"; exit 1; }
+      - uses: cachix/install-nix-action@v31
+      - name: Release key
+        env:
+          KEYSTORE: ${{ secrets.POCKETNIX_RELEASE_KEYSTORE }}
+        run: |
+          test -n "$KEYSTORE" || { echo "POCKETNIX_RELEASE_KEYSTORE (base64 keystore) is not set"; exit 1; }
+          echo "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
+      # Gradle reads ORG_GRADLE_PROJECT_<name> as the project property <name>.
+      - name: Build and sign
+        env:
+          ORG_GRADLE_PROJECT_POCKETNIX_RELEASE_STORE_FILE: ${{ runner.temp }}/release.jks
+          ORG_GRADLE_PROJECT_POCKETNIX_RELEASE_STORE_PASSWORD: ${{ secrets.POCKETNIX_RELEASE_STORE_PASSWORD }}
+          ORG_GRADLE_PROJECT_POCKETNIX_RELEASE_KEY_ALIAS: ${{ secrets.POCKETNIX_RELEASE_KEY_ALIAS }}
+          ORG_GRADLE_PROJECT_POCKETNIX_RELEASE_KEY_PASSWORD: ${{ secrets.POCKETNIX_RELEASE_KEY_PASSWORD }}
+        run: nix develop --command ./gradlew assembleRelease --console=plain
+      - name: Verify the signature and name the APK
+        run: |
+          ver=$(cat VERSION)
+          mkdir dist
+          cp app/build/outputs/apk/release/app-release.apk "dist/pocketnix-$ver.apk"
+          nix develop --command sh -c "\$ANDROID_HOME/build-tools/*/apksigner verify --print-certs dist/pocketnix-$ver.apk"
+          (cd dist && sha256sum "pocketnix-$ver.apk" > "pocketnix-$ver.apk.sha256")
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes dist/*
+      - run: rm -f "$RUNNER_TEMP/release.jks"
+        if: always()
