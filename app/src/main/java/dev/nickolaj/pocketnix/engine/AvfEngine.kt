@@ -55,12 +55,14 @@ class AvfEngine(private val context: Context) : VmEngine {
         }
 
     override fun start(settings: VmSettings, console: ConsoleLog) {
-        lifecycle.execute {
-            if (_state.value == VmState.Starting || _state.value == VmState.Running) return@execute
+        // Claimed here, not on the lifecycle thread: the foreground service
+        // starting alongside stops itself if it still sees Stopped.
+        synchronized(this) {
+            if (_state.value == VmState.Starting || _state.value == VmState.Running) return
             stopRequested = false
             _state.value = VmState.Starting
-            launch(settings, console)
         }
+        lifecycle.execute { launch(settings, console) }
     }
 
     private fun launch(settings: VmSettings, console: ConsoleLog) {

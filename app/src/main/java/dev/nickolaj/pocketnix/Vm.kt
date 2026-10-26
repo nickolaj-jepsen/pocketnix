@@ -165,7 +165,7 @@ class Vm(private val app: Context) {
         scope.launch {
             control.link.first { it is ControlChannel.Link.Up }
             openTab(profile?.takeIf { it.isNotEmpty() })
-            if (input != null) tabs.current().session.write(input.replace("\\r", "\r"))
+            if (!input.isNullOrEmpty()) tabs.current().session.write(input.replace("\\r", "\r"))
         }
     }
 

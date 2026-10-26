@@ -149,7 +149,8 @@ public class TerminalSession extends TerminalOutput {
     /** Write data to the backend. */
     @Override
     public void write(byte[] data, int offset, int count) {
-        if (isRunning()) mTerminalToProcessIOQueue.write(data, offset, count);
+        // ByteQueue rejects empty writes.
+        if (count > 0 && isRunning()) mTerminalToProcessIOQueue.write(data, offset, count);
     }
 
     /** Write the Unicode code point to the terminal encoded in UTF-8. */
