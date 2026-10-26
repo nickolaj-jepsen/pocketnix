@@ -82,6 +82,17 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
   `sysinit.target`), or it cycles with `nix-daemon.socket`.
 - A guest `reboot` stops crosvm with `STOP_REASON_REBOOT`; the app must start the
   VM again then, and leave it stopped on `poweroff`.
+- The VM dies with the app's process (virtmgr ties it to the app): an app crash
+  is a hard power-off of the guest.
+- Podroid's ssh forward holds `[::]:2222`, so a pocketnix forward on 2222 can't
+  listen, and `adb forward … tcp:2222` reaches phone-vm instead.
+- Restoring a task relaunches it from its base intent: an adb `am start` with an
+  action, sent to the main activity, gets replayed (it booted the VM after an
+  app update). Scripted actions go to `ControlActivity`, which has no history.
+- With the phone locked, an activity started over adb is never laid out, so a
+  TerminalView never sizes its session; and logcat (`-c` too) is the only way to
+  see the app. Debug builds' `DEBUG_TAB` / `DEBUG_DUMP` actions are for this.
+- Termux's `ByteQueue` throws on a zero-length write; keep empty writes out.
 
 ## Traps (verified on the desktop)
 
@@ -96,3 +107,7 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
 - Android creates content providers before `Application.onCreate`: anything the
   provision provider reaches must not depend on onCreate having run.
 - `nix fmt` with no path formats stdin; pass `.`.
+- Any change under `go/`, tests included, rebuilds the aarch64 agent under
+  binfmt and so the whole example image: budget ~15 minutes.
+- The Nix-built QEMU breaks if the shell leaks an `LD_LIBRARY_PATH` from a
+  newer glibc; `boot-example` unsets it.

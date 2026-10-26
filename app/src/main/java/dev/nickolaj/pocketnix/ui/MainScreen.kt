@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
@@ -167,7 +168,8 @@ private fun StatusBar(
         TextButton(onClick = onComposer) { Text(if (composerOpen) "Keys" else "Compose") }
         TextButton(onClick = onSettings) { Text("Settings") }
         if (running) {
-            OutlinedButton(onClick = onStop) { Text("Stop") }
+            // The module's background may be dark under a light Material scheme.
+            OutlinedButton(onClick = onStop, colors = ButtonDefaults.outlinedButtonColors(contentColor = foreground)) { Text("Stop") }
         } else {
             Button(onClick = onStart, enabled = canStart) { Text("Start") }
         }

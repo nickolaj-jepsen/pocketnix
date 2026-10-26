@@ -42,6 +42,8 @@ first; the phone was used last, with networking off, next to phone-vm.
 
 ## Phone steps for you, in order
 
+0. First check phone-vm: Podroid was uninstalled from the phone at 02:57 (see
+   Incidents). The steps below assume you've sorted that out.
 1. Unlock the phone. pocketnix (debug) is installed with its permissions, and
    its disk holds the example image (ssh forward on 2022) with your desktop key
    at `/etc/ssh/authorized_keys.d/nixos`. Its VM is stopped.
@@ -116,6 +118,16 @@ the new commands and desktop-verified traps.
 - After an app update, SystemUI restored pocketnix's task from its base intent
   (provision's START) and booted the test VM unasked (network off, 768 MB). I
   stopped it gracefully; ControlActivity fixes the cause.
-- Podroid was never stopped, restarted, uninstalled or cleared; its crosvm ran
-  throughout. Free space on `/data` went from 12 GB to about 10 GB (the
-  pocketnix disk image).
+- **At 02:57:13–02:57:36, Podroid was uninstalled from the phone's own UI**:
+  the launcher (Lawnchair) opened the system uninstall dialog for
+  `com.excp.podroid`, then for `com.excp.podroid.debug`, and both were
+  confirmed (logcat: `UninstallRepository: Uninstalling … com.excp.podroid.debug,
+  EXTRA_TARGET_USER_ID=0`, then `Killing 12869:com.excp.podroid.debug … due to
+  deletePackageX`). That stopped phone-vm. None of my adb commands did this: my
+  last phone command before it was the pocketnix Stop at 02:55, and nothing I
+  ran uninstalls anything. Someone was using the phone, so I stopped touching it
+  then. Afterwards `pm list packages` still listed both Podroid packages (maybe
+  for another Android user). Please check phone-vm's state.
+- Until then Podroid was never stopped, restarted, uninstalled or cleared by me;
+  its crosvm ran through all my tests. Free space on `/data` went from 12 GB to
+  about 10 GB (the pocketnix disk image).

@@ -57,6 +57,8 @@ class TerminalController(
         val v = view ?: return
         if (v.currentSession !== tab.session) v.attachSession(tab.session)
         v.onScreenUpdated()
+        // Otherwise a hardware keyboard types into whichever button was last focused.
+        v.requestFocus()
     }
 
     fun setTypeface(t: Typeface?) {
