@@ -64,18 +64,22 @@ func (s *Server) handleGuest(c net.Conn) {
 		protocol.WriteJSON(c, protocol.GuestReply{Error: err.Error()})
 		return
 	}
-	r := bufio.NewReader(c)
+	conn := &fdConn{Conn: c}
+	r := bufio.NewReader(conn)
 	for {
 		c.SetReadDeadline(time.Now().Add(guestIdle))
 		line, err := protocol.ReadLine(r)
 		if err != nil {
+			closeFiles(conn.take())
 			return
 		}
+		fds := conn.take()
 		var req protocol.GuestRequest
 		var reply protocol.GuestReply
 		if err := json.Unmarshal(line, &req); err != nil {
 			reply.Error = "bad request: " + err.Error()
 		} else if req.Type == protocol.GuestSubscribe {
+			closeFiles(fds)
 			s.subscribe(c, r)
 			return
 		} else if req.Type == protocol.GuestNotify || req.Type == protocol.GuestNotifyClose {
@@ -83,11 +87,14 @@ func (s *Server) handleGuest(c net.Conn) {
 			if reply, err = s.guestNotify(req); err != nil {
 				reply.Error = err.Error()
 			}
+		} else if isTransfer(req) {
+			reply = s.runTransfer(c, r, req, fds)
 		} else if text, err := s.guest(req); err != nil {
 			reply.Error = err.Error()
 		} else {
 			reply.Text = text
 		}
+		closeFiles(fds)
 		if protocol.WriteJSON(c, reply) != nil {
 			return
 		}
@@ -141,6 +148,7 @@ func (s *Server) guest(req protocol.GuestRequest) (string, error) {
 			return "", fmt.Errorf("clipboard text over %d KiB", maxClipboard>>10)
 		}
 		s.setClipboard(req.Text)
+		s.setClipboardTypes(nil, req.Text)
 		return "", s.event(protocol.Event{Type: protocol.TypeGuestClipboard, Text: req.Text})
 	case protocol.GuestPaste:
 		return s.clipboardText(), nil

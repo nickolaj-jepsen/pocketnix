@@ -149,7 +149,8 @@ func (c *Control) read() {
 				c.uchange = make(chan struct{})
 				c.umu.Unlock()
 			}
-		case protocol.TypeNotify, protocol.TypeOpen, protocol.TypeGuestClipboard, protocol.TypeNotifyClose:
+		case protocol.TypeNotify, protocol.TypeOpen, protocol.TypeGuestClipboard, protocol.TypeNotifyClose,
+			protocol.TypeShare, protocol.TypePick, protocol.TypeSave, protocol.TypeGuestClipboardData, protocol.TypeClipboardRequest:
 			var ev protocol.Event
 			if json.Unmarshal(line, &ev) == nil {
 				select {
@@ -311,8 +312,8 @@ func (c *Control) History(limit int) ([]string, error) {
 	return h.Entries, nil
 }
 
-// Events delivers the agent's notify, notify-close, open and guest-clipboard pushes (the
-// last 64 unread); closed when the stream ends.
+// Events delivers the agent's integration and transfer pushes (the last 64
+// unread); closed when the stream ends.
 func (c *Control) Events() <-chan protocol.Event { return c.events }
 
 // SetClipboard hands the agent Android's clipboard.

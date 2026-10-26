@@ -97,6 +97,13 @@ type Request struct {
 	Notification uint32 `json:"notification,omitempty"`
 	Key          string `json:"key,omitempty"`
 	Reason       uint32 `json:"reason,omitempty"`
+
+	// Transfers (transfers.go): the Event's Ref a guest-done answers, and
+	// how it ended; set-clipboard's MIME types.
+	Ref       string   `json:"ref,omitempty"`
+	Cancelled bool     `json:"cancelled,omitempty"`
+	Error     string   `json:"error,omitempty"`
+	Types     []string `json:"types,omitempty"`
 }
 
 // Envelope is the part of every JSON message a receiver reads first.
@@ -136,6 +143,10 @@ type Hello struct {
 	File *FileInfo `json:"file,omitempty"`
 	// Mode is a FileOpen's.
 	Mode string `json:"mode,omitempty"`
+
+	// Ref ties a share or save stream to the guest request an [Event] named
+	// (transfers.go).
+	Ref string `json:"ref,omitempty"`
 }
 
 // Error rejects a Hello, or reports a failed control request.

@@ -2,10 +2,13 @@ package client
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net"
+	"os"
+	"syscall"
 
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/protocol"
 )
@@ -17,15 +20,56 @@ func Guest(path string, req protocol.GuestRequest) (string, error) {
 	return reply.Text, err
 }
 
-// GuestCall sends one request to the agent's guest socket at path and
-// returns the whole reply; a reply's Error is returned as an error.
-func GuestCall(path string, req protocol.GuestRequest) (protocol.GuestReply, error) {
-	conn, err := net.Dial("unix", path)
+// GuestCall sends one request to the agent's guest socket at path, passing
+// files as descriptors, and returns the whole reply; a reply's Error is the
+// error.
+func GuestCall(path string, req protocol.GuestRequest, files ...*os.File) (protocol.GuestReply, error) {
+	return GuestCallContext(context.Background(), path, req, files...)
+}
+
+// GuestCallContext is GuestCall that hangs up when ctx ends, which cancels
+// a request waiting on the app.
+func GuestCallContext(ctx context.Context, path string, req protocol.GuestRequest, files ...*os.File) (protocol.GuestReply, error) {
+	var reply protocol.GuestReply
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", path)
 	if err != nil {
-		return protocol.GuestReply{}, err
+		return reply, err
 	}
 	defer conn.Close()
-	return guestRoundTrip(conn, conn, req)
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	line, err := json.Marshal(req)
+	if err != nil {
+		return reply, err
+	}
+	line = append(line, '\n')
+	if len(files) == 0 {
+		_, err = conn.Write(line)
+	} else {
+		fds := make([]int, len(files))
+		for i, f := range files {
+			fds[i] = int(f.Fd())
+		}
+		_, _, err = conn.(*net.UnixConn).WriteMsgUnix(line, syscall.UnixRights(fds...), nil)
+	}
+	if err != nil {
+		return reply, err
+	}
+	b, err := protocol.ReadLine(conn)
+	if err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+		return reply, err
+	}
+	if err := json.Unmarshal(b, &reply); err != nil {
+		return reply, err
+	}
+	if reply.Error != "" {
+		return reply, errors.New(reply.Error)
+	}
+	return reply, nil
 }
 
 func guestRoundTrip(w io.Writer, r io.Reader, req protocol.GuestRequest) (protocol.GuestReply, error) {

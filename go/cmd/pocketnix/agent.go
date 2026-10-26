@@ -44,8 +44,12 @@ commands:
   update-cancel          stop a running check or download
   switch-generation <n>  switch to generation <n> (a rollback, or forward again)
   history [limit]        print the user's shell history, newest first
-  events                 print the guest's notify/open/clipboard pushes, one JSON per line
-  set-clipboard <text>   hand the agent a clipboard, as the app does on focus
+  events                 print the guest's notify/open/clipboard/transfer pushes, one JSON per line
+  set-clipboard [--type <mime>]… <text>
+                         hand the agent a clipboard (its text and types), as the app does on focus
+  pick-answer <ref> [file…]   answer a pick event with files; none cancels
+  save-answer <ref> [file]    store a save's (or a typed copy's) bytes in file; none cancels
+  paste-answer <ref> [file]   answer a clipboard request with file's bytes; none fails it
   share <file>           share a file, as Android's share sheet does
   share-text <text>      share text
   ls [path] | cat <path> | put <path>   the file provider (put reads stdin)
@@ -121,6 +125,13 @@ func runAgent(args []string) error {
 			}
 			return errors.New("control stream closed")
 		case "set-clipboard":
+			var types []string
+			for len(rest) >= 2 && rest[0] == "--type" {
+				types, rest = append(types, rest[1]), rest[2:]
+			}
+			if types != nil {
+				return ctl.SetClipboardTypes(strings.Join(rest, " "), types)
+			}
 			return ctl.SetClipboard(strings.Join(rest, " "))
 		default:
 			p, err := ctl.ShareText(strings.Join(rest, " "))
@@ -129,6 +140,8 @@ func runAgent(args []string) error {
 			}
 			return err
 		}
+	case "pick-answer", "save-answer", "paste-answer":
+		return agentTransfer(c, cmd, rest)
 	case "share":
 		if len(rest) != 1 {
 			return errUsage

@@ -1,6 +1,6 @@
 // Command pocketnix-guest lets guest programs reach Android through the
-// pocketnix agent: notifications, opening URLs and files, and the clipboard.
-// Installed as xdg-open, it behaves as that.
+// pocketnix agent: notifications, opening URLs and files, the clipboard, the
+// share sheet and file pickers. Installed as xdg-open, it behaves as that.
 package main
 
 import (
@@ -24,9 +24,21 @@ commands:
   open <url|file>                   open a URL, or a file under the app's
                                     file provider root, on Android
   copy [text]                       set Android's clipboard (stdin without text)
+  copy --type <mime>                set it to stdin's bytes, of that type
   paste                             print the clipboard Android last handed over
+  paste --type <mime>             write its data of that type (or type/*)
+  paste --list-types                print its types
+  share <file>… | --text [text]     offer files under the file provider root,
+                                    or text (stdin without), to Android's share sheet
+  pick [--type <mime>]… [--multiple] [--dest <dir>]
+                                    pick files on Android; prints their paths
+                                    (in the share directory, or moved to dest)
+  save [--name <name>] [--type <mime>] <file>
+                                    store a file on Android, where you pick
   notifyd                           serve org.freedesktop.Notifications on the
                                     session bus (notify-send's daemon)
+  portal                           serve the FileChooser portal backend on
+                                    the session bus
 
 As xdg-open it opens. $POCKETNIX_GUEST_SOCKET overrides the agent's socket.
 `
@@ -104,6 +116,12 @@ func run(args []string) error {
 		_, err := send(req)
 		return err
 	case "copy":
+		if t, typed := typeFlag(rest); t != "" {
+			if !isText(t) {
+				return copyTyped(t, typed)
+			}
+			rest = typed
+		}
 		text := strings.Join(rest, " ")
 		if len(rest) == 0 {
 			b, err := io.ReadAll(os.Stdin)
@@ -115,12 +133,26 @@ func run(args []string) error {
 		_, err := send(protocol.GuestRequest{Type: protocol.GuestCopy, Text: text})
 		return err
 	case "paste":
+		if len(rest) == 1 && rest[0] == "--list-types" {
+			return listTypes()
+		}
+		if t, typed := typeFlag(rest); t != "" && !isText(t) {
+			return pasteTyped(t, typed)
+		}
 		text, err := send(protocol.GuestRequest{Type: protocol.GuestPaste})
 		if err != nil {
 			return err
 		}
 		fmt.Print(text)
 		return nil
+	case "share":
+		return share(rest)
+	case "pick":
+		return pick(rest)
+	case "save":
+		return save(rest)
+	case "portal":
+		return portal(rest)
 	default:
 		return errUsage
 	}

@@ -38,6 +38,10 @@ func (s *Server) shareDir() (*os.Root, string, error) {
 
 // serveShare stores one shared file: Hello.Size bytes after the agent's Hello.
 func (s *Server) serveShare(c net.Conn, h protocol.Hello) {
+	if h.Ref != "" {
+		s.serveTransferShare(c, h)
+		return
+	}
 	name := filepath.Base(h.Name)
 	if validName(name) != nil {
 		name = "shared"
@@ -57,10 +61,19 @@ func (s *Server) shareText(text string) (string, error) {
 	return s.deliver(name, nil, strings.NewReader(text), int64(len(text)))
 }
 
-// deliver writes size bytes from r into the share directory under a free
-// name like name, and runs the share command on it. ready, when set, runs
-// once the file exists and before r is read.
+// deliver stores a share (see store) and runs the share command on it.
 func (s *Server) deliver(name string, ready func() error, r io.Reader, size int64) (string, error) {
+	p, err := s.store(name, ready, r, size)
+	if err != nil {
+		return "", err
+	}
+	return p, s.runShareCommand(p)
+}
+
+// store writes size bytes from r into the share directory under a free
+// name like name. ready, when set, runs once the file exists and before r
+// is read.
+func (s *Server) store(name string, ready func() error, r io.Reader, size int64) (string, error) {
 	root, dir, err := s.shareDir()
 	if err != nil {
 		return "", err
@@ -91,8 +104,7 @@ func (s *Server) deliver(name string, ready func() error, r io.Reader, size int6
 		root.Remove(fi.Path)
 		return "", err
 	}
-	full := filepath.Join(dir, fi.Path)
-	return full, s.runShareCommand(full)
+	return filepath.Join(dir, fi.Path), nil
 }
 
 // runShareCommand runs the share command through /bin/sh as the session

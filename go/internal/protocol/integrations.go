@@ -36,6 +36,15 @@ type Event struct {
 	AppName      string         `json:"appName,omitempty"`
 	Urgency      string         `json:"urgency,omitempty"`
 	Actions      []NotifyAction `json:"actions,omitempty"`
+
+	// Transfers (transfers.go).
+	Ref      string   `json:"ref,omitempty"`
+	Paths    []string `json:"paths,omitempty"`
+	Types    []string `json:"types,omitempty"`
+	Multiple bool     `json:"multiple,omitempty"`
+	Name     string   `json:"name,omitempty"`
+	MIME     string   `json:"mime,omitempty"`
+	Size     int64    `json:"size,omitempty"`
 }
 
 // Streams for shared files and the file provider.
@@ -141,6 +150,14 @@ type GuestRequest struct {
 	AppName  string         `json:"appName,omitempty"`
 	Urgency  string         `json:"urgency,omitempty"`
 	Actions  []NotifyAction `json:"actions,omitempty"`
+
+	// Transfers (transfers.go).
+	Paths    []string `json:"paths,omitempty"`
+	Types    []string `json:"types,omitempty"`
+	Multiple bool     `json:"multiple,omitempty"`
+	Name     string   `json:"name,omitempty"`
+	MIME     string   `json:"mime,omitempty"`
+	Ref      string   `json:"ref,omitempty"`
 }
 
 // GuestReply answers a GuestRequest: Error is set when it failed.
@@ -149,6 +166,14 @@ type GuestReply struct {
 	Text  string `json:"text,omitempty"`
 	// ID is a notify's notification id.
 	ID uint32 `json:"id,omitempty"`
+
+	// Transfers (transfers.go).
+	Paths []string `json:"paths,omitempty"`
+	// Names are a pick's files' names as Android gave them, in Paths' order.
+	Names     []string `json:"names,omitempty"`
+	Types     []string `json:"types,omitempty"`
+	Ref       string   `json:"ref,omitempty"`
+	Cancelled bool     `json:"cancelled,omitempty"`
 }
 
 // GuestSocket is where the module's agent serves guest requests.
