@@ -157,8 +157,9 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
   service keeps it up (no wake lock). Stop is graceful via the agent (`systemctl poweroff`)
   with a hard stop after a timeout (30 s). Stop and Reboot ask first. Opt-in
   start on phone boot. A memory balloon returns free guest RAM to Android:
-  AVF's auto balloon, which is free page reporting plus inflation on the app's
-  onTrimMemory (deflated again on guest OOM).
+  AVF's auto balloon, whose free page reporting does the work. Its inflation
+  on onTrimMemory never fires, since the foreground service keeps the app out
+  of trim levels.
 - The app pings a quiet control stream every 15 s and drops it after 45 s of
   silence, so a hung guest shows as an absent agent (and so the boot-menu
   banner), never as Running. Control requests must answer well within that.
