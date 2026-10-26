@@ -60,6 +60,10 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
   command-palette snippets, the file-provider root. The agent sends them on
   connect and they apply live. Tab notifications follow fixed rules (below).
 - The app UI owns set-once hardware needed before boot: RAM, vCPUs, disk size, image.
+  It also owns device state the guest can't name, such as which Android
+  folders it shares (Storage Access Framework tree grants, each with a
+  name); the app announces them on every connect (`host-folders`), and the
+  module only says where they mount (`hostFolders.mountPoint`).
 - The phone's own state flows the other way: the app sends it (`host-state`:
   timezone, online and metered, charging, battery low, power saving) on
   connect and on changes, debounced. The agent keeps
@@ -155,6 +159,13 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 ## Exposure
 
 - Agent endpoints (PTY, files, control) never leave the app process.
+- A shared folder's mount admits only the session user (its uid and primary
+  gid; no `allow_other`, so not even root). The root agent mounts it as the
+  user's own directory: the mount point is opened a step at a time without
+  following symlinks (confined like other configured paths), made owned
+  by the user in their home, and mounted and unmounted through
+  `/proc/self/fd`, so the user can't redirect it. A mount point that isn't
+  empty is refused rather than hidden.
 - Port forwards bind 127.0.0.1; a per-forward `lan = true` opts into the LAN.
 - A forward is TCP unless `protocol = "udp"`. A UDP forward opens one stream
   per phone-side client address, dropped after 2 minutes without a datagram
@@ -186,6 +197,7 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 - Guest notifications and `xdg-open` reach Android.
 - Clipboard: OSC 52 plus an agent CLI; Android → guest on paste or app focus;
   types beyond text cross only when a paste asks.
+- Android folders the user shares in the app are mounted in the guest.
 - Share sheet → guest inbox or a configured command, and back: the guest
   shares to Android's share sheet, and picks or saves files through Android's
   document pickers (also as the FileChooser portal). A Quick Settings tile.
@@ -265,6 +277,18 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
   directory and removes leftovers when it starts. Agents without ranged
   access get local copies, uploaded when a writer closes them (kept for a
   retry when that fails); a copy cut short is an error, never a shorter file.
+- Shared Android folders mount with FUSE (the guest kernel has no 9p, and
+  AVF's virtiofs isn't open to third-party VMs) at `~/Android/<name>`. The
+  agent can't dial the app, so the app keeps two `hostfs` streams open per
+  folder and answers the file operations the agent sends on them, by path
+  and with request ids, from `DocumentsContract` and the provider's own
+  descriptors (pread/pwrite). Entries and attributes are cached 2 s, since
+  SAF listing is slow; file data isn't (pages drop on every open). With the
+  app gone, operations fail with EIO at once and the mount stays, so shells
+  keep their cwd. No symlinks; chmod, chown and utimes are accepted and
+  ignored; a rename over a file deletes it first (providers only rename to
+  free names), and moves between directories need the provider's
+  `moveDocument`, else EXDEV.
 - The Quick Settings tile starts the VM through ControlActivity (a foreground
   service may only start from the foreground) and stops it gracefully.
 - The palette's history is the user's shell history file, read by the agent
