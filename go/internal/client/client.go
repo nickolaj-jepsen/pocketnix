@@ -514,6 +514,38 @@ func (c *Client) Forward(port int) (net.Conn, error) {
 	return conn, err
 }
 
+// UDP opens a stream of datagrams to UDP port on the guest's loopback.
+func (c *Client) UDP(port int) (*Datagrams, error) {
+	conn, _, err := c.open(protocol.Hello{Stream: protocol.StreamUDP, Port: port})
+	if err != nil {
+		return nil, err
+	}
+	return &Datagrams{conn: conn, r: bufio.NewReader(conn)}, nil
+}
+
+// Datagrams is a UDP stream: each Send is one datagram to the guest port,
+// each Recv one datagram from it.
+type Datagrams struct {
+	conn net.Conn
+	r    *bufio.Reader
+	mu   sync.Mutex
+}
+
+// Send sends p as one datagram.
+func (d *Datagrams) Send(p []byte) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return protocol.WriteDatagram(d.conn, p)
+}
+
+// Recv reads the next datagram into buf (protocol.MaxDatagram bytes) and returns its length.
+func (d *Datagrams) Recv(buf []byte) (int, error) { return protocol.ReadDatagram(d.r, buf) }
+
+// SetReadDeadline bounds the next Recv.
+func (d *Datagrams) SetReadDeadline(t time.Time) error { return d.conn.SetReadDeadline(t) }
+
+func (d *Datagrams) Close() error { return d.conn.Close() }
+
 // Font fetches the configured font file.
 func (c *Client) Font() ([]byte, error) {
 	conn, hello, err := c.open(protocol.Hello{Stream: protocol.StreamFont})

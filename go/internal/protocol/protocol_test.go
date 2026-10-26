@@ -46,6 +46,33 @@ func TestFrameTooLarge(t *testing.T) {
 	}
 }
 
+func TestDatagramRoundTrip(t *testing.T) {
+	var buf bytes.Buffer
+	WriteDatagram(&buf, []byte("ping"))
+	WriteDatagram(&buf, nil)
+	big := bytes.Repeat([]byte{7}, MaxDatagram)
+	WriteDatagram(&buf, big)
+	p := make([]byte, MaxDatagram)
+	if n, err := ReadDatagram(&buf, p); err != nil || string(p[:n]) != "ping" {
+		t.Fatalf("first = %q %v", p[:n], err)
+	}
+	if n, err := ReadDatagram(&buf, p); err != nil || n != 0 {
+		t.Fatalf("empty = %d %v", n, err)
+	}
+	if n, err := ReadDatagram(&buf, p); err != nil || !bytes.Equal(p[:n], big) {
+		t.Fatalf("largest = %d %v", n, err)
+	}
+	if _, err := ReadDatagram(&buf, p); err != io.EOF {
+		t.Fatalf("at end: %v, want io.EOF", err)
+	}
+	if err := WriteDatagram(&buf, make([]byte, MaxDatagram+1)); !errors.Is(err, ErrDatagramTooLarge) {
+		t.Fatalf("oversized write: %v", err)
+	}
+	if _, err := ReadDatagram(bytes.NewReader([]byte{0, 5, 'a'}), p); err != io.ErrUnexpectedEOF {
+		t.Fatalf("truncated: %v", err)
+	}
+}
+
 func TestReadLineLeavesTheRest(t *testing.T) {
 	r := bytes.NewReader([]byte("{\"type\":\"hello\",\"version\":1}\nRAW"))
 	h, err := ReadHello(r)

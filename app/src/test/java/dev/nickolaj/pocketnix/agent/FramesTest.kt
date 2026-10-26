@@ -42,4 +42,19 @@ class FramesTest {
         assertThrows(IOException::class.java) { Frames.read(ByteArrayInputStream(byteArrayOf(0, 0, 0, 0, 5, 1))) }
         assertThrows(IOException::class.java) { Frames.read(ByteArrayInputStream(byteArrayOf(0, 0x7f, -1, -1, -1))) }
     }
+
+    @Test
+    fun datagramsRoundTripAndMatchTheGoEncoding() {
+        // go/internal/protocol: [length u16 BE][payload]
+        assertArrayEquals(byteArrayOf(0, 2, 'h'.code.toByte(), 'i'.code.toByte()), Datagrams.encode("hi".toByteArray()))
+        val big = ByteArray(Datagrams.MAX_PAYLOAD) { 7 }
+        val input = ByteArrayInputStream(Datagrams.encode("hi".toByteArray()) + Datagrams.encode(ByteArray(0)) + Datagrams.encode(big))
+        val buf = ByteArray(Datagrams.MAX_PAYLOAD)
+        assertEquals(2, Datagrams.read(input, buf))
+        assertEquals(0, Datagrams.read(input, buf))
+        assertEquals(big.size, Datagrams.read(input, buf))
+        assertArrayEquals(big, buf)
+        assertEquals(-1, Datagrams.read(input, buf))
+        assertThrows(IOException::class.java) { Datagrams.read(ByteArrayInputStream(byteArrayOf(0, 5, 1)), buf) }
+    }
 }

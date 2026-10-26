@@ -14,7 +14,8 @@ class ProtocolTest {
     // As the agent sends it (go/internal/agent normalizes defaults before sending).
     private val config = """
         {"type":"config","hostname":"phone","forwards":[{"name":"ssh","guestPort":22,"hostPort":2222,"lan":false},
-        {"name":"web","guestPort":8080,"hostPort":8080,"lan":true}],
+        {"name":"web","guestPort":8080,"hostPort":8080,"lan":true,"protocol":"tcp"},
+        {"name":"mosh","guestPort":60001,"hostPort":60001,"lan":false,"protocol":"udp"}],
         "terminal":{"profiles":[{"name":"htop","command":"htop"},{"name":"shell"}],"defaultProfile":"shell",
         "extraKeys":[[{"key":"ESC"},{"key":"-","popup":"|"},{"key":"x","label":"X!"}]],
         "theme":{"colors":{"background":"#1e1e2e"},"font":"/nix/store/x-font/a.ttf","fontSha256":"ab"}}}
@@ -24,7 +25,10 @@ class ProtocolTest {
     fun parsesConfig() {
         val c = GuestConfig.parse(config)
         assertEquals("phone", c.hostname)
-        assertEquals(listOf(Forward("ssh", 22, 2222, false), Forward("web", 8080, 8080, true)), c.forwards)
+        assertEquals(
+            listOf(Forward("ssh", 22, 2222, false), Forward("web", 8080, 8080, true), Forward("mosh", 60001, 60001, false, udp = true)),
+            c.forwards,
+        )
         assertEquals(listOf(Profile("htop", "htop"), Profile("shell", null)), c.profiles)
         assertEquals("shell", c.defaultProfile)
         assertEquals(listOf(ExtraKey("ESC", null, null), ExtraKey("-", "|", null), ExtraKey("x", null, "X!")), c.extraKeys.single())

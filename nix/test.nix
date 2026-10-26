@@ -22,6 +22,7 @@ in
     name = "pocketnix-agent";
 
     nodes.phone = {
+      config,
       nodes,
       extendModules,
       ...
@@ -30,6 +31,12 @@ in
       pocketnix.guest = {
         avf.enable = false;
         agent.listen = ["vsock:9100" "tcp:0.0.0.0:9100"];
+        # On ssh's host port: TCP and UDP forwards are separate spaces.
+        forwards.echo = {
+          guestPort = 7777;
+          hostPort = config.pocketnix.guest.forwards.ssh.hostPort;
+          protocol = "udp";
+        };
         terminal.profiles = {
           # The size comes first: the CLI resizes on the session's first output.
           probe.command = ''stty size; id -un; read line; stty size; echo "got:$line"'';
@@ -46,6 +53,12 @@ in
           published.url = "https://${nodes.builder.networking.primaryIPAddress}/toplevel";
           checkInterval = null;
         };
+      };
+      systemd.services.udp-echo = {
+        wantedBy = ["multi-user.target"];
+        # A colon would end socat's address, so the reply lives in a script; one
+        # write, as socat sends each read as its own datagram.
+        serviceConfig.ExecStart = "${pkgs.socat}/bin/socat UDP4-RECVFROM:7777,bind=127.0.0.1,fork EXEC:${pkgs.writeShellScript "udp-echo" ''l=$(cat); printf 'echo:%s' "$l"''}";
       };
       # Updates switch for real; the test VM's GRUB can't install, and a real guest boots systemd-boot.
       boot.loader.grub.enable = false;
@@ -138,7 +151,11 @@ in
       with subtest("the control stream delivers the module's config"):
           cfg = json.loads(client.succeed(f"{A} config"))
           assert cfg["hostname"] == "${nodes.phone.networking.hostName}", cfg["hostname"]
-          assert cfg["forwards"] == [{"name": "ssh", "guestPort": 22, "hostPort": ${toString nodes.phone.pocketnix.guest.forwards.ssh.hostPort}, "lan": False}], cfg["forwards"]
+          ssh_port = ${toString nodes.phone.pocketnix.guest.forwards.ssh.hostPort}
+          assert sorted(cfg["forwards"], key=lambda f: f["name"]) == [
+              {"name": "echo", "guestPort": 7777, "hostPort": ssh_port, "lan": False, "protocol": "udp"},
+              {"name": "ssh", "guestPort": 22, "hostPort": ssh_port, "lan": False, "protocol": "tcp"},
+          ], cfg["forwards"]
           names = sorted(p["name"] for p in cfg["terminal"]["profiles"])
           assert names == ["fail", "htop", "probe", "shell"], names
           assert cfg["terminal"]["defaultProfile"] == "shell"
@@ -166,6 +183,12 @@ in
               f"-o ProxyCommand='{A} forward 22' nixos@phone echo via-forward"
           )
           assert "via-forward" in out, out
+
+      with subtest("a udp stream relays datagrams to a guest UDP port"):
+          phone.wait_until_succeeds("ss -uln | grep -q 127.0.0.1:7777")
+          out = client.succeed(f"printf 'one\\ntwo\\n' | {A} udp 7777")
+          # Each datagram is its own socat child, so replies may cross.
+          assert sorted(out.split()) == ["echo:one", "echo:two"], out
 
       with subtest("a switch reloads the config live, without restarting the agent"):
           pid = phone.succeed("systemctl show -P MainPID pocketnix-agent")

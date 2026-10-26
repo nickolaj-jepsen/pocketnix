@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -32,6 +33,9 @@ commands:
       --resize <rows>x<cols> resize once the session printed something
       --input <text>       type <text> once the session printed something
   forward <port>         splice stdin/stdout to a guest TCP port (an ssh ProxyCommand)
+  udp [flags] <port>     send each stdin line as a datagram to a guest UDP port,
+                         printing each reply as a line
+      --wait <duration>    how long to wait for replies after stdin ends (default 2s)
   font <file>            save the configured font
   ping | poweroff | reboot
   updates                print the update state and generations
@@ -179,6 +183,8 @@ func runAgent(args []string) error {
 			return err
 		}
 		return spliceStdio(conn)
+	case "udp":
+		return agentUDP(c, rest)
 	case "font":
 		if len(rest) != 1 {
 			return errUsage
@@ -320,6 +326,71 @@ type exitStatus int32
 func (e exitStatus) Error() string { return fmt.Sprintf("session exited with status %d", int32(e)) }
 
 // spliceStdio ends when the guest closes its side, even if stdin stays open.
+func agentUDP(c *client.Client, args []string) error {
+	fs := flag.NewFlagSet("udp", flag.ContinueOnError)
+	wait := fs.Duration("wait", 2*time.Second, "")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errUsage
+	}
+	port, err := strconv.Atoi(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	d, err := c.UDP(port)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	sent := make(chan error, 1)
+	go func() {
+		sc := bufio.NewScanner(os.Stdin)
+		for sc.Scan() {
+			if err := d.Send(sc.Bytes()); err != nil {
+				sent <- err
+				return
+			}
+		}
+		sent <- sc.Err()
+	}()
+	got := make(chan []byte)
+	failed := make(chan error, 1)
+	go func() {
+		buf := make([]byte, protocol.MaxDatagram)
+		for {
+			n, err := d.Recv(buf)
+			if err != nil {
+				failed <- err
+				return
+			}
+			got <- append([]byte(nil), buf[:n]...)
+		}
+	}()
+	// Replies may trail the last datagram; stop once none came for wait after stdin ended.
+	var idle <-chan time.Time
+	for {
+		select {
+		case err := <-sent:
+			if err != nil {
+				return err
+			}
+			sent = nil
+			idle = time.After(*wait)
+		case b := <-got:
+			fmt.Printf("%s\n", b)
+			if sent == nil {
+				idle = time.After(*wait)
+			}
+		case err := <-failed:
+			return err
+		case <-idle:
+			return nil
+		}
+	}
+}
+
 func spliceStdio(conn net.Conn) error {
 	go func() {
 		io.Copy(conn, os.Stdin)

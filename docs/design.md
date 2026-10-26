@@ -20,13 +20,14 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 - Go (mdlayher/vsock, creack/pty), built by this flake, run by `nixosModules.default`.
 - The app always dials; an AVF guest can't dial an app. One persistent control
   stream (newline-delimited JSON, guest pushes events over it), plus one stream
-  per PTY session, per port forward, per file operation.
+  per PTY session, per forwarded TCP connection or UDP client, per file operation.
 - The protocol is versioned (`go/internal/protocol`) and negotiated in Hello, so
   app and module versions may drift a little.
 - Every connection opens with the app's Hello naming its stream (control, pty,
-  forward, font); the agent answers with its own Hello or an Error. PTY streams
+  forward, udp, font); the agent answers with its own Hello or an Error. PTY streams
   carry small binary frames (data, resize, exit status), so a tab needs nothing
-  from the control stream; forwards are raw bytes.
+  from the control stream; forwards are raw bytes, and UDP streams
+  length-prefixed datagrams.
 - The agent serves any listener: vsock in the guest, which only admits the
   host (CID 2), and TCP or a unix socket for tests and the debug TCP backend.
 - Tabs run `$SHELL -l [-c <profile command>]` as `pocketnix.guest.user`, the
@@ -143,6 +144,10 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 
 - Agent endpoints (PTY, files, control) never leave the app process.
 - Port forwards bind 127.0.0.1; a per-forward `lan = true` opts into the LAN.
+- A forward is TCP unless `protocol = "udp"`. A UDP forward opens one stream
+  per phone-side client address, dropped after 2 minutes without a datagram
+  and capped at 64 (UDP sources are trivially forged on a LAN). It's its own
+  stream kind, so an agent without it refuses instead of mixing up protocols.
 
 ## Lifecycle
 

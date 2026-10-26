@@ -12,6 +12,8 @@
 //     type or an [Error].
 //   - pty: binary frames (see frame.go) carrying one terminal session.
 //   - forward: raw bytes spliced to a TCP port on the guest's loopback.
+//   - udp: datagrams (see datagram.go) relayed to a UDP port on the guest's
+//     loopback, one stream per client address on the phone.
 //   - font: the configured font file's bytes, then EOF.
 package protocol
 
@@ -47,7 +49,10 @@ const (
 	StreamControl = "control"
 	StreamPTY     = "pty"
 	StreamForward = "forward"
-	StreamFont    = "font"
+	// StreamUDP is a stream kind of its own, not a forward option, so an
+	// agent without it refuses rather than splicing datagrams into TCP.
+	StreamUDP  = "udp"
+	StreamFont = "font"
 )
 
 // Message types on the control stream, and the Hello/Error replies.
@@ -112,7 +117,7 @@ type Hello struct {
 	Profile string `json:"profile,omitempty"`
 	Rows    int    `json:"rows,omitempty"`
 	Cols    int    `json:"cols,omitempty"`
-	// Forward: the guest TCP port on 127.0.0.1.
+	// Forward and udp: the guest port on 127.0.0.1.
 	Port int `json:"port,omitempty"`
 
 	// The byte count that follows: the agent's on a font or file read, the
@@ -145,14 +150,22 @@ type Config struct {
 	Terminal Terminal  `json:"terminal"`
 }
 
-// Forward is one TCP port the app exposes on the phone.
+// Forward is one port the app exposes on the phone.
 type Forward struct {
 	Name      string `json:"name"`
 	GuestPort int    `json:"guestPort"`
 	HostPort  int    `json:"hostPort"`
+	// Protocol is ProtocolTCP (also when empty) or ProtocolUDP.
+	Protocol string `json:"protocol,omitempty"`
 	// LAN binds 0.0.0.0 instead of 127.0.0.1.
 	LAN bool `json:"lan"`
 }
+
+// Forward protocols.
+const (
+	ProtocolTCP = "tcp"
+	ProtocolUDP = "udp"
+)
 
 // Terminal is the module's terminal UI configuration.
 type Terminal struct {

@@ -1,5 +1,5 @@
 // Package agent is the guest side of pocketnix: it serves the app's control,
-// PTY, forward and font streams (see package protocol) on any listener.
+// PTY, forward, udp and font streams (see package protocol) on any listener.
 package agent
 
 import (
@@ -13,6 +13,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/protocol"
@@ -146,6 +147,8 @@ func (s *Server) handle(c net.Conn) {
 		s.servePTY(c, hello)
 	case protocol.StreamForward:
 		s.serveForward(c, hello.Port)
+	case protocol.StreamUDP:
+		s.serveUDP(c, hello.Port)
 	case protocol.StreamFont:
 		s.serveFont(c)
 	case protocol.StreamFile:
@@ -328,6 +331,47 @@ func (s *Server) serveForward(c net.Conn, port int) {
 		return
 	}
 	splice(c, t)
+}
+
+// serveUDP relays datagrams between the stream and a UDP socket connected to
+// port on the loopback, until the app closes the stream.
+func (s *Server) serveUDP(c net.Conn, port int) {
+	if port < 1 || port > 65535 {
+		reject(c, fmt.Sprintf("port %d out of range", port))
+		return
+	}
+	u, err := net.Dial("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		reject(c, err.Error())
+		return
+	}
+	defer u.Close()
+	if protocol.WriteJSON(c, s.hello()) != nil {
+		return
+	}
+	go func() {
+		defer c.Close()
+		buf := make([]byte, protocol.MaxDatagram)
+		for {
+			n, err := u.Read(buf)
+			// Nothing listening yet (ICMP port unreachable): the service may start later.
+			if errors.Is(err, syscall.ECONNREFUSED) {
+				continue
+			}
+			if err != nil || protocol.WriteDatagram(c, buf[:n]) != nil {
+				return
+			}
+		}
+	}()
+	r := bufio.NewReader(c)
+	buf := make([]byte, protocol.MaxDatagram)
+	for {
+		n, err := protocol.ReadDatagram(r, buf)
+		if err != nil {
+			return
+		}
+		u.Write(buf[:n])
+	}
 }
 
 // splice copies both ways, passing each side's EOF on as a half-close.

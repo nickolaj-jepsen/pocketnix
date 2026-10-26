@@ -2,6 +2,7 @@ package dev.nickolaj.pocketnix.agent
 
 import com.termux.terminal.TerminalBackend
 import dev.nickolaj.pocketnix.forward.PortForwards
+import dev.nickolaj.pocketnix.forward.UdpForwarder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -20,7 +21,11 @@ import org.json.JSONObject
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
 import java.net.ServerSocket
+import java.net.SocketTimeoutException
 import java.net.Socket
 import java.net.UnixDomainSocketAddress
 import java.nio.ByteBuffer
@@ -41,8 +46,10 @@ class AgentIntegrationTest {
     private val dialer get() = TcpDialer("127.0.0.1", port)
 
     private fun freePort() = ServerSocket(0).use { it.localPort }
+    private fun freeUdpPort() = DatagramSocket(0).use { it.localPort }
 
     private lateinit var echo: ServerSocket
+    private lateinit var udpEcho: DatagramSocket
 
     @Before
     fun startAgent() {
@@ -56,12 +63,23 @@ class AgentIntegrationTest {
                 Thread { c.use { s -> s.getOutputStream().write("echo:".toByteArray() + s.getInputStream().readBytes()) } }.start()
             }
         }.apply { isDaemon = true }.start()
+        udpEcho = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+        Thread {
+            val buf = ByteArray(65535)
+            while (true) {
+                val p = DatagramPacket(buf, buf.size)
+                runCatching { udpEcho.receive(p) }.getOrNull() ?: break
+                val reply = "echo:".toByteArray() + p.data.copyOfRange(0, p.length)
+                runCatching { udpEcho.send(DatagramPacket(reply, reply.size, p.socketAddress)) }
+            }
+        }.apply { isDaemon = true }.start()
         File(dir, "history").writeText("ls\nmake\n")
         File(dir, "agent.json").writeText(
             """
             {"shell":"/bin/sh", "history":"${File(dir, "history").path}",
              "filesRoot":"${File(dir, "files").apply { mkdirs() }.path}", "share":{"directory":"${File(dir, "inbox").path}"},
-             "forwards":[{"name":"echo","guestPort":${echo.localPort},"hostPort":${freePort()}}],
+             "forwards":[{"name":"echo","guestPort":${echo.localPort},"hostPort":${freePort()}},
+               {"name":"uecho","guestPort":${udpEcho.localPort},"hostPort":${freeUdpPort()},"protocol":"udp"}],
              "terminal":{"profiles":[{"name":"shell"},
                {"name":"exit4","command":"echo hi; exit 4"},
                {"name":"size","command":"while read l; do stty size; done"}],
@@ -87,6 +105,7 @@ class AgentIntegrationTest {
         scope.cancel()
         if (::agent.isInitialized) agent.destroy()
         if (::echo.isInitialized) echo.close()
+        if (::udpEcho.isInitialized) udpEcho.close()
         if (::dir.isInitialized) dir.deleteRecursively()
     }
 
@@ -245,7 +264,7 @@ class AgentIntegrationTest {
         val forwards = PortForwards("test")
         forwards.apply(cfg.forwards, dialer)
         try {
-            Socket("127.0.0.1", cfg.forwards.single().hostPort).use { s ->
+            Socket("127.0.0.1", cfg.forwards.single { !it.udp }.hostPort).use { s ->
                 s.getOutputStream().write("ping".toByteArray())
                 s.shutdownOutput()
                 assertEquals("echo:ping", String(s.getInputStream().readBytes()))
@@ -253,6 +272,68 @@ class AgentIntegrationTest {
         } finally {
             forwards.apply(emptyList(), null)
             ctl.stop()
+        }
+    }
+
+    /** Sends [msg] from [client] to the phone-side [port] and returns the reply, or null if none came. */
+    private fun roundTrip(client: DatagramSocket, port: Int, msg: String): String? {
+        val out = msg.toByteArray()
+        client.send(DatagramPacket(out, out.size, InetAddress.getByName("127.0.0.1"), port))
+        val p = DatagramPacket(ByteArray(65535), 65535)
+        return try {
+            client.receive(p)
+            String(p.data, 0, p.length)
+        } catch (_: SocketTimeoutException) {
+            null
+        }
+    }
+
+    private fun udpClient() = DatagramSocket(0, InetAddress.getByName("127.0.0.1")).apply { soTimeout = 5_000 }
+
+    @Test
+    fun udpForwardRelaysEachClientsDatagrams() = runBlocking {
+        val ctl = ControlChannel(scope, "test")
+        ctl.start(dialer)
+        val cfg = withTimeout(10_000) { ctl.config.filterNotNull().first() }
+        val f = cfg.forwards.single { it.udp }
+        val forwards = PortForwards("test")
+        assertEquals(emptyList<String>(), forwards.apply(cfg.forwards, dialer))
+        try {
+            udpClient().use { a ->
+                udpClient().use { b ->
+                    // Two client addresses are two flows; each reply goes back to its sender.
+                    assertEquals("echo:from-a", roundTrip(a, f.hostPort, "from-a"))
+                    assertEquals("echo:from-b", roundTrip(b, f.hostPort, "from-b"))
+                    val big = "x".repeat(60_000)
+                    assertEquals("echo:$big", roundTrip(a, f.hostPort, big))
+                    assertEquals("echo:", roundTrip(b, f.hostPort, ""))
+                }
+            }
+        } finally {
+            forwards.apply(emptyList(), null)
+            ctl.stop()
+        }
+    }
+
+    @Test
+    fun udpFlowsAreCappedAndReaped() {
+        val f = Forward("uecho", udpEcho.localPort, freeUdpPort(), lan = false, udp = true)
+        val fw = UdpForwarder(f, dialer, "test", idleMs = 400, maxFlows = 1)
+        try {
+            udpClient().use { a ->
+                udpClient().use { b ->
+                    assertEquals("echo:1", roundTrip(a, f.hostPort, "1"))
+                    // A second address past the cap is dropped, not queued.
+                    b.soTimeout = 1_000
+                    assertEquals(null, roundTrip(b, f.hostPort, "2"))
+                    // Once a's flow idles out, b gets the slot.
+                    Thread.sleep(1_500)
+                    b.soTimeout = 5_000
+                    assertEquals("echo:3", roundTrip(b, f.hostPort, "3"))
+                }
+            }
+        } finally {
+            fw.close()
         }
     }
 }

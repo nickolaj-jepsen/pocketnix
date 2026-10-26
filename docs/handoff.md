@@ -34,11 +34,11 @@ first; the phone was used last, with networking off, next to phone-vm.
 - **Resize on the phone**: the locked phone never laid the terminal out, so its
   tabs stayed 80x24; resize was checked in the VM test, under QEMU and on the
   emulator.
-- Known limits, not regressions: forwards are TCP only (no UDP); PTY sessions
-  end if the agent itself restarts; tabs don't survive the app process; and an
-  app crash kills the VM with it (virtmgr ties the VM to the app's process), so
-  crashes are hard power-offs of the guest. One such crash happened on the
-  phone tonight (an empty terminal write; fixed).
+- Known limits, not regressions: PTY sessions end if the agent itself
+  restarts; tabs don't survive the app process; and an app crash kills the VM
+  with it (virtmgr ties the VM to the app's process), so crashes are hard
+  power-offs of the guest. One such crash happened on the phone tonight (an
+  empty terminal write; fixed).
 
 ## Phone steps for you, in order
 

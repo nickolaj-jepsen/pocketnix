@@ -26,7 +26,7 @@ nix run .#boot-example           # that image under qemu-system-aarch64, agent o
 nix fmt .                        # alejandra, before committing Nix
 ```
 
-`pocketnix agent --connect <tcp:…|unix:…|vsock:<cid>:9100> config|exec|forward|update|switch-generation|history|…`
+`pocketnix agent --connect <tcp:…|unix:…|vsock:<cid>:9100> config|exec|forward|udp|update|switch-generation|history|…`
 talks to an agent the way the app does; the update commands wait for the
 operation and print its log and final state. A desktop agent for the app's debug TCP
 backend: `pocketnix-agent --config <file> --listen tcp:0.0.0.0:9100 --no-power`,

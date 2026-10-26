@@ -5,6 +5,7 @@ import dev.nickolaj.pocketnix.agent.AgentDialer
 import dev.nickolaj.pocketnix.agent.Forward
 import dev.nickolaj.pocketnix.agent.Protocol
 import dev.nickolaj.pocketnix.agent.open
+import java.io.Closeable
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetAddress
@@ -14,10 +15,11 @@ import java.util.concurrent.Semaphore
 
 /**
  * The module's port forwards: a listener on the phone per forward, each
- * accepted connection relayed to the guest over its own forward stream.
+ * accepted connection relayed to the guest over its own forward stream, and
+ * each UDP client address over its own udp stream.
  */
 class PortForwards(private val appVersion: String) {
-    private val active = mutableMapOf<Forward, Listener>()
+    private val active = mutableMapOf<Forward, Closeable>()
     private val failed = mutableMapOf<Forward, String>()
 
     /**
@@ -31,20 +33,21 @@ class PortForwards(private val appVersion: String) {
         for (f in active.keys - want) active.remove(f)?.close()
         failed.keys.retainAll(want)
         for (f in want - active.keys) {
-            runCatching { Listener(f, dialer!!) }
+            runCatching { if (f.udp) UdpForwarder(f, dialer!!, appVersion) else Listener(f, dialer!!) }
                 .onSuccess {
                     active[f] = it
                     failed.remove(f)
                 }
                 .onFailure {
-                    Log.w(TAG, "forward ${f.name} on port ${f.hostPort}: ${it.message}")
-                    failed[f] = "forward ${f.name}: port ${f.hostPort} unavailable (${it.message})"
+                    val port = if (f.udp) "udp port ${f.hostPort}" else "port ${f.hostPort}"
+                    Log.w(TAG, "forward ${f.name} on $port: ${it.message}")
+                    failed[f] = "forward ${f.name}: $port unavailable (${it.message})"
                 }
         }
         return failed.values.toList()
     }
 
-    private inner class Listener(private val f: Forward, private val dialer: AgentDialer) {
+    private inner class Listener(private val f: Forward, private val dialer: AgentDialer) : Closeable {
         private val server = ServerSocket(f.hostPort, 16, InetAddress.getByName(if (f.lan) "0.0.0.0" else "127.0.0.1"))
         // Bounds threads and guest streams under a connection flood.
         private val slots = Semaphore(MAX_CONNECTIONS)
@@ -99,7 +102,7 @@ class PortForwards(private val appVersion: String) {
             runCatching { guest.close() }
         }
 
-        fun close() {
+        override fun close() {
             runCatching { server.close() }
         }
     }

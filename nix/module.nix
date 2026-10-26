@@ -39,7 +39,7 @@
       forwards =
         lib.mapAttrsToList (name: f: {
           inherit name;
-          inherit (f) guestPort hostPort lan;
+          inherit (f) guestPort hostPort lan protocol;
         })
         cfg.forwards;
       terminal = {
@@ -200,7 +200,8 @@
   colorKey = "foreground|background|cursor|color([0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])";
   # time.ParseDuration's syntax without a sign: the agent refuses negative intervals.
   goDuration = "0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+";
-  hostPorts = lib.mapAttrsToList (_: f: f.hostPort) cfg.forwards;
+  # TCP and UDP ports are separate spaces: a forward of each may share a number.
+  hostPorts = lib.mapAttrsToList (_: f: "${f.protocol}/${toString f.hostPort}") cfg.forwards;
   badColors = lib.filter (k: builtins.match colorKey k == null) (lib.attrNames theme.colors);
 in {
   options.pocketnix.guest = {
@@ -236,8 +237,13 @@ in {
 
     forwards = mkOption {
       default = {};
-      example = lib.literalExpression ''{ ssh = { guestPort = 22; hostPort = 2222; }; }'';
-      description = "TCP ports the app exposes on the phone, on 127.0.0.1 unless `lan` is set.";
+      example = lib.literalExpression ''
+        {
+          ssh = { guestPort = 22; hostPort = 2222; };
+          mosh = { guestPort = 60001; protocol = "udp"; };
+        }
+      '';
+      description = "Ports the app exposes on the phone, on 127.0.0.1 unless `lan` is set.";
       type = types.attrsOf (types.submodule ({config, ...}: {
         options = {
           guestPort = mkOption {
@@ -254,6 +260,15 @@ in {
             type = types.bool;
             default = false;
             description = "Listen on every interface instead of 127.0.0.1.";
+          };
+          protocol = mkOption {
+            type = types.enum ["tcp" "udp"];
+            default = "tcp";
+            description = ''
+              What to forward. A UDP forward relays each phone-side client
+              address over a stream of its own, dropped after 2 minutes of
+              silence; it needs an app and agent that know UDP forwards.
+            '';
           };
         };
       }));
@@ -509,7 +524,7 @@ in {
         }
         {
           assertion = lib.allUnique hostPorts;
-          message = "pocketnix.guest.forwards: two forwards share a hostPort";
+          message = "pocketnix.guest.forwards: two forwards of one protocol share a hostPort";
         }
         {
           assertion = badColors == [];

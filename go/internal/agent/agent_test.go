@@ -72,6 +72,7 @@ func baseConfig() map[string]any {
 		"forwards": []map[string]any{
 			{"name": "ssh", "guestPort": 22, "hostPort": 2222},
 			{"name": "web", "guestPort": 8080, "lan": true},
+			{"name": "mosh", "guestPort": 60001, "protocol": "udp"},
 		},
 		"terminal": map[string]any{
 			"profiles": []map[string]any{
@@ -109,8 +110,9 @@ func TestControlConfig(t *testing.T) {
 			defer ctl.Close()
 			cfg := recvConfig(t, ctl)
 			want := []protocol.Forward{
-				{Name: "ssh", GuestPort: 22, HostPort: 2222},
-				{Name: "web", GuestPort: 8080, HostPort: 8080, LAN: true},
+				{Name: "ssh", GuestPort: 22, HostPort: 2222, Protocol: "tcp"},
+				{Name: "web", GuestPort: 8080, HostPort: 8080, LAN: true, Protocol: "tcp"},
+				{Name: "mosh", GuestPort: 60001, HostPort: 60001, Protocol: "udp"},
 			}
 			if !equalJSON(cfg.Forwards, want) {
 				t.Errorf("forwards = %+v, want %+v", cfg.Forwards, want)
@@ -471,6 +473,57 @@ func TestForward(t *testing.T) {
 	var re *protocol.RemoteError
 	if _, err := h.client.Forward(port); !errors.As(err, &re) {
 		t.Errorf("forward to a closed port = %v, want an agent error", err)
+	}
+}
+
+func TestUDP(t *testing.T) {
+	echo, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echo.Close()
+	go func() {
+		buf := make([]byte, protocol.MaxDatagram)
+		for {
+			n, from, err := echo.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			echo.WriteTo(append([]byte("echo:"), buf[:n]...), from)
+		}
+	}()
+	port := echo.LocalAddr().(*net.UDPAddr).Port
+
+	h := start(t, baseConfig(), unixAddr)
+	d, err := h.client.UDP(port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	buf := make([]byte, protocol.MaxDatagram)
+	// Each datagram comes back whole and on its own, the empty one included.
+	for _, msg := range []string{"one", "", strings.Repeat("x", 60000)} {
+		if err := d.Send([]byte(msg)); err != nil {
+			t.Fatal(err)
+		}
+		d.SetReadDeadline(time.Now().Add(5 * time.Second))
+		n, err := d.Recv(buf)
+		if err != nil || string(buf[:n]) != "echo:"+msg {
+			t.Fatalf("reply to a %d-byte datagram = %d bytes, %v", len(msg), n, err)
+		}
+	}
+
+	// A guest port with nothing listening drops datagrams but keeps the stream.
+	echo.Close()
+	d.Send([]byte("lost"))
+	d.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if _, err := d.Recv(buf); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("recv with nothing listening = %v, want a timeout", err)
+	}
+
+	var re *protocol.RemoteError
+	if _, err := h.client.UDP(70000); !errors.As(err, &re) {
+		t.Errorf("udp to port 70000 = %v, want an agent error", err)
 	}
 }
 

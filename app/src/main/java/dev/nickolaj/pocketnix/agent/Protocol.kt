@@ -63,7 +63,8 @@ object Protocol {
 /** The agent refused a request. */
 class AgentException(message: String) : IOException(message)
 
-data class Forward(val name: String, val guestPort: Int, val hostPort: Int, val lan: Boolean)
+/** [udp] forwards datagrams instead of TCP connections; the two may share a [hostPort]. */
+data class Forward(val name: String, val guestPort: Int, val hostPort: Int, val lan: Boolean, val udp: Boolean = false)
 
 data class Profile(val name: String, val command: String?)
 
@@ -95,7 +96,10 @@ data class GuestConfig(
                 hostname = o.optString("hostname"),
                 forwards = o.optJSONArray("forwards").objects().map {
                     val guest = it.getInt("guestPort")
-                    Forward(it.optString("name"), guest, it.optInt("hostPort", guest).takeIf { p -> p > 0 } ?: guest, it.optBoolean("lan"))
+                    Forward(
+                        it.optString("name"), guest, it.optInt("hostPort", guest).takeIf { p -> p > 0 } ?: guest, it.optBoolean("lan"),
+                        udp = it.optString("protocol") == "udp",
+                    )
                 },
                 profiles = t.optJSONArray("profiles").objects().map { Profile(it.getString("name"), it.optStringOrNull("command")) },
                 defaultProfile = t.optString("defaultProfile"),

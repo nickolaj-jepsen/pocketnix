@@ -39,10 +39,10 @@ object Frames {
         return Frame(type, payload)
     }
 
-    private fun readFully(input: InputStream, b: ByteArray) {
+    internal fun readFully(input: InputStream, b: ByteArray, count: Int = b.size) {
         var off = 0
-        while (off < b.size) {
-            val r = input.read(b, off, b.size - off)
+        while (off < count) {
+            val r = input.read(b, off, count - off)
             if (r < 0) throw IOException("stream ended inside a frame", EOFException())
             off += r
         }
@@ -60,5 +60,28 @@ object Frames {
     fun exitStatus(payload: ByteArray): Int {
         if (payload.size != 4) throw IOException("exit payload ${payload.size} bytes")
         return ByteBuffer.wrap(payload).int
+    }
+}
+
+/** UDP stream datagrams: [length u16 BE][payload], each way. */
+object Datagrams {
+    const val MAX_PAYLOAD = 65507
+
+    /** Encodes one datagram; write it with a single write so datagrams don't interleave. */
+    fun encode(payload: ByteArray, offset: Int = 0, count: Int = payload.size): ByteArray {
+        require(count <= MAX_PAYLOAD) { "datagram $count bytes" }
+        return ByteBuffer.allocate(2 + count).putShort(count.toShort()).put(payload, offset, count).array()
+    }
+
+    /** Reads one datagram into [buf] (at least [MAX_PAYLOAD] bytes); its length, or -1 at a clean end of stream. */
+    fun read(input: InputStream, buf: ByteArray): Int {
+        val hi = input.read()
+        if (hi < 0) return -1
+        val lo = input.read()
+        if (lo < 0) throw IOException("stream ended inside a datagram", EOFException())
+        val n = (hi shl 8) or lo
+        if (n > MAX_PAYLOAD || n > buf.size) throw IOException("datagram length $n")
+        Frames.readFully(input, buf, n)
+        return n
     }
 }

@@ -12,7 +12,7 @@ be, and [example/configuration.nix](example/configuration.nix) for a guest.
 
 Add `pocketnix.nixosModules.default` to an `aarch64-linux` NixOS configuration
 and set `pocketnix.guest.enable = true` (see the module for the terminal's
-profiles, extra keys, theme and port forwards). Then, with the phone on adb:
+profiles, extra keys, theme and port forwards, TCP or UDP). Then, with the phone on adb:
 
 ```bash
 nix run github:nickolaj-jepsen/pocketnix#provision -- \

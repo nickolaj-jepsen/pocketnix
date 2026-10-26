@@ -137,6 +137,13 @@ func (f *File) normalize() error {
 		} else if fw.HostPort < 1 || fw.HostPort > 65535 {
 			return fmt.Errorf("forward %q: host port %d out of range", fw.Name, fw.HostPort)
 		}
+		switch fw.Protocol {
+		case "":
+			f.Forwards[i].Protocol = protocol.ProtocolTCP
+		case protocol.ProtocolTCP, protocol.ProtocolUDP:
+		default:
+			return fmt.Errorf("forward %q: protocol %q is neither tcp nor udp", fw.Name, fw.Protocol)
+		}
 	}
 	t := &f.Terminal
 	if len(t.Profiles) == 0 {
