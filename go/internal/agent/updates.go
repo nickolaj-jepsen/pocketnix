@@ -55,10 +55,13 @@ type Updater struct {
 	nextCheck time.Time
 	pushTimer *time.Timer
 
-	// The running operation: its context, how to cancel it, closed when it ends.
+	// The running operation: its context and how to cancel it.
 	ctx    context.Context
 	cancel context.CancelFunc
-	done   chan struct{}
+	// pending is a switch that starts when the cancelled operation ends.
+	pending func(UpdatesConfig) error
+	// wake tells Periodic that the schedule changed.
+	wake chan struct{}
 }
 
 // NewUpdater returns an Updater for a NixOS guest.
@@ -75,6 +78,7 @@ func NewUpdater() *Updater {
 		StoreDir:   "/nix/store",
 		HTTP:       &http.Client{Timeout: 30 * time.Second},
 		state:      protocol.UpdateIdle,
+		wake:       make(chan struct{}, 1),
 	}
 }
 
@@ -88,28 +92,46 @@ func (u *Updater) Configure(c UpdatesConfig) {
 		u.nextCheck = time.Now().Add(2 * time.Minute)
 	}
 	u.mu.Unlock()
+	select {
+	case u.wake <- struct{}{}:
+	default:
+	}
 	u.changed()
 }
 
 // Periodic runs background checks at the configured interval until ctx ends.
+// With no interval or no source it sleeps until Configure changes that: an
+// idle guest's wakeups are the phone's.
 func (u *Updater) Periodic(ctx context.Context) {
-	t := time.NewTicker(30 * time.Second)
-	defer t.Stop()
 	for {
+		u.mu.Lock()
+		var due <-chan time.Time
+		var t *time.Timer
+		if u.cfg.interval > 0 && len(u.cfg.sources()) > 0 && !u.nextCheck.IsZero() {
+			t = time.NewTimer(time.Until(u.nextCheck))
+			due = t.C
+		}
+		u.mu.Unlock()
 		select {
 		case <-ctx.Done():
-			return
-		case now := <-t.C:
+		case <-u.wake:
+		case now := <-due:
 			u.mu.Lock()
-			due := u.cfg.interval > 0 && !u.nextCheck.IsZero() && now.After(u.nextCheck)
-			if due {
+			run := u.cfg.interval > 0 && !now.Before(u.nextCheck)
+			if run {
 				u.nextCheck = now.Add(u.cfg.interval)
 			}
 			u.mu.Unlock()
-			if due {
+			if run {
 				// A busy updater skips this round; the next interval tries again.
 				u.Check()
 			}
+		}
+		if t != nil {
+			t.Stop()
+		}
+		if ctx.Err() != nil {
+			return
 		}
 	}
 }
@@ -167,6 +189,12 @@ func (u *Updater) Apply() error {
 		if err := u.fetch(c, src, path); err != nil {
 			return err
 		}
+		if err := switchable(path); err != nil {
+			return err
+		}
+		if err := sameHost(path, c.host()); err != nil {
+			return err
+		}
 		if err := u.cmd(envTimeout, u.NixEnv, "-p", u.Profile, "--set", path); err != nil {
 			return err
 		}
@@ -188,24 +216,38 @@ func (u *Updater) SwitchGeneration(n int) error {
 	if path == "" {
 		return fmt.Errorf("no generation %d", n)
 	}
-	// A rollback can't wait for a check that a hung build host holds up.
-	u.mu.Lock()
-	checking, done := u.state == protocol.UpdateChecking || u.state == protocol.UpdateFetching, u.done
-	u.mu.Unlock()
-	if checking {
-		u.Cancel()
-		select {
-		case <-done:
-		case <-time.After(30 * time.Second):
-		}
+	if err := switchable(path); err != nil {
+		return err
 	}
-	return u.start(protocol.UpdateSwitching, func(UpdatesConfig) error {
+	op := func(UpdatesConfig) error {
 		u.logf("switching to generation %d (%s)", n, path)
 		if err := u.cmd(envTimeout, u.NixEnv, "-p", u.Profile, "--switch-generation", strconv.Itoa(n)); err != nil {
 			return err
 		}
 		return u.switchTo(path)
-	})
+	}
+	u.mu.Lock()
+	if u.state == protocol.UpdateChecking || u.state == protocol.UpdateFetching {
+		// A rollback can't wait for a check that a hung build host holds up,
+		// and the app's request can't wait for the check to stop: the switch
+		// takes over when it has.
+		if u.pending != nil {
+			u.mu.Unlock()
+			return errors.New("a switch is already waiting")
+		}
+		u.pending = op
+		u.cancel()
+		running := u.state
+		u.mu.Unlock()
+		u.logf("stopping the %s to switch to generation %d", running, n)
+		return nil
+	}
+	err := u.startLocked(protocol.UpdateSwitching, op)
+	u.mu.Unlock()
+	if err == nil {
+		u.changed()
+	}
+	return err
 }
 
 // Cancel stops the running check or download. A switch already under way
@@ -219,6 +261,7 @@ func (u *Updater) Cancel() error {
 	if u.state == protocol.UpdateSwitching {
 		return errors.New("a switch can't be cancelled")
 	}
+	u.pending = nil
 	u.cancel()
 	return nil
 }
@@ -236,36 +279,46 @@ func (u *Updater) run(state string, op func(UpdatesConfig) error) error {
 // start claims the updater for op and runs it in the background.
 func (u *Updater) start(state string, op func(UpdatesConfig) error) error {
 	u.mu.Lock()
+	err := u.startLocked(state, op)
+	u.mu.Unlock()
+	if err == nil {
+		u.changed()
+	}
+	return err
+}
+
+// startLocked is start with u.mu held; the caller reports the change.
+func (u *Updater) startLocked(state string, op func(UpdatesConfig) error) error {
 	if u.state != protocol.UpdateIdle {
-		busy := u.state
-		u.mu.Unlock()
-		return fmt.Errorf("busy (%s)", busy)
+		return fmt.Errorf("busy (%s)", u.state)
 	}
 	u.state, u.err, u.log = state, "", nil
 	u.op++
 	cfg := u.cfg
 	ctx, cancel := context.WithCancel(context.Background())
-	u.ctx, u.cancel, u.done = ctx, cancel, make(chan struct{})
-	done := u.done
-	u.mu.Unlock()
-	u.changed()
+	u.ctx, u.cancel = ctx, cancel
 	go func() {
 		err := op(cfg)
 		if ctx.Err() != nil && err != nil {
 			err = errors.New("cancelled")
 		}
 		cancel()
+		if err != nil {
+			u.logf("failed: %v", err)
+		}
 		u.mu.Lock()
 		u.state = protocol.UpdateIdle
 		u.cancel = nil
 		if err != nil {
 			u.err = err.Error()
 		}
-		close(done)
-		u.mu.Unlock()
-		if err != nil {
-			u.logf("failed: %v", err)
+		// A switch waiting for this operation to stop takes over at once,
+		// before anything else can claim the updater.
+		if next := u.pending; next != nil {
+			u.pending = nil
+			u.startLocked(protocol.UpdateSwitching, next)
 		}
+		u.mu.Unlock()
 		u.changed()
 	}()
 	return nil
@@ -314,10 +367,62 @@ func (u *Updater) storePath(c UpdatesConfig, s string) (string, error) {
 	if filepath.Clean(dir) != u.StoreDir || !storeName.MatchString(name) {
 		return "", fmt.Errorf("answered %q, not a store path", s)
 	}
-	if strings.HasSuffix(name, ".drv") || c.hostname != "" && !strings.HasPrefix(name[33:], "nixos-system-"+c.hostname+"-") {
-		return "", fmt.Errorf("answered %q, not a nixos-system-%s-… toplevel", s, c.hostname)
+	host := c.host()
+	if strings.HasSuffix(name, ".drv") || !isToplevel(name[33:], host) {
+		return "", fmt.Errorf("answered %q, not a nixos-system-%s-… toplevel", s, host)
 	}
 	return s, nil
+}
+
+// isToplevel reports whether name looks like host's system,
+// nixos-system-<host>-<label>. "phone" still passes "phone-vm-…", and a label
+// may hold anything, so [sameHost] settles it once the path is here.
+func isToplevel(name, host string) bool {
+	prefix := "nixos-system-" + host + "-"
+	return host != "" && strings.HasPrefix(name, prefix) && len(name) > len(prefix)
+}
+
+// sameHost checks that the system at path was built for host, by the
+// /etc/hostname it would install.
+func sameHost(path, host string) error {
+	b, err := os.ReadFile(filepath.Join(path, "etc", "hostname"))
+	if err != nil {
+		return fmt.Errorf("%s has no etc/hostname: not this host's toplevel", path)
+	}
+	if got := strings.TrimSpace(string(b)); got != host {
+		return fmt.Errorf("%s is %q's toplevel, not this host's (%q)", path, got, host)
+	}
+	return nil
+}
+
+// host is the hostname a toplevel must be built for.
+func (c UpdatesConfig) host() string {
+	if c.hostname != "" {
+		return c.hostname
+	}
+	h, _ := os.Hostname()
+	return h
+}
+
+// switchable checks that path is a system the guest can activate, before
+// it becomes a generation.
+func switchable(path string) error {
+	fi, err := os.Stat(filepath.Join(path, "bin", "switch-to-configuration"))
+	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("%s has no bin/switch-to-configuration: not a NixOS system", path)
+	}
+	return nil
+}
+
+// httpsOnly refuses a published URL's redirect away from https.
+func httpsOnly(req *http.Request, via []*http.Request) error {
+	if req.URL.Scheme != "https" {
+		return fmt.Errorf("refusing a redirect to %s", req.URL.Redacted())
+	}
+	if len(via) >= 10 {
+		return errors.New("too many redirects")
+	}
+	return nil
 }
 
 func (u *Updater) target(c UpdatesConfig, src string) (string, error) {
@@ -337,7 +442,9 @@ func (u *Updater) target(c UpdatesConfig, src string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		resp, err := u.HTTP.Do(req)
+		cl := *u.HTTP
+		cl.CheckRedirect = httpsOnly
+		resp, err := cl.Do(req)
 		if err != nil {
 			return "", err
 		}
@@ -366,7 +473,11 @@ func (u *Updater) fetch(c UpdatesConfig, src, path string) error {
 	u.logf("not in the guest's caches; copying from %s", b.Host)
 	// Unsigned is fine: the guest already trusts this host with its whole system.
 	env := []string{"NIX_SSHOPTS=" + strings.Join(sshArgs(b), " ")}
-	return u.runCmd(fetchTimeout, nil, env, u.Nix, "--extra-experimental-features", "nix-command", "copy", "-v", "--no-check-sigs", "--from", "ssh-ng://"+b.Host, path)
+	// Through the daemon, the destination substitutes what its caches have
+	// (a local store ignores --substitute-on-destination), so only the
+	// host's own builds cross ssh.
+	return u.runCmd(fetchTimeout, nil, env, u.Nix, "--extra-experimental-features", "nix-command", "copy", "-v", "--no-check-sigs",
+		"--substitute-on-destination", "--to", "daemon", "--from", "ssh-ng://"+b.Host, path)
 }
 
 func (u *Updater) switchTo(path string) error {

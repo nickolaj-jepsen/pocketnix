@@ -4,6 +4,7 @@
 package client
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/protocol"
 )
@@ -52,13 +54,24 @@ type Control struct {
 	Agent string // the agent's build version
 
 	configs chan protocol.Config
-	replies chan reply
 	events  chan protocol.Event
+	ended   chan struct{}
 	wmu     sync.Mutex
+
+	// The one request awaiting its answer (requests go one at a time).
+	pmu     sync.Mutex
+	nextID  int
+	pending *call
 
 	umu     sync.Mutex
 	updates protocol.Updates
 	uchange chan struct{}
+}
+
+type call struct {
+	id   int
+	want string
+	done chan reply
 }
 
 type reply struct {
@@ -66,6 +79,10 @@ type reply struct {
 	line []byte
 	err  error
 }
+
+// replyTimeout bounds the wait for an answer; the agent answers at once,
+// long operations included (their outcome arrives as Updates).
+var replyTimeout = 30 * time.Second
 
 // Control opens the control stream.
 func (c *Client) Control() (*Control, error) {
@@ -75,30 +92,33 @@ func (c *Client) Control() (*Control, error) {
 	}
 	ctl := &Control{
 		conn: conn, Agent: hello.Agent,
-		configs: make(chan protocol.Config, 16), replies: make(chan reply, 4), uchange: make(chan struct{}),
-		events: make(chan protocol.Event, 64),
+		configs: make(chan protocol.Config, 16), uchange: make(chan struct{}),
+		events: make(chan protocol.Event, 64), ended: make(chan struct{}),
 	}
 	go ctl.read()
 	return ctl, nil
 }
 
 func (c *Control) read() {
+	defer close(c.ended)
 	defer close(c.configs)
-	defer close(c.replies)
 	defer close(c.events)
 	defer func() {
 		c.umu.Lock()
 		close(c.uchange)
 		c.umu.Unlock()
 	}()
+	// Only JSON lines follow the Hello, so the reader may read ahead.
+	r := bufio.NewReader(c.conn)
 	for {
-		line, err := protocol.ReadLine(c.conn)
+		line, err := protocol.ReadLine(r)
 		if err != nil {
 			return
 		}
 		var env struct {
 			Type    string `json:"type"`
 			Message string `json:"message"`
+			ID      int    `json:"id"`
 		}
 		if json.Unmarshal(line, &env) != nil {
 			continue
@@ -107,7 +127,17 @@ func (c *Control) read() {
 		case protocol.TypeConfig:
 			var cfg protocol.Config
 			if json.Unmarshal(line, &cfg) == nil {
-				c.configs <- cfg
+				// Only the latest config matters: a reader that fell behind
+				// loses an older one rather than stalling the stream.
+				select {
+				case c.configs <- cfg:
+				default:
+					select {
+					case <-c.configs:
+					default:
+					}
+					c.configs <- cfg
+				}
 			}
 		case protocol.TypeUpdates:
 			// Pushed, and the answer to an updates request: both are the latest state.
@@ -128,11 +158,26 @@ func (c *Control) read() {
 				}
 			}
 		case protocol.TypeError:
-			c.replies <- reply{err: &protocol.RemoteError{Message: env.Message}}
+			c.answer(env.ID, env.Type, reply{err: &protocol.RemoteError{Message: env.Message}})
 		default:
-			c.replies <- reply{typ: env.Type, line: line}
+			c.answer(env.ID, env.Type, reply{typ: env.Type, line: line})
 		}
 	}
+}
+
+// answer hands r to the pending request it answers. An answer names its
+// request's id; one without (an older agent) answers by its type, and
+// anything else is a push this client doesn't know, which it ignores.
+func (c *Control) answer(id int, typ string, r reply) {
+	c.pmu.Lock()
+	p := c.pending
+	if p == nil || (id != 0 && id != p.id) || (id == 0 && typ != protocol.TypeError && typ != p.want) {
+		c.pmu.Unlock()
+		return
+	}
+	c.pending = nil
+	c.pmu.Unlock()
+	p.done <- r
 }
 
 // Configs delivers the config on connect and after each agent reload. It's
@@ -188,23 +233,42 @@ func (c *Control) Run(start func() error) (protocol.Updates, error) {
 func (c *Control) request(req protocol.Request) ([]byte, error) {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
+	want := req.Type
+	if want == protocol.TypePing {
+		want = protocol.TypePong
+	}
+	c.pmu.Lock()
+	c.nextID++
+	req.ID = c.nextID
+	p := &call{id: req.ID, want: want, done: make(chan reply, 1)}
+	if req.Type != protocol.TypeUpdates {
+		// An updates request's answer arrives as an Updates, outside the replies.
+		c.pending = p
+	}
+	c.pmu.Unlock()
+	defer func() {
+		c.pmu.Lock()
+		if c.pending == p {
+			c.pending = nil
+		}
+		c.pmu.Unlock()
+	}()
 	if err := protocol.WriteJSON(c.conn, req); err != nil {
 		return nil, err
 	}
 	if req.Type == protocol.TypeUpdates {
-		// Its answer arrives as an Updates, outside the replies.
 		return nil, nil
 	}
-	r, ok := <-c.replies
-	if !ok {
+	var r reply
+	select {
+	case r = <-p.done:
+	case <-c.ended:
 		return nil, io.ErrUnexpectedEOF
+	case <-time.After(replyTimeout):
+		return nil, fmt.Errorf("no answer to %s within %v", req.Type, replyTimeout)
 	}
 	if r.err != nil {
 		return nil, r.err
-	}
-	want := req.Type
-	if want == protocol.TypePing {
-		want = protocol.TypePong
 	}
 	if r.typ != want {
 		return nil, fmt.Errorf("sent %s, agent answered %s", req.Type, r.typ)

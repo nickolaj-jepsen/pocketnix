@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/protocol"
 )
@@ -22,14 +24,39 @@ const maxClipboard = 128 << 10
 // notifications, opening URLs and files, and the clipboard, all through the
 // app. Only root and the session user may use it.
 func (s *Server) ServeGuest(l net.Listener) error {
+	slots := make(chan struct{}, maxGuestConns)
 	for {
 		c, err := l.Accept()
 		if err != nil {
-			return err
+			if errors.Is(err, net.ErrClosed) {
+				return err
+			}
+			// A failure such as EMFILE mustn't end the agent, and every tab with it.
+			log.Printf("guest socket: %v", err)
+			time.Sleep(100 * time.Millisecond)
+			continue
 		}
-		go s.handleGuest(c)
+		select {
+		case slots <- struct{}{}:
+		default:
+			protocol.WriteJSON(c, protocol.GuestReply{Error: "too many guest connections"})
+			c.Close()
+			continue
+		}
+		go func() {
+			defer func() { <-slots }()
+			s.handleGuest(c)
+		}()
 	}
 }
+
+const (
+	// maxGuestConns bounds the guest socket's open connections, so a leaking
+	// program can't run the agent out of descriptors.
+	maxGuestConns = 64
+	// guestIdle is how long a guest connection may wait between requests.
+	guestIdle = 30 * time.Second
+)
 
 func (s *Server) handleGuest(c net.Conn) {
 	defer c.Close()
@@ -37,8 +64,10 @@ func (s *Server) handleGuest(c net.Conn) {
 		protocol.WriteJSON(c, protocol.GuestReply{Error: err.Error()})
 		return
 	}
+	r := bufio.NewReader(c)
 	for {
-		line, err := protocol.ReadLine(c)
+		c.SetReadDeadline(time.Now().Add(guestIdle))
+		line, err := protocol.ReadLine(r)
 		if err != nil {
 			return
 		}
@@ -152,6 +181,28 @@ func (s *Server) filesRoot() (string, error) {
 		return "", err
 	}
 	return u.home, nil
+}
+
+// openFilesRoot opens the file provider's root.
+func (s *Server) openFilesRoot() (*os.Root, error) {
+	cfg := s.config()
+	if cfg.FilesRoot == "" {
+		root, err := s.filesRoot()
+		if err != nil {
+			return nil, err
+		}
+		return os.OpenRoot(root)
+	}
+	return configuredDir(userHome(cfg.User), cfg.FilesRoot, false, nil)
+}
+
+// userHome is the session user's home, or "" when there's none to find.
+func userHome(name string) string {
+	u, err := sessionUser(name)
+	if err != nil {
+		return ""
+	}
+	return u.home
 }
 
 // underFilesRoot turns an absolute guest path into one relative to the file

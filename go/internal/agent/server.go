@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,7 +47,7 @@ func New(path string) (*Server, error) {
 	}
 	s := &Server{Version: "dev", path: path, cfg: cfg, controls: map[*lockedWriter]struct{}{}, Updates: NewUpdater()}
 	s.Updates.Configure(cfg.Updates)
-	s.Updates.Changed = func() { s.push(s.Updates.State()) }
+	s.Updates.Changed = func() { s.pushLatest(func() any { return s.Updates.State() }) }
 	return s, nil
 }
 
@@ -60,13 +61,20 @@ func (s *Server) Reload() error {
 	s.mu.Lock()
 	s.cfg = cfg
 	s.mu.Unlock()
-	s.push(configMessage(cfg))
+	s.pushLatest(func() any { return configMessage(s.config()) })
 	s.Updates.Configure(cfg.Updates)
 	return nil
 }
 
 // push sends msg to every control stream.
 func (s *Server) push(msg any) {
+	s.pushLatest(func() any { return msg })
+}
+
+// pushLatest sends msg() to every control stream, called with the stream's
+// writer held: a stream that just opened has its snapshot out first, and
+// what follows it is never older.
+func (s *Server) pushLatest(msg func() any) {
 	s.mu.Lock()
 	controls := make([]*lockedWriter, 0, len(s.controls))
 	for w := range s.controls {
@@ -74,7 +82,10 @@ func (s *Server) push(msg any) {
 	}
 	s.mu.Unlock()
 	for _, w := range controls {
-		if err := protocol.WriteJSON(w, msg); err != nil {
+		w.mu.Lock()
+		err := protocol.WriteJSON(unlocked{w}, msg())
+		w.mu.Unlock()
+		if err != nil {
 			log.Printf("push: %v", err)
 		}
 	}
@@ -166,6 +177,10 @@ type lockedWriter struct {
 func (l *lockedWriter) Write(b []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.write(b)
+}
+
+func (l *lockedWriter) write(b []byte) (int, error) {
 	c, ok := l.w.(net.Conn)
 	if !ok || !l.deadline {
 		return l.w.Write(b)
@@ -182,9 +197,17 @@ func (l *lockedWriter) Write(b []byte) (int, error) {
 
 const controlWriteTimeout = 10 * time.Second
 
+// unlocked writes through a lockedWriter whose lock the caller holds.
+type unlocked struct{ l *lockedWriter }
+
+func (u unlocked) Write(b []byte) (int, error) { return u.l.write(b) }
+
 func (s *Server) serveControl(c net.Conn) {
 	w := &lockedWriter{w: c, deadline: true}
-	// Register before sending the config, so a reload in between can't be missed.
+	// Register before taking the snapshot, so a reload in between can't be
+	// missed, and hold the writer meanwhile: a push waits until after the
+	// Hello and the snapshot, which it then supersedes.
+	w.mu.Lock()
 	s.mu.Lock()
 	s.controls[w] = struct{}{}
 	cfg := s.cfg
@@ -194,12 +217,21 @@ func (s *Server) serveControl(c net.Conn) {
 		delete(s.controls, w)
 		s.mu.Unlock()
 	}()
-	if protocol.WriteJSON(w, s.hello()) != nil || protocol.WriteJSON(w, configMessage(cfg)) != nil ||
-		protocol.WriteJSON(w, s.Updates.State()) != nil {
+	err := protocol.WriteJSON(unlocked{w}, s.hello())
+	if err == nil {
+		err = protocol.WriteJSON(unlocked{w}, configMessage(cfg))
+	}
+	if err == nil {
+		err = protocol.WriteJSON(unlocked{w}, s.Updates.State())
+	}
+	w.mu.Unlock()
+	if err != nil {
 		return
 	}
+	// Only JSON lines follow the Hello, so the reader may read ahead.
+	r := bufio.NewReader(c)
 	for {
-		line, err := protocol.ReadLine(c)
+		line, err := protocol.ReadLine(r)
 		if err != nil {
 			if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
 				log.Printf("control: %v", err)
@@ -322,13 +354,16 @@ func (s *Server) serveFont(c net.Conn) {
 		reject(c, "no font configured")
 		return
 	}
-	f, err := os.Open(path)
+	f, err := configuredFile(userHome(s.config().User), path)
 	if err != nil {
 		reject(c, err.Error())
 		return
 	}
 	defer f.Close()
 	fi, err := f.Stat()
+	if err == nil && !fi.Mode().IsRegular() {
+		err = fmt.Errorf("font %s is not a regular file", path)
+	}
 	if err != nil {
 		reject(c, err.Error())
 		return

@@ -156,7 +156,7 @@ func (f *File) normalize() error {
 	}
 	t.Theme.FontSHA256 = ""
 	if t.Theme.Font != "" {
-		sum, err := fileSHA256(t.Theme.Font)
+		sum, err := fileSHA256(userHome(f.User), t.Theme.Font)
 		if err != nil {
 			return fmt.Errorf("font: %w", err)
 		}
@@ -180,8 +180,8 @@ func (f *File) profile(name string) (protocol.Profile, bool) {
 	return f.Terminal.Profiles[i], true
 }
 
-func fileSHA256(path string) (string, error) {
-	fh, err := os.Open(path)
+func fileSHA256(home, path string) (string, error) {
+	fh, err := configuredFile(home, path)
 	if err != nil {
 		return "", err
 	}

@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/adb"
 )
@@ -45,7 +48,16 @@ func runSSHProxy(args []string) error {
 	if _, err := strconv.Atoi(local); err != nil {
 		return fmt.Errorf("adb forward answered %q, not a port", local)
 	}
-	defer dev.Run("forward", "--remove", "tcp:"+local)
+	remove := sync.OnceFunc(func() { dev.Run("forward", "--remove", "tcp:"+local) })
+	defer remove()
+	// ssh ends its ProxyCommand with SIGHUP, which would skip the defer.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGHUP, syscall.SIGTERM, os.Interrupt)
+	go func() {
+		<-sig
+		remove()
+		os.Exit(1)
+	}()
 	conn, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", local))
 	if err != nil {
 		return err

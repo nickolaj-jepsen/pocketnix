@@ -31,8 +31,7 @@ func history(cfg *File, limit int) ([]string, error) {
 	var f *os.File
 	var err error
 	if path != "" {
-		// The module's own path: trusted, but still read with care.
-		f, err = os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+		f, err = configuredFile(userHome(cfg.User), path)
 	} else {
 		// The agent is root and the user owns this path: open it inside the
 		// home, so a symlink can't reach /etc/shadow or /dev/zero.

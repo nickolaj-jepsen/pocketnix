@@ -44,7 +44,8 @@ func fakeADB(args []string) int {
 		os.WriteFile(filepath.Join(state, "installed"), nil, 0o644)
 		os.WriteFile(filepath.Join(state, "vm-killed"), nil, 0o644)
 	case "push":
-		b, err := os.ReadFile(args[1])
+		local, remote := args[len(args)-2], args[len(args)-1]
+		b, err := os.ReadFile(local)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
@@ -53,8 +54,8 @@ func fakeADB(args []string) int {
 			fmt.Fprintln(os.Stderr, "adb: device offline (pushed too much at once)")
 			return 1
 		}
-		os.MkdirAll(filepath.Dir(devPath(args[2])), 0o755)
-		os.WriteFile(devPath(args[2]), b, 0o644)
+		os.MkdirAll(filepath.Dir(devPath(remote)), 0o755)
+		os.WriteFile(devPath(remote), b, 0o644)
 	case "shell":
 		line, ok := strings.CutSuffix(args[1], "; echo pocketnix-exit=$?")
 		if !ok {
@@ -117,6 +118,9 @@ func fakeShell(state, line string, logEvent func(string, ...any)) (string, int) 
 		}
 		return "Result: Bundle[{ok=true}]\n", 0
 	case len(f) == 6 && f[0] == "content" && f[1] == "write" && f[4] == "<":
+		if os.Getenv("FAKE_ADB_FULL") == "1" {
+			return "Error: No space left on device", 1
+		}
 		uri := unquote(f[3])
 		_, off, _ := strings.Cut(uri, "?offset=")
 		n, _ := strconv.ParseInt(off, 10, 64)
@@ -267,6 +271,30 @@ func TestProvisionNeedsAnAPKWithoutARelease(t *testing.T) {
 	img, _ := testImage(t)
 	if err := provisionFor(t, "--image", img); err == nil || !strings.Contains(err.Error(), "--apk") {
 		t.Errorf("got %v, want a hint to pass --apk", err)
+	}
+	// A release is never the debug app.
+	if err := provisionFor(t, "--image", img, "--debug"); err == nil || !strings.Contains(err.Error(), "--apk") {
+		t.Errorf("--debug without --apk: %v", err)
+	}
+}
+
+// A failed push leaves nothing behind, here or on the phone.
+func TestProvisionCleansUpAfterAFailure(t *testing.T) {
+	d := newFakeDevice(t)
+	img, _ := testImage(t)
+	apk := filepath.Join(t.TempDir(), "app.apk")
+	os.WriteFile(apk, []byte("apk"), 0o644)
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	t.Setenv("FAKE_ADB_FULL", "1")
+	if err := provisionFor(t, "--image", img, "--apk", apk); err == nil {
+		t.Fatal("provision succeeded onto a full phone")
+	}
+	if left, _ := os.ReadDir(tmp); len(left) != 0 {
+		t.Errorf("left in TMPDIR: %v", left)
+	}
+	if _, err := os.Stat(filepath.Join(d.state, "device", deviceChunk)); err == nil {
+		t.Error("chunk left behind on the device")
 	}
 }
 

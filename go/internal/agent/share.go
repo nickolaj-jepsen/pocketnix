@@ -1,9 +1,8 @@
 package agent
 
 import (
-	"errors"
+	"fmt"
 	"io"
-	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -19,41 +18,22 @@ import (
 // then runs the share command on each.
 
 // shareDir opens where shares land, made if missing, and returns it with its
-// path. A directory relative to the home is resolved inside the home, as the
-// user owns every step of it: a symlink there can't send root's writes
-// elsewhere. An absolute one comes from the module.
+// path: absolute, or relative to the session user's home.
 func (s *Server) shareDir() (*os.Root, string, error) {
 	cfg := s.config()
 	dir := cfg.Share.Directory
 	if dir == "" {
 		dir = "Inbox"
 	}
-	if filepath.IsAbs(dir) {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, "", err
+	home := userHome(cfg.User)
+	if !filepath.IsAbs(dir) {
+		if home == "" {
+			return nil, "", fmt.Errorf("share directory %q: the session user has no home", dir)
 		}
-		r, err := os.OpenRoot(dir)
-		return r, dir, err
+		dir = filepath.Join(home, dir)
 	}
-	u, err := sessionUser(cfg.User)
-	if err != nil {
-		return nil, "", err
-	}
-	home, err := os.OpenRoot(u.home)
-	if err != nil {
-		return nil, "", err
-	}
-	defer home.Close()
-	if _, err := home.Stat(dir); errors.Is(err, fs.ErrNotExist) {
-		if err := home.MkdirAll(dir, 0o755); err != nil {
-			return nil, "", err
-		}
-		if o := s.owner(); o != nil {
-			home.Lchown(dir, o.uid, o.gid)
-		}
-	}
-	r, err := home.OpenRoot(dir)
-	return r, filepath.Join(u.home, dir), err
+	r, err := configuredDir(home, dir, true, s.owner())
+	return r, dir, err
 }
 
 // serveShare stores one shared file: Hello.Size bytes after the agent's Hello.

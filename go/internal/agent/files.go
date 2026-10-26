@@ -23,12 +23,7 @@ import (
 // session user.
 
 func (s *Server) serveFile(c net.Conn, h protocol.Hello) {
-	rootDir, err := s.filesRoot()
-	if err != nil {
-		reject(c, err.Error())
-		return
-	}
-	root, err := os.OpenRoot(rootDir)
+	root, err := s.openFilesRoot()
 	if err != nil {
 		reject(c, err.Error())
 		return

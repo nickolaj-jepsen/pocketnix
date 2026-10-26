@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"io"
@@ -54,6 +55,27 @@ func TestReadLineLeavesTheRest(t *testing.T) {
 	rest, _ := io.ReadAll(r)
 	if string(rest) != "RAW" {
 		t.Fatalf("rest = %q", rest)
+	}
+}
+
+func TestReadLineBuffered(t *testing.T) {
+	long := bytes.Repeat([]byte("x"), MaxLine)
+	in := append(append([]byte("a\n"), long...), "\nb\n"...)
+	r := bufio.NewReaderSize(bytes.NewReader(in), 16)
+	for _, want := range []string{"a", string(long), "b"} {
+		line, err := ReadLine(r)
+		if err != nil || string(line) != want {
+			t.Fatalf("line of %d bytes: %d bytes, %v", len(want), len(line), err)
+		}
+	}
+	if _, err := ReadLine(r); err != io.EOF {
+		t.Fatalf("at end: %v", err)
+	}
+	if _, err := ReadLine(bufio.NewReader(bytes.NewReader(append(long, "x\n"...)))); !errors.Is(err, ErrLineTooLong) {
+		t.Fatalf("over MaxLine: %v", err)
+	}
+	if _, err := ReadLine(bufio.NewReader(bytes.NewReader([]byte("half")))); err != io.ErrUnexpectedEOF {
+		t.Fatalf("cut short: %v", err)
 	}
 }
 

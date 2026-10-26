@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,8 +15,12 @@ var ErrLineTooLong = errors.New("line too long")
 
 // ReadLine reads one '\n'-terminated line a byte at a time, so nothing past
 // it is consumed: after a Hello the same reader carries frames or raw bytes.
-// The newline is not returned.
+// A *bufio.Reader, for a stream of nothing but lines, is read in blocks. The
+// newline is not returned.
 func ReadLine(r io.Reader) ([]byte, error) {
+	if br, ok := r.(*bufio.Reader); ok {
+		return readBuffered(br)
+	}
 	var line []byte
 	var b [1]byte
 	for {
@@ -34,6 +39,27 @@ func ReadLine(r io.Reader) ([]byte, error) {
 			if err == io.EOF && len(line) > 0 {
 				err = io.ErrUnexpectedEOF
 			}
+			return nil, err
+		}
+	}
+}
+
+func readBuffered(br *bufio.Reader) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, err := br.ReadSlice('\n')
+		line = append(line, chunk...)
+		if n := len(line); n > MaxLine && (err != nil || n-1 > MaxLine) {
+			return nil, ErrLineTooLong
+		}
+		switch {
+		case err == nil:
+			return line[:len(line)-1], nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		case err == io.EOF && len(line) > 0:
+			return nil, io.ErrUnexpectedEOF
+		default:
 			return nil, err
 		}
 	}

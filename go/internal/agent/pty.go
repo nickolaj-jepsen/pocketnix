@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/creack/pty"
 
@@ -73,8 +75,10 @@ func (s *Server) servePTY(c net.Conn, hello protocol.Hello) {
 	// ends and the connection is closed below.
 	exited := make(chan struct{})
 	go func() {
+		// Only frames follow the Hello, so the reader may read ahead.
+		in := bufio.NewReaderSize(c, 32*1024)
 		for {
-			typ, payload, err := protocol.ReadFrame(c)
+			typ, payload, err := protocol.ReadFrame(in)
 			if err != nil {
 				hangup(cmd.Process.Pid)
 				// A shell that ignores SIGHUP would keep the session (and this
@@ -97,7 +101,7 @@ func (s *Server) servePTY(c net.Conn, hello protocol.Hello) {
 					log.Printf("pty: %v", err)
 					continue
 				}
-				pty.Setsize(ptmx, &pty.Winsize{Rows: sz.Rows, Cols: sz.Cols, X: sz.X, Y: sz.Y})
+				setsize(ptmx, &pty.Winsize{Rows: sz.Rows, Cols: sz.Cols, X: sz.X, Y: sz.Y})
 			}
 		}
 	}()
@@ -107,12 +111,15 @@ func (s *Server) servePTY(c net.Conn, hello protocol.Hello) {
 	select {
 	case <-outDone:
 	case <-time.After(exitDrain):
+		// A background child still holds the tty: hang it up, as a closed
+		// terminal would, which also ends the read above.
+		ptmx.Close()
 	}
 	protocol.WriteFrame(w, protocol.FrameExit, protocol.EncodeExit(status))
 }
 
-// hangup does what closing the master would: Go defers that close while the
-// output goroutine is blocked reading, so signal the session's group directly.
+// hangup signals the session's group: closing the master would hang up the
+// whole tty, but the session may still be draining output.
 func hangup(pid int) {
 	syscall.Kill(-pid, syscall.SIGHUP)
 	syscall.Kill(-pid, syscall.SIGCONT)
@@ -219,12 +226,16 @@ func dirExists(p string) bool {
 // startPTY starts cmd on a new pty whose slave belongs to the session user,
 // as login(1) leaves it.
 func startPTY(cmd *exec.Cmd, ws *pty.Winsize) (*os.File, error) {
-	ptmx, tty, err := pty.Open()
+	master, tty, err := pty.Open()
 	if err != nil {
 		return nil, err
 	}
 	defer tty.Close()
-	if err := pty.Setsize(ptmx, ws); err != nil {
+	ptmx, err := pollable(master)
+	if err != nil {
+		return nil, err
+	}
+	if err := setsize(ptmx, ws); err != nil {
 		ptmx.Close()
 		return nil, err
 	}
@@ -247,6 +258,47 @@ func startPTY(cmd *exec.Cmd, ws *pty.Winsize) (*os.File, error) {
 		return nil, err
 	}
 	return ptmx, nil
+}
+
+// pollable swaps f for a non-blocking copy in Go's poller, whose Close ends
+// a blocked Read: a plain *os.File defers the close until the Read returns,
+// which a background child holding the tty open can put off indefinitely.
+func pollable(f *os.File) (*os.File, error) {
+	defer f.Close()
+	sc, err := f.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	fd := -1
+	var dupErr error
+	sc.Control(func(raw uintptr) { fd, dupErr = syscall.Dup(int(raw)) })
+	if dupErr != nil {
+		return nil, dupErr
+	}
+	syscall.CloseOnExec(fd)
+	if err := syscall.SetNonblock(fd, true); err != nil {
+		syscall.Close(fd)
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), f.Name()), nil
+}
+
+// setsize is pty.Setsize without Fd(), which would take f out of the poller.
+func setsize(f *os.File, ws *pty.Winsize) error {
+	sc, err := f.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var errno syscall.Errno
+	if err := sc.Control(func(fd uintptr) {
+		_, _, errno = syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TIOCSWINSZ, uintptr(unsafe.Pointer(ws)))
+	}); err != nil {
+		return err
+	}
+	if errno != 0 {
+		return errno
+	}
+	return nil
 }
 
 func credential(cmd *exec.Cmd) *syscall.Credential {

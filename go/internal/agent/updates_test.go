@@ -35,6 +35,8 @@ func newFakeGuest(t *testing.T) *fakeGuest {
 	for i, c := range []string{"a", "b"} {
 		top := filepath.Join(g.store, strings.Repeat(c, 32)+fmt.Sprintf("-nixos-system-phone-26.05.%d", i+1))
 		must(t, os.MkdirAll(filepath.Join(top, "bin"), 0o755))
+		must(t, os.MkdirAll(filepath.Join(top, "etc"), 0o755))
+		must(t, os.WriteFile(filepath.Join(top, "etc", "hostname"), []byte("phone\n"), 0o644))
 		must(t, os.WriteFile(filepath.Join(top, "nixos-version"), fmt.Appendf(nil, "26.05.%d\n", i+1), 0o644))
 		g.script(t, filepath.Join(top, "bin", "switch-to-configuration"), fmt.Sprintf(`
 [ "$1" = switch ] || exit 2
@@ -241,7 +243,8 @@ func TestUpdateRejectsNonStorePath(t *testing.T) {
 		t.Fatalf("err %v, state error %q", err, u.Error)
 	}
 	// Another machine's system, or a derivation to build, isn't this host's toplevel.
-	for _, other := range []string{"-nixos-system-desktop-26.05.1", "-nixos-system-phone-26.05.drv-x.drv", "-hello-2.12"} {
+	for _, other := range []string{"-nixos-system-desktop-26.05.1", "-nixos-system-phone-26.05.drv-x.drv", "-hello-2.12",
+		"-nixos-system-phone-"} {
 		g.answer(t, filepath.Join(g.store, strings.Repeat("c", 32)+other))
 		if u, err := ctl.Run(ctl.UpdateApply); err == nil || !strings.Contains(u.Error, "toplevel") {
 			t.Errorf("%s: err %v, state error %q", other, err, u.Error)
@@ -249,6 +252,62 @@ func TestUpdateRejectsNonStorePath(t *testing.T) {
 	}
 	if currentGeneration(u) != 1 {
 		t.Errorf("switched anyway: %+v", u.Generations)
+	}
+}
+
+// A store path that isn't a NixOS system never becomes a generation.
+func TestUpdateRejectsUnswitchablePath(t *testing.T) {
+	g := newFakeGuest(t)
+	ctl := startUpdates(t, g, buildHost)
+	bogus := filepath.Join(g.store, strings.Repeat("c", 32)+"-nixos-system-phone-26.05.3")
+	must(t, os.MkdirAll(bogus, 0o755))
+	g.cache(t, bogus)
+	g.answer(t, bogus)
+	u, err := ctl.Run(ctl.UpdateApply)
+	if err == nil || !strings.Contains(u.Error, "not a NixOS system") {
+		t.Fatalf("err %v, state error %q", err, u.Error)
+	}
+	if len(u.Generations) != 1 {
+		t.Errorf("became a generation: %+v", u.Generations)
+	}
+}
+
+// Host "phone" can't tell "phone-vm"'s toplevel by its name; its etc/hostname
+// tells. A custom label is fine.
+func TestUpdateRejectsAnotherHostsSystem(t *testing.T) {
+	g := newFakeGuest(t)
+	ctl := startUpdates(t, g, buildHost)
+	for host, label := range map[string]string{"phone-vm": "vm-26.05.3", "phone": "main-abc123"} {
+		top := filepath.Join(g.store, strings.Repeat("d", 32)+"-nixos-system-phone-"+label)
+		must(t, os.MkdirAll(filepath.Join(top, "etc"), 0o755))
+		must(t, os.MkdirAll(filepath.Join(top, "bin"), 0o755))
+		must(t, os.WriteFile(filepath.Join(top, "etc", "hostname"), []byte(host+"\n"), 0o644))
+		g.script(t, filepath.Join(top, "bin", "switch-to-configuration"), fmt.Sprintf("ln -sfn %s %s\n", top, g.current))
+		g.cache(t, top)
+		g.answer(t, top)
+		u, err := ctl.Run(ctl.UpdateApply)
+		if host == "phone" {
+			if err != nil || u.Current != top {
+				t.Errorf("label %s: err %v, current %q", label, err, u.Current)
+			}
+		} else if err == nil || !strings.Contains(u.Error, "toplevel") || u.Current == top {
+			t.Errorf("%s's system: err %v, state error %q, current %q", host, err, u.Error, u.Current)
+		}
+	}
+}
+
+// Whoever answers the published URL picks the system: a redirect mustn't
+// drop to plain http.
+func TestPublishedRefusesHTTPRedirect(t *testing.T) {
+	g := newFakeGuest(t)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://ci.example/phone", http.StatusFound)
+	}))
+	defer srv.Close()
+	ctl := startUpdates(t, g, map[string]any{"published": map[string]any{"url": srv.URL + "/phone"}}, srv)
+	u, err := ctl.Run(ctl.UpdateCheck)
+	if err == nil || !strings.Contains(u.Error, "refusing a redirect") {
+		t.Fatalf("err %v, state error %q", err, u.Error)
 	}
 }
 
@@ -301,7 +360,15 @@ func TestHungBuildHost(t *testing.T) {
 	}
 
 	hung()
-	u, err = ctl.Run(func() error { return ctl.SwitchGeneration(1) })
+	u, err = ctl.Run(func() error {
+		// Answered at once: the app gives up on a request after 5 s.
+		start := time.Now()
+		err := ctl.SwitchGeneration(1)
+		if d := time.Since(start); d > time.Second {
+			t.Errorf("switch-generation answered after %v", d)
+		}
+		return err
+	})
 	if err != nil || currentGeneration(u) != 1 {
 		t.Fatalf("rollback during a hung check: %v, %+v", err, u)
 	}

@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/adb"
@@ -68,6 +69,7 @@ type provisionOpts struct {
 	log                       io.Writer
 	resolveInstallable        func(string) (string, error)
 	downloadRelease           func(version, dst string) error
+	cleanups                  *cleanups
 }
 
 func parseProvision(args []string) (*provisionOpts, error) {
@@ -110,6 +112,10 @@ func parseProvision(args []string) (*provisionOpts, error) {
 		fs.Usage()
 		return nil, errUsage
 	}
+	if o.debug && o.apk == "" {
+		// Releases are of the release app; granting the debug one would fail after the install.
+		return nil, errors.New("--debug needs --apk with a debug build")
+	}
 	if o.cpus != "" && o.cpus != "one" && o.cpus != "all" {
 		return nil, fmt.Errorf("--cpus %q: want one or all", o.cpus)
 	}
@@ -147,29 +153,53 @@ func runProvision(args []string) error {
 	return o.run()
 }
 
+// cleanups undoes what a provision left: temp files, among them injected
+// secrets (a host key), and the phone's chunk. They run once, in reverse.
+type cleanups struct {
+	mu  sync.Mutex
+	fns []func()
+}
+
+func (c *cleanups) add(f func()) {
+	c.mu.Lock()
+	c.fns = append(c.fns, f)
+	c.mu.Unlock()
+}
+
+func (c *cleanups) run() {
+	c.mu.Lock()
+	fns := c.fns
+	c.fns = nil
+	c.mu.Unlock()
+	for i := len(fns) - 1; i >= 0; i-- {
+		fns[i]()
+	}
+}
+
 func (o *provisionOpts) run() error {
 	dev := adb.Device{Serial: o.serial}
 	if state, err := dev.State(); err != nil || state != "device" {
 		return fmt.Errorf("no usable adb device (state %q): %v", state, err)
 	}
 
-	img, cleanup, err := o.prepareImage()
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	// The edited copy holds injected secrets (a host key): Ctrl-C mustn't leave it behind.
+	o.cleanups = &cleanups{}
+	defer o.cleanups.run()
+	// Ctrl-C mustn't leave a secret behind, whenever it comes.
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sig)
 	go func() {
 		if _, ok := <-sig; ok {
-			o.logf("interrupted; removing the image copy and the phone's chunk")
-			cleanup()
-			dev.Shell("rm -f " + deviceChunk)
+			o.logf("interrupted; cleaning up")
+			o.cleanups.run()
 			os.Exit(130)
 		}
 	}()
+
+	img, err := o.prepareImage()
+	if err != nil {
+		return err
+	}
 
 	apk := o.apk
 	if apk == "" {
@@ -177,7 +207,7 @@ func (o *provisionOpts) run() error {
 		if err != nil {
 			return err
 		}
-		defer os.RemoveAll(tmp)
+		o.cleanups.add(func() { os.RemoveAll(tmp) })
 		apk = filepath.Join(tmp, "pocketnix.apk")
 		o.logf("downloading the release APK for %s", version)
 		if err := o.downloadRelease(version, apk); err != nil {
@@ -262,30 +292,29 @@ func (o *provisionOpts) startCommand(img string) string {
 }
 
 // prepareImage resolves the image and, with injections, makes an edited copy.
-func (o *provisionOpts) prepareImage() (string, func(), error) {
+func (o *provisionOpts) prepareImage() (string, error) {
 	img, err := o.resolveImage()
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	if len(o.injects) == 0 {
-		return img, func() {}, nil
+		return img, nil
 	}
 	tmp, err := os.MkdirTemp("", "pocketnix-image-")
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
-	cleanup := func() { os.RemoveAll(tmp) }
+	// Inject stages its sources beside the copy, so this covers them too.
+	o.cleanups.add(func() { os.RemoveAll(tmp) })
 	cp := filepath.Join(tmp, "disk.img")
 	o.logf("copying %s to inject %d file(s)", img, len(o.injects))
 	if err := image.CopySparse(cp, img); err != nil {
-		cleanup()
-		return "", nil, err
+		return "", err
 	}
 	if err := image.Inject(cp, o.injects, o.stdin); err != nil {
-		cleanup()
-		return "", nil, err
+		return "", err
 	}
-	return cp, cleanup, nil
+	return cp, nil
 }
 
 // resolveImage accepts an image file, a directory holding one (a Nix build
@@ -295,15 +324,19 @@ var bareConfiguration = regexp.MustCompile(`#nixosConfigurations\.("[^"]+"|[^."]
 // imageInstallable turns `<flake>#nixosConfigurations.<host>` into that
 // host's image as this machine assembles it: the guest's own system's
 // assembly fails under binfmt, which made picking the key by hand a trap.
-func imageInstallable(p string) string {
+func imageInstallable(p string) string { return imageInstallableOn(p, runtime.GOOS, runtime.GOARCH) }
+
+func imageInstallableOn(p, goos, goarch string) string {
 	if !bareConfiguration.MatchString(p) {
 		return p
 	}
-	arch := map[string]string{"amd64": "x86_64", "arm64": "aarch64"}[runtime.GOARCH]
-	if arch == "" {
+	arch := map[string]string{"amd64": "x86_64", "arm64": "aarch64"}[goarch]
+	if arch == "" || (goos != "linux" && goos != "darwin") {
 		return p
 	}
-	return p + ".config.system.build.pocketnixImage." + arch + "-" + runtime.GOOS
+	// The image is assembled on Linux only: a Mac's nix hands this to its
+	// Linux builder of the same architecture.
+	return p + ".config.system.build.pocketnixImage." + arch + "-linux"
 }
 
 func (o *provisionOpts) resolveImage() (string, error) {
@@ -386,8 +419,9 @@ func (o *provisionOpts) upload(dev adb.Device, prov provider, img string) error 
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
+	o.cleanups.add(func() { os.Remove(tmp.Name()) })
 	tmp.Close()
+	o.cleanups.add(func() { dev.Shell("rm -f " + deviceChunk) })
 
 	buf := make([]byte, chunkSize)
 	zero := make([]byte, chunkSize)
@@ -403,7 +437,8 @@ func (o *provisionOpts) upload(dev adb.Device, prov provider, img string) error 
 		if err := os.WriteFile(tmp.Name(), buf[:n], 0o600); err != nil {
 			return err
 		}
-		if _, err := dev.Run("push", tmp.Name(), deviceChunk); err != nil {
+		// Images compress about 4x; zstd costs the least CPU on both ends.
+		if _, err := dev.Run("push", "-z", "zstd", tmp.Name(), deviceChunk); err != nil {
 			return err
 		}
 		uri := fmt.Sprintf("content://%s/disk?offset=%d", prov.authority, off)
@@ -413,7 +448,6 @@ func (o *provisionOpts) upload(dev adb.Device, prov provider, img string) error 
 		sent += int64(n)
 		o.logf("pushed %d/%d MiB", (off+int64(n))>>20, fi.Size()>>20)
 	}
-	dev.Shell("rm -f " + deviceChunk)
 	o.logf("pushed %d MiB of data (the rest is zeros)", sent>>20)
 	return nil
 }

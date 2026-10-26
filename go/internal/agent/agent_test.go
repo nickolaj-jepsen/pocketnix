@@ -165,6 +165,57 @@ func TestReloadPushesConfig(t *testing.T) {
 	}
 }
 
+// Streams opening while pushes fly still get the Hello first, and the
+// config they end up with is the latest one.
+func TestControlOpensDuringPushes(t *testing.T) {
+	h := start(t, baseConfig(), unixAddr)
+	stop := make(chan struct{})
+	pushing := make(chan struct{})
+	go func() {
+		defer close(pushing)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				h.srv.Reload()
+				h.srv.Updates.Configure(agent.UpdatesConfig{})
+			}
+		}
+	}()
+	var ctls []*client.Control
+	for range 20 {
+		ctl, err := h.client.Control()
+		if err != nil {
+			close(stop)
+			t.Fatalf("open during pushes: %v", err)
+		}
+		defer ctl.Close()
+		ctls = append(ctls, ctl)
+	}
+	close(stop)
+	<-pushing
+	cfg := baseConfig()
+	cfg["terminal"].(map[string]any)["theme"] = map[string]any{"colors": map[string]string{"background": "#123456"}}
+	h.write(cfg)
+	if err := h.srv.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	for i, ctl := range ctls {
+		var last protocol.Config
+		for quiet := false; !quiet; {
+			select {
+			case last = <-ctl.Configs():
+			case <-time.After(50 * time.Millisecond):
+				quiet = true
+			}
+		}
+		if got := last.Terminal.Theme.Colors["background"]; got != "#123456" {
+			t.Errorf("stream %d ended on background %q", i, got)
+		}
+	}
+}
+
 func TestRejectsBadHello(t *testing.T) {
 	h := start(t, baseConfig(), unixAddr)
 	for name, hello := range map[string]protocol.Hello{
@@ -351,6 +402,31 @@ func TestPTYIgnoringHangupIsKilled(t *testing.T) {
 	for syscall.Kill(pid, 0) == nil {
 		if time.Now().After(deadline) {
 			t.Fatalf("session process %d ignoring SIGHUP outlived its tab", pid)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// A background child that outlives the shell gets a hung-up tty, as on a
+// closed terminal, instead of pinning the session's pty.
+func TestPTYBackgroundChildIsHungUp(t *testing.T) {
+	mark := filepath.Join(t.TempDir(), "hung-up")
+	// Ignored before the fork: the child inherits it before the shell's exit hangs it up.
+	h := start(t, ptyConfig(`trap '' HUP; (sleep 2; echo late || touch `+mark+`) & echo started`), unixAddr)
+	p, err := h.client.PTY("", 24, 80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	readUntil(t, p, "started")
+	drain(p)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(mark); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the background child could still write to the tty")
 		}
 		time.Sleep(100 * time.Millisecond)
 	}

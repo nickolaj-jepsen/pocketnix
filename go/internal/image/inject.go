@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"strings"
 )
 
@@ -20,12 +21,13 @@ type Injection struct {
 // Inject writes files into the root partition of the image at path, in
 // place, owned by root. Parent directories are created 0755 as needed.
 // Callers inject into a copy: the image is usually a read-only store path.
+// The sources are staged beside the image while debugfs runs.
 func Inject(imgPath string, files []Injection, stdin io.Reader) error {
 	root, err := RootPartition(imgPath)
 	if err != nil {
 		return err
 	}
-	tmp, err := os.MkdirTemp("", "pocketnix-inject-")
+	tmp, err := os.MkdirTemp(filepath.Dir(imgPath), ".pocketnix-inject-")
 	if err != nil {
 		return err
 	}

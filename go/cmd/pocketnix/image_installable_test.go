@@ -18,4 +18,8 @@ func TestImageInstallable(t *testing.T) {
 			t.Errorf("%s → %s, want %s", in, got, want)
 		}
 	}
+	// No pocketnixImage.aarch64-darwin exists; a Mac's Linux builder assembles it.
+	if got, want := imageInstallableOn(".#nixosConfigurations.phone", "darwin", "arm64"), ".#nixosConfigurations.phone.config.system.build.pocketnixImage.aarch64-linux"; got != want {
+		t.Errorf("on a Mac: %s, want %s", got, want)
+	}
 }
