@@ -41,6 +41,8 @@ in
           # The size comes first: the CLI resizes on the session's first output.
           probe.command = ''stty size; id -un; read line; stty size; echo "got:$line"'';
           fail.command = "exit 3";
+          # Blocks until the action comes back; the bus address is the agent's doing.
+          notify.command = ''printf 'bus:%s\n' "$DBUS_SESSION_BUS_ADDRESS"; notify-send -A ok=OK -w build waits; echo "exit:$?"'';
         };
         updates = {
           buildHost = {
@@ -157,7 +159,7 @@ in
               {"name": "ssh", "guestPort": 22, "hostPort": ssh_port, "lan": False, "protocol": "tcp"},
           ], cfg["forwards"]
           names = sorted(p["name"] for p in cfg["terminal"]["profiles"])
-          assert names == ["fail", "htop", "probe", "shell"], names
+          assert names == ["fail", "htop", "notify", "probe", "shell"], names
           assert cfg["terminal"]["defaultProfile"] == "shell"
           assert cfg["terminal"]["theme"]["colors"]["background"] == "#1e1e2e"
           assert cfg["terminal"]["extraKeys"][0][0] == {"key": "ESC"}, cfg["terminal"]["extraKeys"]
@@ -208,7 +210,7 @@ in
       with subtest("guest programs notify, open and copy through the app"):
           client.succeed(f"systemd-run --unit=events sh -c '{A} events > /tmp/events'")
           # Refused until the events stream is connected.
-          phone.wait_until_succeeds("runuser -u nixos -- notify-send -u low build 'all done'", timeout=30)
+          phone.wait_until_succeeds("runuser -u nixos -- pocketnix-guest notify --title build 'all done'", timeout=30)
           client.wait_until_succeeds("grep -q '\"title\":\"build\",\"body\":\"all done\"' /tmp/events", timeout=30)
           phone.succeed("runuser -u nixos -- xdg-open https://nixos.org")
           client.wait_until_succeeds("grep -q '\"url\":\"https://nixos.org\"' /tmp/events", timeout=30)
@@ -218,6 +220,22 @@ in
           assert phone.succeed("runuser -u nixos -- pocketnix-guest paste") == "from-android"
           # Only root and the session user may use the guest socket.
           phone.fail("runuser -u nobody -- ${nodes.phone.pocketnix.guest.package}/bin/pocketnix-guest paste")
+
+      with subtest("the session bus: notify-send's actions come back, gio opens on Android"):
+          # Lingering, with no login, starts the user's bus.
+          phone.wait_for_unit("dbus.socket", "nixos")
+          phone.succeed("test -S /run/user/1000/bus")
+          client.succeed(f"systemd-run --unit=notify-tab sh -c '{A} exec --profile notify > /tmp/notify-tab'")
+          client.wait_until_succeeds("grep -q '\"body\":\"waits\"' /tmp/events", timeout=60)
+          ev = [json.loads(l) for l in client.succeed("cat /tmp/events").splitlines() if '"waits"' in l][-1]
+          assert ev["actions"] == [{"key": "ok", "label": "OK"}] and ev["appName"] == "notify-send", ev
+          client.succeed(f"{A} notify-action {ev['notification']} ok")
+          client.wait_until_succeeds("grep -q exit: /tmp/notify-tab", timeout=30)
+          out = client.succeed("cat /tmp/notify-tab")
+          assert "bus:unix:path=/run/user/1000/bus" in out and "\nok\r" in out and "exit:0" in out, out
+          # The desktop defaults lead to Android, not only xdg-open.
+          phone.succeed("runuser -u nixos -- env XDG_RUNTIME_DIR=/run/user/1000 ${pkgs.glib.bin}/bin/gio open https://nixos.org/learn")
+          client.wait_until_succeeds("grep -q '\"url\":\"https://nixos.org/learn\"' /tmp/events", timeout=30)
 
       with subtest("shares and the file provider reach the user's files"):
           client.succeed("echo picture > /tmp/pic.jpg")

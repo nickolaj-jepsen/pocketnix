@@ -214,6 +214,9 @@ func sessionEnv(u *sessUser, shell string) []string {
 	}
 	if rt := fmt.Sprintf("/run/user/%d", u.uid); dirExists(rt) {
 		env = append(env, "XDG_RUNTIME_DIR="+rt)
+		if fi, err := os.Stat(rt + "/bus"); err == nil && fi.Mode().Type() == os.ModeSocket {
+			env = append(env, "DBUS_SESSION_BUS_ADDRESS=unix:path="+rt+"/bus")
+		}
 	}
 	return env
 }

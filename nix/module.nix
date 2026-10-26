@@ -90,7 +90,28 @@
     mkdir -p $out/bin
     ln -s ${lib.getExe' cfg.package "pocketnix-guest"} $out/bin/pocketnix-guest
     ${lib.optionalString cfg.integrations.xdgOpen "ln -s ${lib.getExe' cfg.package "pocketnix-guest"} $out/bin/xdg-open"}
-    ${lib.optionalString cfg.integrations.notifySend "ln -s ${lib.getExe' cfg.package "pocketnix-guest"} $out/bin/notify-send"}
+  '';
+  guestExe = lib.getExe' cfg.package "pocketnix-guest";
+
+  notifydUnit = "pocketnix-notifyd.service";
+  notifydService = pkgs.writeTextDir "share/dbus-1/services/org.freedesktop.Notifications.service" ''
+    [D-BUS Service]
+    Name=org.freedesktop.Notifications
+    Exec=${guestExe} notifyd
+    SystemdService=${notifydUnit}
+  '';
+
+  # What Android opens instead of the guest (integrations.xdgOpen).
+  openTypes =
+    map (s: "x-scheme-handler/${s}") ["http" "https" "mailto" "tel" "geo"]
+    ++ ["text/html" "application/pdf" "image/png" "image/jpeg" "image/gif" "image/webp" "image/svg+xml" "video/mp4" "video/webm" "audio/mpeg" "audio/ogg" "audio/flac"];
+  openDesktop = pkgs.writeTextDir "share/applications/pocketnix-open.desktop" ''
+    [Desktop Entry]
+    Type=Application
+    Name=Open on Android
+    Exec=${guestExe} open %u
+    MimeType=${lib.concatMapStrings (t: "${t};") openTypes}
+    NoDisplay=true
   '';
   agentConfigFile = (pkgs.formats.json {}).generate "pocketnix-agent.json" agentConfig;
 
@@ -204,6 +225,10 @@
   hostPorts = lib.mapAttrsToList (_: f: "${f.protocol}/${toString f.hostPort}") cfg.forwards;
   badColors = lib.filter (k: builtins.match colorKey k == null) (lib.attrNames theme.colors);
 in {
+  imports = [
+    (lib.mkRenamedOptionModule ["pocketnix" "guest" "integrations" "notifySend"] ["pocketnix" "guest" "integrations" "notifications"])
+  ];
+
   options.pocketnix.guest = {
     enable = mkEnableOption "the pocketnix guest side";
     package = mkOption {
@@ -448,12 +473,24 @@ in {
       xdgOpen = mkOption {
         type = types.bool;
         default = true;
-        description = "Put an `xdg-open` on PATH (and default `$BROWSER` to it) that opens URLs, and files under `files.root`, on Android.";
+        description = ''
+          Put an `xdg-open` on PATH (and default `$BROWSER` to it) that opens
+          URLs, and files under `files.root`, on Android; and make Android the
+          default (`xdg.mime.defaultApplications`) for web, mail, phone and map
+          links and a few common file types, so `gio open` and GLib/Qt
+          programs open there too.
+        '';
       };
-      notifySend = mkOption {
+      notifications = mkOption {
         type = types.bool;
         default = true;
-        description = "Put a `notify-send` on PATH that posts Android notifications. `pocketnix-guest` is there either way.";
+        description = ''
+          Serve `org.freedesktop.Notifications` on the user's session bus
+          (D-Bus-activated `pocketnix-guest notifyd`), so desktop notifications
+          and libnotify's `notify-send` (installed) post Android notifications,
+          with actions. `pocketnix-guest notify` works either way, also for
+          root and system units, which have no session bus.
+        '';
       };
     };
 
@@ -539,7 +576,7 @@ in {
 
       boot.kernelModules = ["vmw_vsock_virtio_transport"];
       environment.etc."pocketnix/agent.json".source = agentConfigFile;
-      # Above xdg-utils and libnotify, which a desktop-ish config may pull in.
+      # Above xdg-utils, which a desktop-ish config may pull in.
       environment.systemPackages = [(lib.hiPrio guestTools)];
       environment.sessionVariables.BROWSER = mkIf cfg.integrations.xdgOpen (mkDefault "xdg-open");
 
@@ -640,7 +677,8 @@ in {
       documentation.nixos.enable = mkDefault false;
       documentation.doc.enable = mkDefault false;
       documentation.info.enable = mkDefault false;
-      xdg.mime.enable = mkDefault false;
+      # Unless Android is the default opener: the defaults and file types need it.
+      xdg.mime.enable = mkDefault cfg.integrations.xdgOpen;
 
       # Nothing for oomd to act on (no slice is monitored), yet it polls.
       systemd.oomd.enable = mkDefault false;
@@ -687,6 +725,30 @@ in {
           rm -f /nix-path-registration
         '';
       };
+    })
+
+    {
+      # Tabs get no login session, so only lingering starts the user manager
+      # and with it the session bus (/run/user/<uid>/bus) they and notifyd use.
+      users.users.${cfg.user}.linger = mkDefault true;
+    }
+
+    (mkIf cfg.integrations.notifications {
+      environment.systemPackages = [pkgs.libnotify];
+      services.dbus.packages = [notifydService];
+      systemd.user.services.pocketnix-notifyd = {
+        description = "pocketnix notifications on Android";
+        serviceConfig = {
+          Type = "dbus";
+          BusName = "org.freedesktop.Notifications";
+          ExecStart = "${guestExe} notifyd";
+        };
+      };
+    })
+
+    (mkIf cfg.integrations.xdgOpen {
+      environment.systemPackages = [openDesktop];
+      xdg.mime.defaultApplications = lib.genAttrs openTypes (_: mkDefault "pocketnix-open.desktop");
     })
   ]);
 }
