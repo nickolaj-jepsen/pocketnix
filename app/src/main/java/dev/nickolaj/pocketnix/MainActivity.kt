@@ -1,77 +1,50 @@
 package dev.nickolaj.pocketnix
 
-import android.content.Context
-import android.content.pm.PackageManager
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
+import dev.nickolaj.pocketnix.ui.MainScreen
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        handle(intent)
         setContent {
             val context = LocalContext.current
-            val colors = if (isSystemInDarkTheme()) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+            // The terminal is dark by default; keep the chrome around it dark too.
+            val colors = when {
+                isSystemInDarkTheme() -> dynamicDarkColorScheme(context)
+                else -> runCatching { dynamicLightColorScheme(context) }.getOrDefault(darkColorScheme())
+            }
             MaterialTheme(colorScheme = colors) {
-                Scaffold { padding ->
-                    Requirements(Modifier.padding(padding).padding(16.dp).fillMaxSize())
-                }
+                MainScreen(vm)
             }
         }
     }
-}
 
-/** One prerequisite of booting a VM, with the fix shown when it's missing. */
-private data class Requirement(val name: String, val met: Boolean, val fix: String)
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handle(intent)
+    }
 
-private fun requirements(context: Context): List<Requirement> {
-    val pm = context.packageManager
-    fun granted(permission: String) = context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
-    val grant = "run `pocketnix provision`, or adb shell pm grant ${context.packageName}"
-    return listOf(
-        Requirement(
-            "Android Virtualization Framework",
-            // PackageManager.FEATURE_VIRTUALIZATION_FRAMEWORK is @SystemApi, so spell it out.
-            pm.hasSystemFeature("android.software.virtualization_framework"),
-            "this device has no AVF",
-        ),
-        Requirement(
-            "MANAGE_VIRTUAL_MACHINE",
-            granted("android.permission.MANAGE_VIRTUAL_MACHINE"),
-            "$grant android.permission.MANAGE_VIRTUAL_MACHINE",
-        ),
-        Requirement(
-            "USE_CUSTOM_VIRTUAL_MACHINE",
-            granted("android.permission.USE_CUSTOM_VIRTUAL_MACHINE"),
-            "$grant android.permission.USE_CUSTOM_VIRTUAL_MACHINE",
-        ),
-    )
-}
+    /** `pocketnix provision` starts the VM with this, optionally without networking. */
+    private fun handle(intent: Intent?) {
+        if (intent?.action != ACTION_START) return
+        if (intent.hasExtra(EXTRA_NETWORK)) vm.settings.network = intent.getBooleanExtra(EXTRA_NETWORK, true)
+        vm.start()
+    }
 
-@Composable
-private fun Requirements(modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("pocketnix", style = MaterialTheme.typography.headlineMedium)
-        for (r in requirements(context)) {
-            Text("${if (r.met) "✓" else "✗"} ${r.name}", style = MaterialTheme.typography.titleMedium)
-            if (!r.met) Text(r.fix, style = MaterialTheme.typography.bodySmall)
-        }
+    companion object {
+        const val ACTION_START = "dev.nickolaj.pocketnix.action.START"
+        const val EXTRA_NETWORK = "network"
     }
 }

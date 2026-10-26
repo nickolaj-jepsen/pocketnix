@@ -9,15 +9,18 @@
     <uses-permission
         android:name="android.permission.USE_CUSTOM_VIRTUAL_MACHINE"
         tools:ignore="ProtectedPermissions" />
-    <!-- The VM's network is tethered through the app; GrapheneOS's Network toggle cuts it. -->
+    <!-- The VM's network is tethered through the app; GrapheneOS's Network toggle cuts it. Forwards listen with it too. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <uses-feature
         android:name="android.software.virtualization_framework"
         android:required="true" />
 
     <application
+        android:name=".PocketnixApp"
         android:allowBackup="false"
         android:label="@string/app_name"
         android:supportsRtl="true"
@@ -25,11 +28,29 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".service.VmService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Runs a user-started virtual machine until the user stops it" />
+        </service>
+
+        <!-- Exported for `adb shell content`; the provider itself only admits the shell user. -->
+        <provider
+            android:name=".provision.ProvisionProvider"
+            android:authorities="${applicationId}.provision"
+            android:exported="true"
+            tools:ignore="ExportedContentProvider" />
     </application>
 </manifest>

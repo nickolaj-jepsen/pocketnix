@@ -706,6 +706,11 @@ public final class TerminalEmulator {
         return isDecsetInternalBitSet(DECSET_BIT_APPLICATION_CURSOR_KEYS);
     }
 
+    /** True when the app enabled bracketed paste (DECSET 2004). */
+    public boolean isBracketedPasteMode() {
+        return isDecsetInternalBitSet(DECSET_BIT_BRACKETED_PASTE_MODE);
+    }
+
     /** True when the app enabled xterm focus reporting (DECSET 1004). Callers
      *  must only emit CSI I / CSI O focus events when this is set, or literal
      *  "^[[I" noise leaks into a shell that didn't ask for it. */

@@ -1,0 +1,44 @@
+package dev.nickolaj.pocketnix
+
+import android.content.Context
+import androidx.core.content.edit
+import dev.nickolaj.pocketnix.engine.VmSettings
+
+/** What the app UI owns: set-once hardware, and in debug builds the backend. */
+class Settings(context: Context) {
+    private val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+
+    var memoryMb: Int
+        get() = prefs.getInt("memoryMb", 2048)
+        set(v) = prefs.edit { putInt("memoryMb", v) }
+
+    /** 1, or 0 for one vCPU per host core. */
+    var cpus: Int
+        get() = prefs.getInt("cpus", 0)
+        set(v) = prefs.edit { putInt("cpus", v) }
+
+    var diskGb: Int
+        get() = prefs.getInt("diskGb", 16)
+        set(v) = prefs.edit { putInt("diskGb", v) }
+
+    /** Only one networked VM can run on a device at a time. */
+    var network: Boolean
+        get() = prefs.getBoolean("network", true)
+        set(v) = prefs.edit { putBoolean("network", v) }
+
+    /** Debug builds: run against an agent over TCP instead of AVF. */
+    var tcpBackend: Boolean
+        get() = BuildConfig.DEBUG && prefs.getBoolean("tcpBackend", false)
+        set(v) = prefs.edit { putBoolean("tcpBackend", v) }
+
+    /** host:port of the TCP agent; 10.0.2.2 is the emulator's host. */
+    var tcpAddress: String
+        get() = prefs.getString("tcpAddress", "10.0.2.2:9100")!!
+        set(v) = prefs.edit { putString("tcpAddress", v) }
+
+    var textSize: Int
+        get() = prefs.getInt("textSize", 0)
+        set(v) = prefs.edit { putInt("textSize", v) }
+
+    fun vm() = VmSettings(memoryMb = memoryMb, cpus = cpus, diskGb = diskGb, network = network)
+}

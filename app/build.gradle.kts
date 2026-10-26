@@ -57,6 +57,12 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
+    }
+
+    testOptions {
+        // Keys.kt reads android.view.KeyEvent constants, which compile inline; Log calls return defaults.
+        unitTests.isReturnDefaultValues = true
     }
 }
 
@@ -75,4 +81,6 @@ dependencies {
     implementation(project(":terminal-view"))
 
     testImplementation(libs.junit)
+    // The platform's org.json is a stub on the JVM; tests need a real one.
+    testImplementation(libs.json)
 }

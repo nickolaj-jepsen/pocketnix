@@ -1,0 +1,59 @@
+package dev.nickolaj.pocketnix.agent
+
+import java.io.DataInputStream
+import java.io.EOFException
+import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
+import java.nio.ByteBuffer
+
+/** PTY stream frames: [type u8][length u32 BE][payload]. */
+object Frames {
+    const val DATA: Int = 0
+    const val RESIZE: Int = 1
+    const val EXIT: Int = 2
+    const val MAX_PAYLOAD = 1 shl 20
+
+    class Frame(val type: Int, val payload: ByteArray)
+
+    /** Encodes one frame; write it with a single write so frames don't interleave. */
+    fun encode(type: Int, payload: ByteArray, offset: Int = 0, count: Int = payload.size): ByteArray {
+        require(count <= MAX_PAYLOAD) { "frame payload $count bytes" }
+        return ByteBuffer.allocate(5 + count).put(type.toByte()).putInt(count).put(payload, offset, count).array()
+    }
+
+    fun write(out: OutputStream, type: Int, payload: ByteArray, offset: Int = 0, count: Int = payload.size) {
+        out.write(encode(type, payload, offset, count))
+        out.flush()
+    }
+
+    /** Reads one frame, or null at a clean end of stream. */
+    fun read(input: InputStream): Frame? {
+        val type = input.read()
+        if (type < 0) return null
+        val din = DataInputStream(input)
+        try {
+            val n = din.readInt()
+            if (n < 0 || n > MAX_PAYLOAD) throw IOException("frame length $n")
+            val payload = ByteArray(n)
+            din.readFully(payload)
+            return Frame(type, payload)
+        } catch (e: EOFException) {
+            throw IOException("stream ended inside a frame", e)
+        }
+    }
+
+    fun resize(rows: Int, cols: Int, xPixels: Int = 0, yPixels: Int = 0): ByteArray =
+        ByteBuffer.allocate(8)
+            .putShort(rows.coerceIn(0, 0xffff).toShort())
+            .putShort(cols.coerceIn(0, 0xffff).toShort())
+            .putShort(xPixels.coerceIn(0, 0xffff).toShort())
+            .putShort(yPixels.coerceIn(0, 0xffff).toShort())
+            .array()
+
+    /** The exit status in an EXIT payload: the code, or minus the signal. */
+    fun exitStatus(payload: ByteArray): Int {
+        if (payload.size != 4) throw IOException("exit payload ${payload.size} bytes")
+        return ByteBuffer.wrap(payload).int
+    }
+}
