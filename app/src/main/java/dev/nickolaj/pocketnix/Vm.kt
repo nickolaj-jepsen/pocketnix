@@ -61,6 +61,10 @@ class Vm(private val app: Context) {
     private val _stopping = MutableStateFlow(false)
     val stopping: StateFlow<Boolean> = _stopping.asStateFlow()
 
+    private val _forwardErrors = MutableStateFlow<List<String>>(emptyList())
+    /** Forwards that couldn't listen, for the UI. */
+    val forwardErrors: StateFlow<List<String>> = _forwardErrors.asStateFlow()
+
     private val _typeface = MutableStateFlow<Typeface?>(null)
     /** The module's font, or null for the default monospace. */
     val typeface: StateFlow<Typeface?> = _typeface.asStateFlow()
@@ -87,7 +91,7 @@ class Vm(private val app: Context) {
                 .distinctUntilChanged()
                 .collect { (fw, running) ->
                     val dialer = if (running) _engine.value.dialer else null
-                    withContext(Dispatchers.IO) { forwards.apply(fw, dialer) }
+                    _forwardErrors.value = withContext(Dispatchers.IO) { forwards.apply(fw, dialer) }
                 }
         }
         scope.launch {

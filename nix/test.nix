@@ -46,7 +46,7 @@ in
       with subtest("the control stream delivers the module's config"):
           cfg = json.loads(client.succeed(f"{A} config"))
           assert cfg["hostname"] == "${nodes.phone.networking.hostName}", cfg["hostname"]
-          assert cfg["forwards"] == [{"name": "ssh", "guestPort": 22, "hostPort": 2222, "lan": False}], cfg["forwards"]
+          assert cfg["forwards"] == [{"name": "ssh", "guestPort": 22, "hostPort": ${toString nodes.phone.pocketnix.guest.forwards.ssh.hostPort}, "lan": False}], cfg["forwards"]
           names = sorted(p["name"] for p in cfg["terminal"]["profiles"])
           assert names == ["fail", "htop", "probe", "shell"], names
           assert cfg["terminal"]["defaultProfile"] == "shell"

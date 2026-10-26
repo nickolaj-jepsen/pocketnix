@@ -69,6 +69,7 @@ fun MainScreen(vm: Vm) {
     val revision by vm.tabs.revision.collectAsState()
     val typeface by vm.typeface.collectAsState()
     val themeRevision by vm.themeRevision.collectAsState()
+    val forwardErrors by vm.forwardErrors.collectAsState()
     var showSettings by remember { mutableStateOf(false) }
     var composerOpen by rememberSaveable { mutableStateOf(false) }
     var modifierRevision by remember { mutableIntStateOf(0) }
@@ -105,6 +106,9 @@ fun MainScreen(vm: Vm) {
             onComposer = { composerOpen = !composerOpen },
             onSettings = { showSettings = true },
         )
+        for (e in forwardErrors) {
+            Text(e, color = foreground.copy(alpha = 0.8f), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 8.dp))
+        }
         if (missing.isNotEmpty() && state == VmState.Stopped) {
             Requirements(missing, foreground, Modifier.padding(16.dp))
         }

@@ -42,7 +42,17 @@ class AvfEngine(private val context: Context) : VmEngine {
     private var lastError: String? = null
 
     override val dialer: AgentDialer?
-        get() = vm?.let { v -> AgentDialer { VsockStream(AvfReflect.connectVsock(v, Protocol.PORT)) } }
+        get() = vm?.let { v ->
+            AgentDialer {
+                // Refused until the guest's agent listens; that's an IOException, not a crash.
+                val pfd = try {
+                    AvfReflect.connectVsock(v, Protocol.PORT)
+                } catch (e: java.lang.reflect.InvocationTargetException) {
+                    throw java.io.IOException("connectVsock: ${e.cause?.message}", e.cause)
+                }
+                VsockStream(pfd)
+            }
+        }
 
     override fun start(settings: VmSettings, console: ConsoleLog) {
         lifecycle.execute {

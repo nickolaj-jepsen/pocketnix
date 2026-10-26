@@ -18,17 +18,30 @@ import java.util.concurrent.Semaphore
  */
 class PortForwards(private val appVersion: String) {
     private val active = mutableMapOf<Forward, Listener>()
+    private val failed = mutableMapOf<Forward, String>()
 
-    /** Makes the listeners match [forwards]; an empty list (or null dialer) closes them all. */
+    /**
+     * Makes the listeners match [forwards]; an empty list (or null dialer)
+     * closes them all. Returns why each forward that isn't listening failed,
+     * e.g. a port another app holds: the phone's ports are shared.
+     */
     @Synchronized
-    fun apply(forwards: List<Forward>, dialer: AgentDialer?) {
+    fun apply(forwards: List<Forward>, dialer: AgentDialer?): List<String> {
         val want = if (dialer == null) emptySet() else forwards.toSet()
         for (f in active.keys - want) active.remove(f)?.close()
+        failed.keys.retainAll(want)
         for (f in want - active.keys) {
             runCatching { Listener(f, dialer!!) }
-                .onSuccess { active[f] = it }
-                .onFailure { Log.w(TAG, "forward ${f.name} on port ${f.hostPort}: ${it.message}") }
+                .onSuccess {
+                    active[f] = it
+                    failed.remove(f)
+                }
+                .onFailure {
+                    Log.w(TAG, "forward ${f.name} on port ${f.hostPort}: ${it.message}")
+                    failed[f] = "forward ${f.name}: port ${f.hostPort} unavailable (${it.message})"
+                }
         }
+        return failed.values.toList()
     }
 
     private inner class Listener(private val f: Forward, private val dialer: AgentDialer) {

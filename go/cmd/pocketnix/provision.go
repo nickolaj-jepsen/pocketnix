@@ -52,14 +52,14 @@ var avfPermissions = []string{
 }
 
 type provisionOpts struct {
-	image, apk, serial         string
-	debug, replace, noNetwork  bool
-	noStart                    bool
-	injects                    []image.Injection
-	stdin                      io.Reader
-	log                        io.Writer
-	resolveInstallable         func(string) (string, error)
-	downloadRelease            func(version, dst string) error
+	image, apk, serial        string
+	debug, replace, noNetwork bool
+	noStart                   bool
+	injects                   []image.Injection
+	stdin                     io.Reader
+	log                       io.Writer
+	resolveInstallable        func(string) (string, error)
+	downloadRelease           func(version, dst string) error
 }
 
 func parseProvision(args []string) (*provisionOpts, error) {
