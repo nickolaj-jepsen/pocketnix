@@ -20,6 +20,7 @@ nix develop                      # JDK, Android SDK/NDK, adb, Go, e2fsprogs
 nix build .#pocketnix            # agent + CLI; bump vendorHash in nix/go.nix after go.mod changes
 go -C go vet ./... && go -C go test ./...
 nix build .#checks.x86_64-linux.agent   # NixOS VM test: the example guest's agent, over TCP
+nix build .#checks.x86_64-linux.avf-boot  # the example image (avf.enable on) booted and switched under QEMU TCG
 nix build .#example-image        # the AVF disk image (aarch64 through binfmt, assembled natively)
 nix run .#boot-example           # that image under qemu-system-aarch64, agent on vsock:4242:9100
 nix fmt .                        # alejandra, before committing Nix
@@ -104,8 +105,9 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
   edk2 boots it with an empty device tree and it hangs silently.
 - The Nix build sandbox has no `/dev/vhost-vsock`, so the NixOS test reaches the
   agent over TCP; `nix run .#boot-example` (outside the sandbox) covers vsock.
-- Go defers closing a PTY master while another goroutine is blocked reading it,
-  so closing it doesn't hang the session up: the agent signals SIGHUP itself.
+- Go defers closing a plain `*os.File` while another goroutine is blocked
+  reading it, so the agent moves the PTY master into Go's poller (`pollable`):
+  only then does closing it end the read and hang up background children.
 - The CLI's pure-Go resolver asks DNS before /etc/hosts under NixOS's nsswitch
   order: in NixOS tests, connect by IP.
 - Android creates content providers before `Application.onCreate`: anything the
@@ -125,7 +127,17 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
   (~5 s) before giving up; the update log shows the warnings.
 - The agent is root and touches user-owned paths (history, the share
   directory, the file provider): go through an `os.Root`, which also refuses
-  absolute symlinks even when they point back inside.
+  absolute symlinks even when they point back inside. A configured path is
+  opened with `configuredDir`/`configuredFile`, never `os.OpenRoot` on it.
+- systemd 260's autologin no longer prints "(automatic login)": a console
+  script (`avf-boot`) waits for the shell prompt instead. Console lines ending
+  in `\r` show up blank in Nix logs, and expect's `log_user 0` also stops
+  `log_file`.
+- `/boot` is mounted umask 0077: checking it in a guest needs root.
+- An unsigned release build must have no `release` signing config at all;
+  `build.gradle.kts` only makes one when a keystore is given.
+- A hidden app doesn't redraw tabs (`Tabs.visible`): anything that inspects
+  the view rather than the transcript sees stale output.
 - Any uncaught exception on an app thread kills the process and so the VM;
   `PocketnixApp` logs worker-thread ones instead, and guest output goes
   through a fuzzed emulator (`FuzzTest`).

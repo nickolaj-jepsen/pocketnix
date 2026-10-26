@@ -44,6 +44,13 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 - `pocketnix.guest.avf.enable` (on by default) holds the platform half: kernel,
   image, boot loader, first boot, hvc0. Off, the agent half runs under any
   hypervisor, which is how the NixOS test boots it.
+- On AVF the module trims the closure by default (flake registry, manuals,
+  default packages; dbus, lvm and tpm2 in the initrd), turns zram on and oomd
+  off, and sets kernel parameters that let idle vCPUs sleep: every guest
+  wakeup is a phone wakeup.
+- Configured paths the root agent opens (`files.root`, `share.directory`,
+  `terminal.historyFile`, the font) are confined to the user's home when
+  inside it, and must be root-owned all the way down otherwise.
 
 ## Configuration
 
@@ -67,8 +74,8 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
   store) before pushing it, so e.g. agenix has its host key on the first boot.
 - The image reaches app-private storage through the app's provision provider
   (`adb shell content call` / `content write`, admitting only the shell user),
-  so release builds work without `run-as`. It goes in chunks, skipping all-zero
-  ones, and never replaces an existing disk without `--replace`, nor while the
+  so release builds work without `run-as`. It goes in zstd-compressed chunks
+  (`adb push -z`), skipping all-zero ones, and never replaces an existing disk without `--replace`, nor while the
   VM runs.
 
 ## Durability
@@ -109,7 +116,10 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
   root with the guest's host key, in BatchMode: its host key must be in
   `programs.ssh.knownHosts`. A build host's path is substituted first and
   copied (`--no-check-sigs`: the guest already trusts that host with its whole
-  system) only when the caches don't have it.
+  system) only when the caches don't have it, and then through the daemon
+  with `--substitute-on-destination`, so only what no cache holds crosses ssh.
+- A source's answer must be named `nixos-system-<host>-…`, and the fetched
+  system's own `etc/hostname` must be this host before it becomes a generation.
 - Update is check, fetch and switch in one; the switch runs
   `switch-to-configuration` in its own unit through `systemd-run`, as
   nixos-rebuild does. Background checks (`updates.checkInterval`, 6 h) only
@@ -134,8 +144,12 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 
 - Runs until stopped: started from the app, tile or a terminal; a foreground
   service keeps it up (no wake lock). Stop is graceful via the agent (`systemctl poweroff`)
-  with a hard stop after a timeout (30 s). Opt-in start on phone boot. A memory
-  balloon returns free guest RAM to Android.
+  with a hard stop after a timeout (30 s). Stop and Reboot ask first. Opt-in
+  start on phone boot. A memory balloon returns free guest RAM to Android.
+- The app pings a quiet control stream every 15 s and drops it after 45 s of
+  silence, so a hung guest shows as an absent agent (and so the boot-menu
+  banner), never as Running. Control requests must answer well within that.
+- The screen stays on only when asked (a menu toggle, off by default).
 
 ## Integrations and UX
 
@@ -149,7 +163,8 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
   paste), module-defined extra keys with swipe alternates and volume-key
   modifiers, a command palette (module snippets + shell history), and
   session-aware tabs (BEL / OSC 9 / OSC 777 in a background tab → badge +
-  notification).
+  notification). When the agent comes up with no running shell tab, the
+  default profile's tab opens.
 - Guest programs reach the agent on a guest-local unix socket
   (`/run/pocketnix/guest.sock`), which admits root and the session user by
   peer credentials. `pocketnix-guest` speaks it, and the module installs it as
@@ -167,7 +182,8 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 - The file provider (`files.root`, default the user's home) goes through an
   `os.Root`: no path or symlink leaves it, and new files belong to the user.
   Opened documents are local copies (apps want seekable descriptors) that are
-  uploaded when a writer closes them.
+  uploaded when a writer closes them, unless the copy is unchanged; a copy
+  cut short is an error, never a shorter file.
 - The Quick Settings tile starts the VM through ControlActivity (a foreground
   service may only start from the foreground) and stops it gracefully.
 - The palette's history is the user's shell history file, read by the agent
@@ -182,7 +198,8 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 
 - GitHub Actions builds with Gradle (Nix devshell toolchain), signs with the
   release key from repo secrets, publishes tagged releases; phones update via
-  Obtainium.
+  Obtainium. A `v<VERSION>` tag runs the release workflow, which refuses a tag
+  that isn't `VERSION`; `versionCode` derives from `VERSION`.
 
 ## Milestones
 
