@@ -69,7 +69,8 @@
       host = {inherit (cfg.host) timeZone;};
     }
     // lib.optionalAttrs (cfg.terminal.historyFile != null) {history = cfg.terminal.historyFile;}
-    // lib.optionalAttrs (cfg.files.root != null) {filesRoot = cfg.files.root;};
+    // lib.optionalAttrs (cfg.files.root != null) {filesRoot = cfg.files.root;}
+    // lib.optionalAttrs (cfg.hostFolders.mountPoint != null) {hostFolders = {inherit (cfg.hostFolders) mountPoint;};};
   upd = cfg.updates;
 
   theme = cfg.terminal.theme;
@@ -580,6 +581,18 @@ in {
       '';
     };
 
+    hostFolders.mountPoint = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "/mnt/android";
+      description = ''
+        Where the Android folders shared in the app's settings are mounted,
+        each in a directory of its name: absolute, or relative to the user's
+        home. Null is `~/Android`. Only the user can enter the mounts (not
+        even root), and they fail with EIO while the app is away.
+      '';
+    };
+
     avf.enable = mkOption {
       type = types.bool;
       default = true;
@@ -638,7 +651,7 @@ in {
       ];
       warnings = lib.optional (cfg.avf.enable && lib.any (lib.hasPrefix "tcp:") cfg.agent.listen) "pocketnix.guest.agent.listen has a TCP listener on an AVF guest: anyone who reaches it gets a shell";
 
-      boot.kernelModules = ["vmw_vsock_virtio_transport"];
+      boot.kernelModules = ["vmw_vsock_virtio_transport" "fuse"];
       environment.etc."pocketnix/agent.json".source = agentConfigFile;
       # Above xdg-utils, which a desktop-ish config may pull in.
       environment.systemPackages = [(lib.hiPrio guestTools)];

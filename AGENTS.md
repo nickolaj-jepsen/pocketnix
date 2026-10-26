@@ -146,6 +146,10 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
   in `\r` show up blank in Nix logs, and expect's `log_user 0` also stops
   `log_file`.
 - `/boot` is mounted umask 0077: checking it in a guest needs root.
+- A host-folder mount (FUSE, no `allow_other`) admits only the session user,
+  not root: check it with `runuser`, and `findmnt` rather than `mountpoint`.
+  go-fuse's own mounting probes the mount from its process, so the agent
+  mounts itself and hands go-fuse the descriptor as `/dev/fd/N`.
 - An unsigned release build must have no `release` signing config at all;
   `build.gradle.kts` only makes one when a keystore is given.
 - A hidden app doesn't redraw tabs (`Tabs.visible`): anything that inspects

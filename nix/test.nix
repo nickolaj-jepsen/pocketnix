@@ -408,6 +408,53 @@ in
           assert not json.loads(phone.succeed("cat /run/pocketnix/host.json"))["connected"]
           phone.succeed("timedatectl show -p Timezone --value | grep -qx America/New_York")
 
+      with subtest("an Android folder mounts in the user's home while the app serves it"):
+          M = "/home/nixos/Android/Pictures"
+          U = "runuser -u nixos --"
+          client.succeed("mkdir -p /tmp/Pictures/sub && echo hello > /tmp/Pictures/a.txt")
+          client.succeed(f"systemd-run --unit=hostfs {A} hostfs-serve /tmp/Pictures")
+          phone.wait_until_succeeds(f"{U} grep -qx hello {M}/a.txt", timeout=30)
+          assert phone.succeed(f"{U} ls {M}").split() == ["a.txt", "sub"]
+          assert phone.succeed(f"{U} stat -c %U {M}/a.txt").strip() == "nixos"
+          # Not even root gets in: no allow_other.
+          phone.fail(f"ls {M}")
+          phone.succeed(f"{U} sh -c 'echo written > {M}/sub/new.txt'")
+          client.succeed("grep -qx written /tmp/Pictures/sub/new.txt")
+          phone.succeed(f"{U} truncate -s 3 {M}/sub/new.txt")
+          client.succeed("test \"$(cat /tmp/Pictures/sub/new.txt)\" = wri")
+          phone.succeed(f"{U} sh -c 'echo again >> {M}/sub/new.txt'")
+          client.succeed("test \"$(cat /tmp/Pictures/sub/new.txt)\" = wriagain")
+          phone.succeed(f"{U} mv {M}/sub/new.txt {M}/moved.txt")
+          client.succeed("test -f /tmp/Pictures/moved.txt && ! test -e /tmp/Pictures/sub/new.txt")
+          # Saving through a temp file renames over the original.
+          phone.succeed(f"{U} sh -c 'echo saved > {M}/.a.swp && mv {M}/.a.swp {M}/a.txt'")
+          client.succeed("grep -qx saved /tmp/Pictures/a.txt")
+          phone.fail(f"{U} rmdir {M}")
+          phone.succeed(f"{U} rm {M}/moved.txt && {U} rmdir {M}/sub")
+          client.succeed("! test -e /tmp/Pictures/moved.txt && ! test -e /tmp/Pictures/sub")
+
+      with subtest("with the app gone a host folder fails fast and stays mounted, until the app is back"):
+          client.succeed("systemctl stop hostfs")
+          # Until the agent sees the streams close.
+          phone.wait_until_fails(f"{U} cat {M}/a.txt", timeout=10)
+          out = phone.fail(f"{U} cat {M}/a.txt 2>&1")
+          assert "Input/output error" in out, out
+          phone.succeed(f"findmnt -n {M}")
+          phone.succeed(f"{U} sh -c 'cd {M} && pwd'")
+          client.succeed(f"systemd-run --unit=hostfs-again {A} hostfs-serve /tmp/Pictures")
+          phone.wait_until_succeeds(f"{U} grep -qx saved {M}/a.txt", timeout=30)
+
+      with subtest("a folder the app no longer shares is unmounted, and a read-only one refuses writes"):
+          client.succeed("mkdir -p /tmp/Docs && echo doc > /tmp/Docs/d.txt")
+          client.succeed("systemctl stop hostfs-again")
+          client.succeed(f"systemd-run --unit=hostfs-docs {A} hostfs-serve --read-only /tmp/Docs")
+          phone.wait_until_succeeds(f"{U} grep -qx doc /home/nixos/Android/Docs/d.txt", timeout=30)
+          phone.fail(f"findmnt -n {M}")
+          phone.fail(f"test -e {M}")
+          out = phone.fail(f"{U} sh -c 'echo x > /home/nixos/Android/Docs/d.txt' 2>&1")
+          assert "Read-only file system" in out, out
+          client.succeed("systemctl stop hostfs-docs")
+
       with subtest("an update from the build host arrives over ssh and switches"):
           # Test VMs boot without a system profile; a real guest has one from its first boot.
           phone.succeed("nix-env -p /nix/var/nix/profiles/system --set $(readlink -f /run/current-system)")
