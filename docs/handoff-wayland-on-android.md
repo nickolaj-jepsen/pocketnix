@@ -3,6 +3,8 @@
 Status: exploratory. Nothing here is settled, and none of it is needed for the
 current display stream (`go/internal/agent/display.go`, `ui/DisplayPane.kt`),
 which moves pixels. This document is for the alternative that does not.
+`wayland-prior-art.md` reviews the prior art, corrects some premises below and
+picks the proofs of concept.
 
 ## The problem this solves
 
@@ -106,7 +108,7 @@ expect a full session (portals, dbus, seat) around them.
   CPU, and the phone's GPU only buys compositing.
 - Wayland protocol coverage is a treadmill; every missing global is a bug visible
   to users. X11 (variant B) has a smaller surface but the same class of problem.
-- fd passing over vsock is supported, but every buffer transfer is a copy; a
+- vsock can't pass fds (no SCM_RIGHTS), so every buffer transfer is a copy; a
   full-screen video at 60 fps is out of reach either way.
 - `libwayland-server` under the NDK is a build-system project of its own; budget
   for it explicitly, and consider a Rust or Kotlin Wayland server if the C
