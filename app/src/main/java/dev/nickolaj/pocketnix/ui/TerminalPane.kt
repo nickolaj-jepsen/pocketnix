@@ -145,14 +145,20 @@ class TerminalController(
 
         override fun onLongPress(event: MotionEvent?) = false
 
-        override fun readControlKey() = modifiers.consume(Modifier.CTRL)
-        override fun readAltKey() = modifiers.consume(Modifier.ALT)
-        override fun readShiftKey() = modifiers.consume(Modifier.SHIFT)
+        override fun readControlKey() = consume(Modifier.CTRL)
+        override fun readAltKey() = consume(Modifier.ALT)
+        override fun readShiftKey() = consume(Modifier.SHIFT)
+
+        // The view uses up one-shot modifiers; the key bar must show that.
+        private fun consume(m: Modifier): Boolean {
+            val wasOn = modifiers.state(m) != Modifiers.State.OFF
+            return modifiers.consume(m).also { if (wasOn) onModifiersChanged() }
+        }
         // Consumed in onCodePoint, where the fn combination is decided.
         override fun readFnKey() = modifiers.active(Modifier.FN)
 
         override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession): Boolean {
-            if (!modifiers.consume(Modifier.FN)) return false
+            if (!consume(Modifier.FN)) return false
             val action = FnKeys.action(codePoint) ?: return false
             when (action) {
                 is KeyAction.Code -> {

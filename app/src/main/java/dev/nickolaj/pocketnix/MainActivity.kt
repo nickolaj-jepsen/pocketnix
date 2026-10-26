@@ -40,11 +40,18 @@ class MainActivity : ComponentActivity() {
     private fun handle(intent: Intent?) {
         if (intent?.action != ACTION_START) return
         if (intent.hasExtra(EXTRA_NETWORK)) vm.settings.network = intent.getBooleanExtra(EXTRA_NETWORK, true)
+        // Debug builds: `--es tcp <host:port>` runs against a desktop agent, `--es tcp ""` back to AVF.
+        if (BuildConfig.DEBUG && intent.hasExtra(EXTRA_TCP)) {
+            val addr = intent.getStringExtra(EXTRA_TCP).orEmpty()
+            vm.settings.tcpBackend = addr.isNotEmpty()
+            if (addr.isNotEmpty()) vm.settings.tcpAddress = addr
+        }
         vm.start()
     }
 
     companion object {
         const val ACTION_START = "dev.nickolaj.pocketnix.action.START"
         const val EXTRA_NETWORK = "network"
+        const val EXTRA_TCP = "tcp"
     }
 }
