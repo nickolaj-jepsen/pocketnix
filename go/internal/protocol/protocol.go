@@ -1,21 +1,127 @@
 // Package protocol is the wire contract between the app and the guest agent.
 //
-// The app always dials (a guest can't dial an app over AVF vsock). The
-// control stream carries newline-delimited JSON messages in both directions;
-// PTY sessions, port forwards and file operations each get their own stream.
+// The app always dials (a guest can't dial an app over AVF vsock), every
+// connection to the same agent port. Each connection opens with one JSON line
+// from the app, a [Hello] naming the stream it wants, and the agent answers
+// with its own [Hello] or an [Error] before the stream's own traffic starts:
+//
+//   - control: newline-delimited JSON messages both ways for the app's
+//     lifetime; the agent pushes [Config] first and again on every reload.
+//   - pty: binary frames (see frame.go) carrying one terminal session.
+//   - forward: raw bytes spliced to a TCP port on the guest's loopback.
+//   - font: the configured font file's bytes, then EOF.
 package protocol
 
-// Version is bumped on any incompatible change. The app and the agent exchange
-// it in Hello and refuse to talk across a major mismatch.
+// Version is bumped on any incompatible change; both sides send it in Hello
+// and refuse a mismatch. Additive changes (new optional fields, new message
+// types, which receivers ignore when unknown) keep it.
 const Version = 1
 
-// ControlPort is the vsock port the agent's control stream listens on.
+// ControlPort is the vsock port the agent listens on for every stream.
 const ControlPort = 9100
 
-// Hello is the first message on the control stream, sent by both sides.
+// Stream kinds a Hello can open.
+const (
+	StreamControl = "control"
+	StreamPTY     = "pty"
+	StreamForward = "forward"
+	StreamFont    = "font"
+)
+
+// Message types on the control stream, and the Hello/Error replies.
+const (
+	TypeHello    = "hello"
+	TypeError    = "error"
+	TypeConfig   = "config"
+	TypePing     = "ping"
+	TypePong     = "pong"
+	TypePoweroff = "poweroff"
+	TypeReboot   = "reboot"
+)
+
+// Envelope is the part of every JSON message a receiver reads first.
+type Envelope struct {
+	Type string `json:"type"`
+}
+
+// Hello is the first line on every connection, sent by both sides. The app's
+// names the stream and its parameters; the agent's echoes the version.
 type Hello struct {
 	Type    string `json:"type"` // always "hello"
 	Version int    `json:"version"`
-	// Agent is the sender's build version, for display and bug reports only.
+	// Agent or App is the sender's build version, for display and bug reports only.
 	Agent string `json:"agent,omitempty"`
+	App   string `json:"app,omitempty"`
+
+	Stream string `json:"stream,omitempty"`
+	// PTY: the profile to run (empty for the default one), and the initial size.
+	Profile string `json:"profile,omitempty"`
+	Rows    int    `json:"rows,omitempty"`
+	Cols    int    `json:"cols,omitempty"`
+	// Forward: the guest TCP port on 127.0.0.1.
+	Port int `json:"port,omitempty"`
+
+	// Agent's reply to a font stream: the byte count that follows.
+	Size int64 `json:"size,omitempty"`
+}
+
+// Error rejects a Hello, or reports a failed control request.
+type Error struct {
+	Type    string `json:"type"` // always "error"
+	Message string `json:"message"`
+}
+
+// Config is what the NixOS module declares for the app; the agent sends it on
+// connect and after each reload. The module writes the same shape (minus Type)
+// as the agent's config file.
+type Config struct {
+	Type     string    `json:"type,omitempty"` // "config" on the wire
+	Hostname string    `json:"hostname,omitempty"`
+	Forwards []Forward `json:"forwards"`
+	Terminal Terminal  `json:"terminal"`
+}
+
+// Forward is one TCP port the app exposes on the phone.
+type Forward struct {
+	Name      string `json:"name"`
+	GuestPort int    `json:"guestPort"`
+	HostPort  int    `json:"hostPort"`
+	// LAN binds 0.0.0.0 instead of 127.0.0.1.
+	LAN bool `json:"lan"`
+}
+
+// Terminal is the module's terminal UI configuration.
+type Terminal struct {
+	Profiles       []Profile    `json:"profiles"`
+	DefaultProfile string       `json:"defaultProfile"`
+	ExtraKeys      [][]ExtraKey `json:"extraKeys"`
+	Theme          Theme        `json:"theme"`
+}
+
+// Profile is one kind of terminal tab.
+type Profile struct {
+	Name string `json:"name"`
+	// Command runs through the user's login shell (`$SHELL -l -c`); empty runs
+	// the login shell itself.
+	Command string `json:"command,omitempty"`
+}
+
+// ExtraKey is one key in a row above the keyboard. Key and Popup use Termux's
+// extra-keys names (ESC, TAB, CTRL, UP, PGUP, F1, …) or a literal character.
+type ExtraKey struct {
+	Key string `json:"key"`
+	// Popup is sent on a swipe up from the key.
+	Popup string `json:"popup,omitempty"`
+	// Label replaces the key's name on the button.
+	Label string `json:"label,omitempty"`
+}
+
+// Theme colors use Termux's color property names (foreground, background,
+// cursor, color0–color15) and #rrggbb values.
+type Theme struct {
+	Colors map[string]string `json:"colors"`
+	// Font is the guest path of a TTF/OTF file, served on a font stream. The
+	// app caches it by FontSHA256.
+	Font       string `json:"font,omitempty"`
+	FontSHA256 string `json:"fontSha256,omitempty"`
 }
