@@ -87,6 +87,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         if (!started && !closeWindows) return
         started = false
         link.stop()
+        synchronized(lock) { forgetAcks() }
         if (closeWindows) {
             val ids = synchronized(lock) { state.windows.keys.toList() }
             for (id in ids) closeWindow(id)
@@ -100,7 +101,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
     // --- The link's thread ---
 
     override fun connected(hello: GuiMessage.Hello) {
-        val dropped = synchronized(lock) { state.hello(hello) }
+        val dropped = synchronized(lock) { state.hello(hello).also { forgetAcks() } }
         for (w in dropped) closeWindow(w.id)
         link.send(output())
         for (v in views.values) v.sent?.let { link.send(Gui.window(it)) }
@@ -158,6 +159,17 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
 
     override fun disconnected(error: Throwable?) {
         Log.i(TAG, "disconnected${error?.let { ": ${it.message}" } ?: ""}")
+        // Null is a stop, which forgot them already, and may come after the next link's hello.
+        if (error != null) synchronized(lock) { forgetAcks() }
+    }
+
+    /**
+     * Under [lock]: a commit seq means something on its own connection only,
+     * so no ack, held back or committed but not yet sent, may reach the next.
+     */
+    private fun forgetAcks() {
+        for (w in state.windows.values) w.lastSeq = 0
+        for (v in views.values) v.renderer?.forgetAcks()
     }
 
     /** Under [lock]: one group into one transaction, acknowledged per window once shown. */

@@ -34,6 +34,9 @@ internal class WindowRenderer(
     /** The seq to acknowledge once no surface is starved. */
     private var deferred = 0
 
+    /** Bumped by [forgetAcks]; an ack committed under an older one is dropped. */
+    private var epoch = 0
+
     /** Whether a surface shows older content than it has, for want of a buffer. */
     val behind: Boolean get() = starved.isNotEmpty()
 
@@ -92,13 +95,22 @@ internal class WindowRenderer(
         if (!destroyed) acknowledge(t)
     }
 
+    /** Drops the seq it holds back and the acks still on their way: seqs belong to a connection that ended. */
+    fun forgetAcks() {
+        deferred = 0
+        epoch++
+    }
+
     private fun acknowledge(t: SurfaceControl.Transaction) {
         val ack = deferred
         if (ack == 0 || starved.isNotEmpty()) return
         deferred = 0
+        val e = epoch
         // A change of its own, so the transaction is never empty and always reports its commit.
         t.setVisibility(root, true)
-        t.addTransactionCommittedListener(Runnable::run) { presented(window, ack) }
+        t.addTransactionCommittedListener(Runnable::run) {
+            synchronized(lock) { if (epoch == e) presented(window, ack) }
+        }
     }
 
     fun destroy() {
