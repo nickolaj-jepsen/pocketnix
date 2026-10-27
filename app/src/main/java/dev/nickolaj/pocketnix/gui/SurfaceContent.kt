@@ -31,14 +31,21 @@ class SurfaceContent {
         format = 0
     }
 
-    /** Applies a BUFFER commit; throws [GuiProtocolException] for one that doesn't fit the content. */
+    /**
+     * Applies a BUFFER commit; throws [GuiProtocolException] for one that
+     * doesn't fit the content. A raw FULL commit's data becomes the content.
+     */
     fun apply(c: Commit, unpacker: Unpacker) {
         require(c.buffer) { "commit without BUFFER" }
         val n = c.pixelBytes.toInt()
         if (c.full) {
-            val p = pixels?.takeIf { it.size == n } ?: ByteArray(n)
-            decode(c, unpacker, p, 0)
-            pixels = p
+            if (c.encoding == Gui.ENCODING_RAW && c.data.size == n) {
+                pixels = c.data
+            } else {
+                val p = pixels?.takeIf { it.size == n } ?: ByteArray(n)
+                decode(c, unpacker, p, 0)
+                pixels = p
+            }
             width = c.width
             height = c.height
             format = c.format
@@ -71,17 +78,10 @@ class SurfaceContent {
     }
 
     private fun decode(c: Commit, unpacker: Unpacker, dst: ByteArray, off: Int) {
-        val n = c.pixelBytes.toInt()
         if (c.encoding == Gui.ENCODING_RAW) {
-            System.arraycopy(c.data, 0, dst, off, n)
-            return
-        }
-        try {
-            unpacker.unpack(c.data, dst, off, n)
-        } catch (e: GuiProtocolException) {
-            throw e
-        } catch (e: Exception) {
-            throw GuiProtocolException("commit ${c.seq.u}: ${e.message}")
+            System.arraycopy(c.data, 0, dst, off, c.pixelBytes.toInt())
+        } else {
+            unpack(c, unpacker, dst, off)
         }
     }
 
@@ -97,6 +97,31 @@ class SurfaceContent {
     }
 
     fun hash(): Long = pixels?.let { contentHash(it, 0, it.size) } ?: 0L
+}
+
+private fun unpack(c: Commit, unpacker: Unpacker, dst: ByteArray, off: Int) {
+    try {
+        unpacker.unpack(c.data, dst, off, c.pixelBytes.toInt())
+    } catch (e: GuiProtocolException) {
+        throw e
+    } catch (e: Exception) {
+        throw GuiProtocolException("commit ${c.seq.u}: ${e.message}")
+    }
+}
+
+/**
+ * The commit with its pixel data decompressed (encoding raw); throws
+ * [GuiProtocolException] for data that doesn't decode. It reads no surface
+ * state, so the slow part of applying a commit can run outside any lock.
+ */
+fun Commit.unpacked(unpacker: Unpacker): Commit {
+    if (!buffer || encoding == Gui.ENCODING_RAW) return this
+    val out = ByteArray(pixelBytes.toInt())
+    unpack(this, unpacker, out, 0)
+    return Commit(
+        flags, surface, window, seq, z, format, Gui.ENCODING_RAW, transform, x, y, dstWidth, dstHeight, width, height,
+        srcX, srcY, srcWidth, srcHeight, scroll, rects, out, hash,
+    )
 }
 
 /** gui-protocol.md's content hash (the spikes' row_hash over packed rows). */

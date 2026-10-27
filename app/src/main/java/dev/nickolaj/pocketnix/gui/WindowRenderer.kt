@@ -45,6 +45,17 @@ internal class WindowRenderer(
         var busy = false
         var fence: SyncFence? = null
         var stale = false
+
+        /** Frees it now, or once SurfaceFlinger releases it. */
+        fun discard() {
+            if (busy) {
+                stale = true
+                return
+            }
+            fence?.close()
+            fence = null
+            buffer.close()
+        }
     }
 
     /** Sizes the root to the window's [width] × [height]. */
@@ -141,7 +152,7 @@ internal class WindowRenderer(
             val s = it.next()
             if (s.buffer.width != c.width || s.buffer.height != c.height || s.buffer.format != c.format) {
                 it.remove()
-                if (s.busy) s.stale = true else s.buffer.close()
+                s.discard()
             }
         }
         l.slots.filter { !it.busy }.maxByOrNull { it.serial }?.let { return it }
@@ -150,12 +161,12 @@ internal class WindowRenderer(
         return Slot(b).also { l.slots += it }
     }
 
-    private fun released(slot: Slot, fence: SyncFence) {
+    private fun released(slot: Slot, fence: SyncFence) = guard("surface buffer release") {
         val retry = synchronized(lock) {
             if (slot.stale || destroyed) {
                 fence.close()
                 slot.buffer.close()
-                return
+                return@guard
             }
             slot.fence?.close()
             slot.fence = fence
@@ -167,7 +178,7 @@ internal class WindowRenderer(
 
     private fun drop(l: Layer) {
         l.sc.release()
-        for (s in l.slots) if (s.busy) s.stale = true else s.buffer.close()
+        for (s in l.slots) s.discard()
         l.slots.clear()
     }
 
