@@ -51,9 +51,19 @@ pub fn solve_in_toplevel(
             }
         });
     }
-    // The size the window shows, not the one it was configured with: the
-    // client may have drawn smaller.
-    let size = root.map(|r| window_geometry(&r).size);
+    // What the Android window shows: the client may have drawn smaller than
+    // its configured size (foot's cell grid) or larger (GTK's minimum size).
+    let size = root.map(|r| {
+        let drawn = window_geometry(&r).size;
+        let configured = compositor::with_states(&r, |states| {
+            let data = states.data_map.get::<XdgToplevelSurfaceData>()?;
+            data.lock().unwrap().current.size
+        });
+        match configured {
+            Some(c) if c.w > 0 && c.h > 0 => (drawn.w.min(c.w), drawn.h.min(c.h)).into(),
+            _ => drawn,
+        }
+    });
     let Some(size) = size.filter(|s| s.w > 0 && s.h > 0) else {
         return (positioner, positioner.get_geometry());
     };

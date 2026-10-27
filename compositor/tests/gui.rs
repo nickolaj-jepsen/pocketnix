@@ -675,6 +675,14 @@ fn popups_stay_inside_their_window_and_data_control_is_offered() {
     // Window pixels at scale 2, inside the 400x200 window.
     assert_eq!((commit.x, commit.y, commit.dst_width, commit.dst_height), (160, 40, 240, 160));
     assert_eq!(app.layers[&id].pixels, to_rgba(&pattern(120, 80, 7)));
+
+    // A window drawn larger than it was configured shows only the configured part.
+    app.send_json(json!({"type": "window", "id": window, "width": 240, "height": 120, "scale": 2.0,
+        "focused": true, "visible": true, "maximized": true, "fullscreen": false}));
+    client.dispatch_until("the smaller configure", |s| s.size == (120, 60));
+    client.draw(&pattern(w, h, 1), [0, 0, w, h], false);
+    client.roundtrip();
+    assert_eq!(client.popup([150, 60, 10, 10], (120, 80)), (0, 0, 120, 60));
 }
 
 /// foot, a real client: set FOOT to its binary (with fonts reachable) to run.
