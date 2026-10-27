@@ -70,8 +70,39 @@
     }
     // lib.optionalAttrs (cfg.terminal.historyFile != null) {history = cfg.terminal.historyFile;}
     // lib.optionalAttrs (cfg.files.root != null) {filesRoot = cfg.files.root;}
-    // lib.optionalAttrs (cfg.hostFolders.mountPoint != null) {hostFolders = {inherit (cfg.hostFolders) mountPoint;};};
+    // lib.optionalAttrs (cfg.hostFolders.mountPoint != null) {hostFolders = {inherit (cfg.hostFolders) mountPoint;};}
+    // lib.optionalAttrs gui.enable {
+      gui = {
+        enable = true;
+        defaults = {inherit (gui.defaults) size input;};
+        appDefaults = lib.mapAttrs (_: a: lib.filterAttrs (_: v: v != null) {inherit (a) size input;}) gui.appDefaults;
+      };
+      guiSocket = guiSocketName;
+    };
   upd = cfg.updates;
+
+  gui = cfg.gui;
+  # In the user's runtime directory, where the agent dials it as root.
+  guiSocketName = "pocketnix-gui.sock";
+  waylandDisplay = "wayland-0";
+  # gui.defaults' options, or with inheriting an app's, where null takes the default.
+  appSettings = inheriting: let
+    opt = values: default: description:
+      mkOption {
+        type =
+          if inheriting
+          then types.nullOr (types.enum values)
+          else types.enum values;
+        default =
+          if inheriting
+          then null
+          else default;
+        description = description + lib.optionalString inheriting " Null inherits `gui.defaults`.";
+      };
+  in {
+    size = opt ["phone" "compact" "desktop"] "phone" "Window scale: Android's density (phone), about 0.75 of it (compact) or about 0.5 (desktop).";
+    input = opt ["touch" "pointer" "trackpad"] "touch" "What a touch becomes: Wayland touch, a pointer (tap clicks, long press right-clicks) or a trackpad's relative cursor.";
+  };
 
   theme = cfg.terminal.theme;
   # The app takes one file; a family resolves to its file in the package.
@@ -593,6 +624,32 @@ in {
       '';
     };
 
+    gui = {
+      enable = mkEnableOption ''
+        the guest's Wayland apps as Android windows: the pocketnix compositor
+        as a socket-activated user service with `WAYLAND_DISPLAY` set for the
+        user's session, and by default PipeWire, xdg-desktop-portal (and with
+        it the FileChooser integration) and a basic font set
+      '';
+      package = mkOption {
+        type = types.package;
+        # As `package`: this flake's build, or this nixpkgs' when cross-compiling.
+        default =
+          if pkgs.stdenv.buildPlatform == pkgs.stdenv.hostPlatform && self.packages ? ${pkgs.stdenv.hostPlatform.system}
+          then self.packages.${pkgs.stdenv.hostPlatform.system}.pocketnix-compositor
+          else pkgs.callPackage ./compositor.nix {};
+        defaultText = lib.literalExpression "pocketnix.packages.\${system}.pocketnix-compositor";
+        description = "The package providing `pocketnix-compositor`.";
+      };
+      defaults = appSettings false;
+      appDefaults = mkOption {
+        default = {};
+        example = {"org.gnome.Calculator".size = "compact";};
+        description = "Window settings by Wayland app id (usually the desktop file's name), over `gui.defaults`. Changes made in the app override both.";
+        type = types.attrsOf (types.submodule {options = appSettings true;});
+      };
+    };
+
     avf.enable = mkOption {
       type = types.bool;
       default = true;
@@ -866,6 +923,62 @@ in {
           ExecStart = "${guestExe} notifyd";
         };
       };
+    })
+
+    (mkIf gui.enable {
+      # A client or the app connecting starts the compositor, which holds both
+      # sockets: clients outlive the app's connection.
+      systemd.user.sockets = {
+        pocketnix-gui = {
+          description = "pocketnix GUI socket";
+          wantedBy = ["sockets.target"];
+          socketConfig = {
+            ListenStream = "%t/${guiSocketName}";
+            FileDescriptorName = "gui";
+            SocketMode = "0600";
+            Service = "pocketnix-compositor.service";
+          };
+        };
+        pocketnix-wayland = {
+          description = "pocketnix Wayland socket";
+          wantedBy = ["sockets.target"];
+          socketConfig = {
+            ListenStream = "%t/${waylandDisplay}";
+            FileDescriptorName = "wayland";
+            SocketMode = "0600";
+            Service = "pocketnix-compositor.service";
+          };
+        };
+      };
+      systemd.user.services.pocketnix-compositor = {
+        description = "pocketnix Wayland compositor";
+        requires = ["pocketnix-gui.socket" "pocketnix-wayland.socket"];
+        after = ["pocketnix-gui.socket" "pocketnix-wayland.socket"];
+        # Its clients die with it: a switch mustn't close every window.
+        restartIfChanged = false;
+        serviceConfig = {
+          ExecStart = lib.getExe' gui.package "pocketnix-compositor";
+          Sockets = ["pocketnix-gui.socket" "pocketnix-wayland.socket"];
+        };
+      };
+      # pam_env puts them in the user manager's environment too, and so in
+      # user services and D-Bus-activated apps; tabs' login shells read them
+      # from /etc/profile.
+      environment.sessionVariables = {
+        WAYLAND_DISPLAY = waylandDisplay;
+        NIXOS_OZONE_WL = "1";
+      };
+
+      services.pipewire = {
+        enable = mkDefault true;
+        pulse.enable = mkDefault true;
+      };
+      xdg.portal = {
+        enable = mkDefault true;
+        extraPortals = [pkgs.xdg-desktop-portal-gtk];
+        config.common.default = mkDefault "gtk";
+      };
+      fonts.enableDefaultPackages = mkDefault true;
     })
 
     (mkIf cfg.integrations.xdgOpen {
