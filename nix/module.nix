@@ -633,13 +633,13 @@ in {
       '';
       package = mkOption {
         type = types.package;
-        # As `package`: this flake's build where it has one (x86_64 only for
-        # now), else this nixpkgs' (cross-compiling, or a native aarch64 guest).
+        # As `package`, where this flake has a build for the system; else it's
+        # built with this nixpkgs (cross-compiling, or a system the flake lacks).
         default =
           if pkgs.stdenv.buildPlatform == pkgs.stdenv.hostPlatform && self.packages.${pkgs.stdenv.hostPlatform.system} or {} ? pocketnix-compositor
           then self.packages.${pkgs.stdenv.hostPlatform.system}.pocketnix-compositor
           else pkgs.callPackage ./compositor.nix {};
-        defaultText = lib.literalExpression "pocketnix.packages.\${system}.pocketnix-compositor";
+        defaultText = lib.literalMD "this flake's `pocketnix-compositor` for the system where it has one, else `nix/compositor.nix` built with this nixpkgs";
         description = "The package providing `pocketnix-compositor`.";
       };
       defaults = appSettings false;
