@@ -135,7 +135,7 @@ object AvfReflect {
     fun setGpuConfig(b: Any, gpu: Gpu): Boolean = runCatching {
         val gpuB = (GPU_B ?: return true).getDeclaredConstructor().apply { isAccessible = true }.newInstance()
         val missing = mutableListOf<String>()
-        if (!set(gpuB, "setBackend", gpu.backend)) error("GpuConfig.Builder has no setBackend")
+        if (!set(gpuB, "setBackend", gpu.backend)) error("GpuConfig.Builder.setBackend(${gpu.backend}) is missing or failed")
         // Optional setters: revisions disagree, and the config is still useful without them.
         val wanted = listOf(
             "setRendererUseVulkan" to gpu.vulkan,
@@ -195,7 +195,8 @@ object AvfReflect {
     /**
      * Calls [name] with [value], tolerating the parameter being boxed or a
      * primitive: GpuConfig's setters take `Boolean` on GrapheneOS 17 and
-     * `boolean` on other revisions. False when no such method exists.
+     * `boolean` on other revisions. False when no such method exists or it
+     * throws, so one optional setter can't sink the rest of the config.
      */
     private fun set(target: Any, name: String, value: Any): Boolean {
         val types = when (value) {
@@ -206,9 +207,10 @@ object AvfReflect {
         }
         for (t in types) {
             val m = runCatching { target.javaClass.getDeclaredMethod(name, t) }.getOrNull() ?: continue
-            m.isAccessible = true
-            m.invoke(target, value)
-            return true
+            return runCatching {
+                m.isAccessible = true
+                m.invoke(target, value)
+            }.onFailure { Log.w(TAG, "$name($value) failed", it) }.isSuccess
         }
         return false
     }

@@ -130,9 +130,10 @@ class AvfEngine(private val context: Context) : VmEngine {
         AvfReflect.setBootloaderPath(custom, UBOOT)
         AvfReflect.addDisk(custom, disk.absolutePath, writable = true)
         AvfReflect.setNetworkSupported(custom, settings.network)
-        // A GPU config also selects full crosvm (see AvfReflect.setGpuConfig).
-        val gpu = settings.gpu.ifEmpty { if (settings.network) "2d" else "" }
-        if (gpu.isNotEmpty()) AvfReflect.setGpuConfig(custom, gpuSpec(gpu))
+        // A GPU config also selects full crosvm (see AvfReflect.setGpuConfig). The
+        // default is the backend alone: the config the test phone has always run.
+        val gpu = if (settings.gpu.isNotEmpty()) gpuSpec(settings.gpu) else if (settings.network) AvfReflect.Gpu("2d") else null
+        if (gpu != null) AvfReflect.setGpuConfig(custom, gpu)
         // Hands the guest's free pages back to Android while the VM runs.
         AvfReflect.useAutoMemoryBalloon(custom, true)
 
