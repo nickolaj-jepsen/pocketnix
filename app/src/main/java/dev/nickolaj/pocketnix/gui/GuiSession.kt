@@ -147,6 +147,11 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                     val (windows, surfaces) = state.ready()
                     val t = SurfaceControl.Transaction()
                     for (s in surfaces) views[s.window]?.renderer?.remove(t, s.id)
+                    // The replay sends no commit for a surface without a buffer: hide what it showed before.
+                    for (v in views.values) {
+                        val r = v.renderer ?: continue
+                        guard("window ${v.id.u}: render") { r.render(t, state.surfaces.values.filter { it.window == v.id }, 0) }
+                    }
                     t.apply()
                     windows
                 }
