@@ -38,6 +38,11 @@ files the system and user profiles already have.
   `POCKETNIX_TAB=<id>` in every tab, and the compositor reads it from the
   client's environment. Single-instance apps (Firefox, anything
   D-Bus-activated) land wherever their running process is; that's accepted.
+- **Mapped while nothing of pocketnix is visible** (started over ssh, by a
+  timer, D-Bus-activated): Android doesn't let a background app start an
+  activity, so a notification in the "Guest windows" channel opens it. Without
+  the notification (denied or dismissed), the window opens the next time
+  pocketnix shows.
 - A window's menu moves it between a tab and its own task.
 - Dialogs and other child toplevels follow their parent and draw as a layer
   inside the parent's window, never as a Recents card. A dialog-themed

@@ -1,5 +1,6 @@
 package dev.nickolaj.pocketnix.gui
 
+import android.Manifest
 import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
@@ -7,6 +8,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.hardware.display.DisplayManager
 import android.net.Uri
 import android.os.Handler
@@ -17,6 +19,7 @@ import android.view.SurfaceControl
 import dev.nickolaj.pocketnix.R
 import dev.nickolaj.pocketnix.agent.AgentDialer
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
@@ -45,6 +48,9 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         @Volatile var sent: WindowState? = null
 
         @Volatile var title = ""
+
+        /** The user closed its activity and the client was asked to close; written on the main thread only. */
+        var closeAsked = false
     }
 
     // Concurrent so the main thread can read a window's fields without waiting for a commit to apply.
@@ -74,6 +80,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
             },
             main,
         )
+        Foreground.onVisible { launchPending() }
     }
 
     /** Keeps the GUI stream connected through [dialer]; [hashes] has the compositor send content hashes to check. */
@@ -156,6 +163,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                     windows
                 }
                 for (w in windows) closeWindow(w.id)
+                launchPending()
             }
             is GuiMessage.Error -> Log.w(TAG, "compositor error: ${msg.message}")
             is GuiMessage.Hello -> throw GuiProtocolException("a second hello")
@@ -227,7 +235,25 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         }
     }
 
+    /**
+     * Opens every window that has neither an activity nor a task, as when it
+     * mapped while nothing of pocketnix showed and its notification was
+     * denied or dismissed. A window whose activity Android destroyed keeps
+     * its task, and Recents brings it back.
+     */
+    private fun launchPending() = onMain("launching waiting windows") {
+        if (!Foreground.visible) return@onMain
+        val ids = synchronized(lock) {
+            state.windows.keys.filter { id -> views[id]?.let { it.activity == null && !it.closeAsked } == true }
+        }
+        if (ids.isEmpty()) return@onMain
+        val tasks = app.getSystemService(ActivityManager::class.java).appTasks.mapNotNull { runCatching { it.windowId }.getOrNull() }
+        for (id in ids) if (id !in tasks) launch(id)
+    }
+
     private fun notifyWindow(id: Int, title: String, intent: Intent) {
+        // Without it the window still opens with pocketnix (launchPending).
+        if (app.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val nm = app.getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CHANNEL, app.getString(R.string.gui_channel), NotificationManager.IMPORTANCE_HIGH))
         val pi = PendingIntent.getActivity(app, id, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -269,6 +295,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
             val v = views[id] ?: return@guard false
             v.activity.also { v.activity = a }
         }
+        views[id]?.closeAsked = false
         previous?.takeIf { it !== a }?.closeByGuest()
         app.getSystemService(NotificationManager::class.java).cancel(NOTIFY_TAG, id)
         true
@@ -286,10 +313,12 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         }
         v.sent = v.sent?.copy(focused = false, visible = false)?.also { link.send(Gui.window(it)) }
         if (!userClosed) return@guard
+        v.closeAsked = true
         link.send(Gui.close(id))
         // The client may keep it (an unsaved document): bring it back.
         main.postDelayed({
             guard("window ${id.u}: relaunch") {
+                v.closeAsked = false
                 val stays = synchronized(lock) { state.windows.containsKey(id) } && views[id]?.let { it.activity == null } == true
                 if (stays) launch(id)
             }
@@ -394,10 +423,16 @@ internal inline fun guard(what: String, block: () -> Unit) = guard(what, Unit, b
 /** Whether any of the app's activities is started: Android only lets a visible app launch activities. */
 object Foreground : android.app.Application.ActivityLifecycleCallbacks {
     @Volatile private var started = 0
+    private val listeners = CopyOnWriteArrayList<() -> Unit>()
     val visible: Boolean get() = started > 0
 
+    /** Calls [listener] on the main thread whenever the app becomes visible. */
+    fun onVisible(listener: () -> Unit) {
+        listeners += listener
+    }
+
     override fun onActivityStarted(activity: android.app.Activity) {
-        started++
+        if (started++ == 0) for (l in listeners) l()
     }
 
     override fun onActivityStopped(activity: android.app.Activity) {
