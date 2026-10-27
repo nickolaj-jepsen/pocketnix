@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Guest windows: the system splash would show pocketnix's icon, not the app's; keep it a blank screen. -->
+    <style name="GuiWindow" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+        <item name="android:windowSplashScreenBackground">@android:color/black</item>
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>

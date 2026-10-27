@@ -2,6 +2,8 @@ package dev.nickolaj.pocketnix
 
 import android.app.Application
 import android.util.Log
+import dev.nickolaj.pocketnix.gui.Foreground
+import dev.nickolaj.pocketnix.gui.GuiSession
 import org.lsposed.hiddenapibypass.HiddenApiBypass
 
 class PocketnixApp : Application() {
@@ -22,6 +24,9 @@ class PocketnixApp : Application() {
         runCatching {
             HiddenApiBypass.addHiddenApiExemptions("Landroid/system/virtualmachine/", "Landroid/system/virtualizationservice/")
         }.onFailure { Log.w("PocketnixApp", "hidden API exemption failed", it) }
+        registerActivityLifecycleCallbacks(Foreground)
+        // Every entry point runs this, so a stale guest window's card never shows a window that's gone.
+        GuiSession.sweep(this)
     }
 }
 

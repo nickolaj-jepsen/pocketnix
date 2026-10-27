@@ -41,6 +41,11 @@ class Settings(context: Context) {
         get() = prefs.getString("tcpAddress", "10.0.2.2:9100")!!
         set(v) = prefs.edit { putString("tcpAddress", v) }
 
+    /** Debug builds: the compositor sends content hashes, and the app checks every commit against them. */
+    var guiHashes: Boolean
+        get() = BuildConfig.DEBUG && prefs.getBoolean("guiHashes", false)
+        set(v) = prefs.edit { putBoolean("guiHashes", v) }
+
     var startOnBoot: Boolean
         get() = prefs.getBoolean("startOnBoot", false)
         set(v) = prefs.edit { putBoolean("startOnBoot", v) }

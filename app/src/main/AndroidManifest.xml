@@ -43,6 +43,18 @@
             </intent-filter>
         </activity>
 
+        <!-- One document task per guest toplevel (gui/GuiSession). Resizes and docking come as
+             surface changes, never a recreate. -->
+        <activity
+            android:name=".gui.GuiWindowActivity"
+            android:exported="false"
+            android:theme="@style/GuiWindow"
+            android:documentLaunchMode="intoExisting"
+            android:autoRemoveFromRecents="true"
+            android:persistableMode="persistNever"
+            android:resizeableActivity="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density" />
+
         <!-- Scripted control over adb (`pocketnix provision`); invisible, and never replayed.
              DUMP: the adb shell holds it, other apps can't; this app's own starts (the tile) skip the check. -->
         <activity

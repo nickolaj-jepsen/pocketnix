@@ -7,4 +7,6 @@
     <string name="guest_low_channel">Guest notifications, low urgency</string>
     <string name="guest_critical_channel">Guest notifications, critical</string>
     <string name="share_label">Send to pocketnix</string>
+    <string name="gui_channel">Guest windows</string>
+    <string name="gui_window_opened">Opened a window. Tap to show it.</string>
 </resources>

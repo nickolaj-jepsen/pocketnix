@@ -26,6 +26,7 @@ import dev.nickolaj.pocketnix.engine.TcpEngine
 import dev.nickolaj.pocketnix.engine.VmEngine
 import dev.nickolaj.pocketnix.engine.VmState
 import dev.nickolaj.pocketnix.forward.PortForwards
+import dev.nickolaj.pocketnix.gui.GuiSession
 import dev.nickolaj.pocketnix.hostfs.HostFolderLinks
 import dev.nickolaj.pocketnix.hostfs.SafFolder
 import dev.nickolaj.pocketnix.hostfs.SharedFolders
@@ -77,6 +78,8 @@ class Vm(private val app: Context) {
     private val forwards = PortForwards(appVersion)
     private val fonts = FontCache(File(app.cacheDir, "fonts"), appVersion)
     val tabs = Tabs(app, console.backend(), appVersion)
+    /** The guest's GUI windows, while its config turns GUI on. */
+    val gui = GuiSession(app, appVersion)
 
     private val avf by lazy { AvfEngine(app) }
     private val _engine = MutableStateFlow(pickEngine())
@@ -174,6 +177,19 @@ class Vm(private val app: Context) {
                         control.stop()
                         control.clear()
                     }
+                }
+            }
+        }
+        scope.launch {
+            // An agent restart keeps the windows; the reconnect's replay restores them. A stopped guest takes them along.
+            combine(control.config, control.link, state) { cfg, link, s ->
+                Triple(cfg?.gui?.enable == true, link is ControlChannel.Link.Up, s == VmState.Running)
+            }.distinctUntilChanged().collect { (on, up, running) ->
+                val dialer = _engine.value.dialer
+                when {
+                    !on || !running -> gui.stop(closeWindows = true)
+                    up && dialer != null -> gui.start(dialer, settings.guiHashes)
+                    else -> gui.stop(closeWindows = false)
                 }
             }
         }
@@ -394,6 +410,7 @@ class Vm(private val app: Context) {
             Log.i(TAG, "dump: tab ${tab.id} ${tab.kind} '${tab.title}' running=${tab.session.isRunning}")
             for (line in text.lines().takeLast(40)) Log.i(TAG, "dump|${tab.id}| $line")
         }
+        for (line in gui.dump()) Log.i(TAG, "dump: gui $line")
     }
 
     private fun applyColors(colors: Map<String, String>) {

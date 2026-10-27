@@ -44,6 +44,8 @@ class ControlActivity : Activity() {
         if (BuildConfig.DEBUG && intent.hasExtra(EXTRA_GPU)) {
             s.gpu = intent.getStringExtra(EXTRA_GPU).orEmpty().takeUnless { it == "default" }.orEmpty()
         }
+        // Debug builds: `--ez guiHashes true` checks every GUI commit against the compositor's content hash.
+        if (BuildConfig.DEBUG && intent.hasExtra(EXTRA_GUI_HASHES)) s.guiHashes = intent.getBooleanExtra(EXTRA_GUI_HASHES, false)
         // Debug builds: `--es tcp <host:port>` runs against a desktop agent, `--es tcp ""` back to AVF.
         if (BuildConfig.DEBUG && intent.hasExtra(EXTRA_TCP)) {
             val addr = intent.getStringExtra(EXTRA_TCP).orEmpty()
@@ -67,6 +69,7 @@ class ControlActivity : Activity() {
         const val EXTRA_MIN_DISK = "minDiskGb"
         const val EXTRA_CPUS = "cpus"
         const val EXTRA_GPU = "gpu"
+        const val EXTRA_GUI_HASHES = "guiHashes"
         const val EXTRA_PROFILE = "profile"
         const val EXTRA_INPUT = "input"
     }
