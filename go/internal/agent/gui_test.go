@@ -113,7 +113,7 @@ func TestGUISplicesBothWays(t *testing.T) {
 func TestGUIRefused(t *testing.T) {
 	dir := t.TempDir()
 	real := filepath.Join(dir, "real.sock")
-	fakeCompositor(t, real)
+	conns := fakeCompositor(t, real)
 	link := filepath.Join(dir, "link.sock")
 	if err := os.Symlink(real, link); err != nil {
 		t.Fatal(err)
@@ -127,14 +127,15 @@ func TestGUIRefused(t *testing.T) {
 	noGUI["guiSocket"] = real
 
 	for name, tc := range map[string]struct {
-		cfg  map[string]any
+		cfg map[string]any
+		// The contract's wording; the other refusals' text is the agent's own.
 		want string
 	}{
 		"disabled":   {off, "GUI is not enabled"},
 		"absent":     {noGUI, "GUI is not enabled"},
-		"missing":    {guiConfig(filepath.Join(dir, "missing.sock")), "no such file"},
-		"symlink":    {guiConfig(link), "not a socket"},
-		"not socket": {guiConfig(plain), "not a socket"},
+		"missing":    {guiConfig(filepath.Join(dir, "missing.sock")), ""},
+		"symlink":    {guiConfig(link), ""},
+		"not socket": {guiConfig(plain), ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := start(t, tc.cfg, unixAddr)
@@ -148,6 +149,13 @@ func TestGUIRefused(t *testing.T) {
 			}
 			if !strings.Contains(re.Message, tc.want) {
 				t.Errorf("error %q, want it to mention %q", re.Message, tc.want)
+			}
+			// Above all, a symlink must not lead to the socket it points at.
+			select {
+			case c := <-conns:
+				c.Close()
+				t.Errorf("a refused GUI stream reached %s", real)
+			case <-time.After(100 * time.Millisecond):
 			}
 		})
 	}
