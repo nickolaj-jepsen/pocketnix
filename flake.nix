@@ -23,6 +23,10 @@
       }
       // nixpkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "aarch64-linux") {
         avf-kernel = pkgs.callPackage ./nix/avf-kernel/package.nix {};
+      }
+      # x86_64 only for now: Rust under binfmt is too slow to build routinely.
+      // nixpkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
+        pocketnix-compositor = pkgs.callPackage ./nix/compositor.nix {};
       });
 
     apps = forAll (pkgs: let
@@ -65,6 +69,10 @@
       }))
       {
         x86_64-linux.agent = import ./nix/test.nix {
+          inherit self;
+          pkgs = nixpkgs.legacyPackages.x86_64-linux;
+        };
+        x86_64-linux.gui = import ./nix/gui-test.nix {
           inherit self;
           pkgs = nixpkgs.legacyPackages.x86_64-linux;
         };
