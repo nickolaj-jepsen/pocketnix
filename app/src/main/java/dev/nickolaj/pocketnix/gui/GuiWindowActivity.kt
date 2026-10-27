@@ -53,6 +53,8 @@ class GuiWindowActivity : Activity() {
             holder.addCallback(surfaceCallback)
             isFocusable = true
             isFocusableInTouchMode = true
+            // A hardware key leaves touch mode, and the focus highlight would tint the whole window.
+            defaultFocusHighlightEnabled = false
             setOnTouchListener { _, e -> input.motion(e) }
             setOnGenericMotionListener { _, e -> input.motion(e) }
         }
