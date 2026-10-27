@@ -86,7 +86,7 @@ class GuiWindowActivity : Activity() {
             width = w
             height = h
             attached = true
-            vm.gui.attach(windowId, view.surfaceControl, w, h)
+            vm.gui.attach(this@GuiWindowActivity, view.surfaceControl, w, h)
             // Docked moves and resizes come as two sizes in a row (the caption inset lands second).
             handler.removeCallbacks(pushState)
             if (resized) handler.postDelayed(pushState, RESIZE_DEBOUNCE_MS) else pushState()
@@ -94,7 +94,7 @@ class GuiWindowActivity : Activity() {
 
         override fun surfaceDestroyed(holder: SurfaceHolder) {
             attached = false
-            vm.gui.detach(windowId)
+            vm.gui.detach(this@GuiWindowActivity)
             handler.removeCallbacks(pushState)
             pushState()
         }
@@ -140,6 +140,7 @@ class GuiWindowActivity : Activity() {
     private fun pushState() {
         if (!bound) return
         vm.gui.windowState(
+            this,
             WindowState(
                 id = windowId,
                 // Hidden, the window keeps its last size: the client needn't redraw at another for nobody.

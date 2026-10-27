@@ -279,10 +279,14 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         }, RELAUNCH_MS)
     }
 
-    /** The window's surface is [width] × [height] under [parent]: show the window's layers there. */
-    internal fun attach(id: Int, parent: SurfaceControl, width: Int, height: Int) = guard("window ${id.u}: attach") {
+    // An activity finishing for an earlier window of the same id (a remap, a new
+    // compositor instance) still gets callbacks: only the bound one speaks for the window.
+
+    /** [a]'s surface is [width] × [height] under [parent]: show the window's layers there. */
+    internal fun attach(a: GuiWindowActivity, parent: SurfaceControl, width: Int, height: Int) = guard("window ${a.windowId.u}: attach") {
+        val id = a.windowId
         val r = synchronized(lock) {
-            val v = views[id] ?: return@guard
+            val v = views[id]?.takeIf { it.activity === a } ?: return@guard
             val t = SurfaceControl.Transaction()
             val old = v.renderer
             if (old != null && old.parent === parent) {
@@ -301,17 +305,17 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         redraw(r, first = true)
     }
 
-    /** The window's surface is going away. */
-    internal fun detach(id: Int) = guard("window ${id.u}: detach") {
+    /** [a]'s surface is going away. */
+    internal fun detach(a: GuiWindowActivity) = guard("window ${a.windowId.u}: detach") {
         synchronized(lock) {
-            val v = views[id] ?: return@guard
+            val v = views[a.windowId]?.takeIf { it.activity === a } ?: return@guard
             v.renderer?.destroy()
             v.renderer = null
         }
     }
 
-    internal fun windowState(s: WindowState) {
-        val v = views[s.id] ?: return
+    internal fun windowState(a: GuiWindowActivity, s: WindowState) {
+        val v = views[s.id]?.takeIf { it.activity === a } ?: return
         if (v.sent == s) return
         v.sent = s
         link.send(Gui.window(s))
