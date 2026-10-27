@@ -9,15 +9,20 @@ Read `docs/design.md` first: the decisions there are settled.
   from Podroid's copy. Edit them freely; there is no upstream sync.
 - `go/`: one Go module, `cmd/pocketnix-agent` (guest) and `cmd/pocketnix`
   (host CLI), sharing `internal/protocol`.
-- `nix/`: the NixOS module (`module.nix`), the Go package, the devshell.
+- `compositor/`: the guest's Wayland compositor (Rust, from wprs's server
+  half, Apache-2.0), speaking `docs/gui-protocol.md` to the app.
+- `nix/`: the NixOS module (`module.nix`), the Go and compositor packages, the devshell.
 
 ## Commands
 
 ```bash
 nix develop                      # JDK, Android SDK/NDK, adb, Go, e2fsprogs
 ./gradlew assembleDebug          # → app/build/outputs/apk/debug/app-debug.apk
-./gradlew testDebugUnitTest      # JVM tests; POCKETNIX_AGENT=<…/bin/pocketnix-agent> adds the ones against a real agent
+./gradlew testDebugUnitTest      # JVM tests; POCKETNIX_AGENT=<…/bin/pocketnix-agent> adds the ones against a real agent,
+                                 # POCKETNIX_COMPOSITOR=<…/bin/pocketnix-compositor> the GUI decoder against a real compositor and foot
 nix build .#pocketnix            # agent + CLI; bump vendorHash in nix/go.nix after go.mod changes
+nix build .#pocketnix-compositor # the compositor, with its cargo tests
+nix build .#checks.x86_64-linux.gui     # NixOS VM test: gui.enable, socket activation, the agent's gui stream
 go -C go vet ./... && go -C go test ./...
 nix build .#checks.x86_64-linux.agent   # NixOS VM test: the example guest's agent, over TCP
 nix build .#checks.x86_64-linux.avf-boot  # the example image (avf.enable on) booted and switched under QEMU TCG

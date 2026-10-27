@@ -93,3 +93,8 @@ and publishes `pocketnix-<VERSION>.apk`, which `provision` and Obtainium fetch.
 GPL-3.0-or-later. Parts of the AVF engine are ported from
 [Podroid](https://github.com/ExTV/Podroid) (GPL-2.0-or-later); the terminal
 libraries come from [Termux](https://github.com/termux/termux-app) (Apache-2.0).
+The guest compositor (`compositor/`) started from
+[wprs](https://github.com/wayland-transpositor/wprs) and stays Apache-2.0
+(see `compositor/LICENSE` and `compositor/NOTICE`). The app's zstd decoder
+(`app/src/main/cpp/zstd`) is [Zstandard](https://github.com/facebook/zstd)'s,
+under its BSD licence.
