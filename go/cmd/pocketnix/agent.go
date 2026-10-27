@@ -33,6 +33,7 @@ commands:
       --resize <rows>x<cols> resize once the session printed something
       --input <text>       type <text> once the session printed something
   forward <port>         splice stdin/stdout to a guest TCP port (an ssh ProxyCommand)
+  gui                    splice stdin/stdout to the guest compositor's GUI socket
   udp [flags] <port>     send each stdin line as a datagram to a guest UDP port,
                          printing each reply as a line
       --wait <duration>    how long to wait for replies after stdin ends (default 2s)
@@ -233,6 +234,15 @@ func runAgent(args []string) error {
 			return err
 		}
 		conn, err := c.Forward(port)
+		if err != nil {
+			return err
+		}
+		return spliceStdio(conn)
+	case "gui":
+		if len(rest) != 0 {
+			return errUsage
+		}
+		conn, err := c.GUI()
 		if err != nil {
 			return err
 		}

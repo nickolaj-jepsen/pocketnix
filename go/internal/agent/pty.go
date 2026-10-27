@@ -2,6 +2,8 @@ package agent
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -41,6 +43,9 @@ func (s *Server) servePTY(c net.Conn, hello protocol.Hello) {
 		reject(c, err.Error())
 		return
 	}
+	tab := newTabID()
+	// The compositor reads it from a client's environment to place its windows.
+	cmd.Env = append(cmd.Env, "POCKETNIX_TAB="+tab)
 	ws := &pty.Winsize{Rows: clampSize(hello.Rows, 24), Cols: clampSize(hello.Cols, 80)}
 	ptmx, err := startPTY(cmd, ws)
 	if err != nil {
@@ -49,7 +54,9 @@ func (s *Server) servePTY(c net.Conn, hello protocol.Hello) {
 	}
 	defer ptmx.Close()
 	w := &lockedWriter{w: c}
-	if protocol.WriteJSON(w, s.hello()) != nil {
+	h := s.hello()
+	h.Tab = tab
+	if protocol.WriteJSON(w, h) != nil {
 		cmd.Process.Kill()
 		cmd.Wait()
 		return
@@ -123,6 +130,14 @@ func (s *Server) servePTY(c net.Conn, hello protocol.Hello) {
 func hangup(pid int) {
 	syscall.Kill(-pid, syscall.SIGHUP)
 	syscall.Kill(-pid, syscall.SIGCONT)
+}
+
+// newTabID is random, so an id from before an agent restart, still in a
+// running app's environment, never names a new tab.
+func newTabID() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 func clampSize(v int, def uint16) uint16 {
@@ -212,7 +227,7 @@ func sessionEnv(u *sessUser, shell string) []string {
 			env = append(env, k+"="+v)
 		}
 	}
-	if rt := fmt.Sprintf("/run/user/%d", u.uid); dirExists(rt) {
+	if rt := runtimeDir(u.uid); dirExists(rt) {
 		env = append(env, "XDG_RUNTIME_DIR="+rt)
 		if fi, err := os.Stat(rt + "/bus"); err == nil && fi.Mode().Type() == os.ModeSocket {
 			env = append(env, "DBUS_SESSION_BUS_ADDRESS=unix:path="+rt+"/bus")
@@ -220,6 +235,9 @@ func sessionEnv(u *sessUser, shell string) []string {
 	}
 	return env
 }
+
+// runtimeDir is the user's $XDG_RUNTIME_DIR, which their user manager keeps.
+func runtimeDir(uid int) string { return fmt.Sprintf("/run/user/%d", uid) }
 
 func dirExists(p string) bool {
 	fi, err := os.Stat(p)

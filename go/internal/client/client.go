@@ -456,6 +456,9 @@ func sendAndAwaitDone(conn net.Conn, r io.Reader, done *protocol.Done) error {
 
 // PTY is an open terminal session.
 type PTY struct {
+	// Tab is the session's $POCKETNIX_TAB.
+	Tab string
+
 	conn net.Conn
 	wmu  sync.Mutex
 
@@ -466,11 +469,11 @@ type PTY struct {
 
 // PTY starts a session running profile ("" for the default) at the given size.
 func (c *Client) PTY(profile string, rows, cols int) (*PTY, error) {
-	conn, _, err := c.open(protocol.Hello{Stream: protocol.StreamPTY, Profile: profile, Rows: rows, Cols: cols})
+	conn, hello, err := c.open(protocol.Hello{Stream: protocol.StreamPTY, Profile: profile, Rows: rows, Cols: cols})
 	if err != nil {
 		return nil, err
 	}
-	return &PTY{conn: conn}, nil
+	return &PTY{Tab: hello.Tab, conn: conn}, nil
 }
 
 // Read returns session output. After the session ends it returns io.EOF and
@@ -534,6 +537,12 @@ func (p *PTY) Close() error { return p.conn.Close() }
 // Forward opens a stream to TCP port on the guest's loopback.
 func (c *Client) Forward(port int) (net.Conn, error) {
 	conn, _, err := c.open(protocol.Hello{Stream: protocol.StreamForward, Port: port})
+	return conn, err
+}
+
+// GUI opens a stream spliced to the guest compositor's GUI socket.
+func (c *Client) GUI() (net.Conn, error) {
+	conn, _, err := c.open(protocol.Hello{Stream: protocol.StreamGUI})
 	return conn, err
 }
 

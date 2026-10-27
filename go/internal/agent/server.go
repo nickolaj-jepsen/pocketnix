@@ -1,5 +1,5 @@
-// Package agent is the guest side of pocketnix: it serves the app's control,
-// PTY, forward, udp and font streams (see package protocol) on any listener.
+// Package agent is the guest side of pocketnix: it serves the app's streams
+// (see package protocol) on any listener.
 package agent
 
 import (
@@ -167,6 +167,8 @@ func (s *Server) handle(c net.Conn) {
 		s.serveUDP(c, hello.Port)
 	case protocol.StreamFont:
 		s.serveFont(c)
+	case protocol.StreamGUI:
+		s.serveGUI(c)
 	case protocol.StreamFile:
 		s.serveFile(c, hello)
 	case protocol.StreamShare:

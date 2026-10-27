@@ -15,6 +15,7 @@
 //   - udp: datagrams (see datagram.go) relayed to a UDP port on the guest's
 //     loopback, one stream per client address on the phone.
 //   - font: the configured font file's bytes, then EOF.
+//   - gui: raw bytes spliced to the guest compositor (gui.go).
 package protocol
 
 // Version is bumped on any incompatible change. Additive changes (new
@@ -134,6 +135,9 @@ type Hello struct {
 	Profile string `json:"profile,omitempty"`
 	Rows    int    `json:"rows,omitempty"`
 	Cols    int    `json:"cols,omitempty"`
+	// Tab is the agent's on a PTY: the session's id, unique across agent
+	// restarts, which it sees as $POCKETNIX_TAB.
+	Tab string `json:"tab,omitempty"`
 	// Forward and udp: the guest port on 127.0.0.1.
 	Port int `json:"port,omitempty"`
 
@@ -171,6 +175,8 @@ type Config struct {
 	Hostname string    `json:"hostname,omitempty"`
 	Forwards []Forward `json:"forwards"`
 	Terminal Terminal  `json:"terminal"`
+	// GUI is absent from an agent without GUI support.
+	GUI *GUI `json:"gui,omitempty"`
 }
 
 // Forward is one port the app exposes on the phone.

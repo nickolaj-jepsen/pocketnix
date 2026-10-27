@@ -37,6 +37,9 @@ type File struct {
 	Host  HostConfig  `json:"host"`
 	// HostFolders is where Android folders the app shares are mounted.
 	HostFolders HostFoldersConfig `json:"hostFolders"`
+	// GUISocket is the compositor's GUI socket: absolute, or relative to the
+	// session user's runtime directory; empty is "pocketnix-gui.sock".
+	GUISocket string `json:"guiSocket,omitempty"`
 }
 
 // PowerConfig is how the guest keeps the phone awake.
@@ -202,6 +205,9 @@ func (f *File) normalize() error {
 	if t.Snippets == nil {
 		t.Snippets = []protocol.Snippet{}
 	}
+	if err := checkGUI(f.GUI); err != nil {
+		return fmt.Errorf("gui: %w", err)
+	}
 	f.Updates.hostname = f.Hostname
 	return f.Updates.normalize()
 }
@@ -228,4 +234,32 @@ func fileSHA256(home, path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func checkGUI(g *protocol.GUI) error {
+	if g == nil {
+		return nil
+	}
+	check := func(what string, a protocol.AppSettings) error {
+		switch a.Size {
+		case "", protocol.SizePhone, protocol.SizeCompact, protocol.SizeDesktop:
+		default:
+			return fmt.Errorf("%s: unknown size %q", what, a.Size)
+		}
+		switch a.Input {
+		case "", protocol.InputTouch, protocol.InputPointer, protocol.InputTrackpad:
+		default:
+			return fmt.Errorf("%s: unknown input %q", what, a.Input)
+		}
+		return nil
+	}
+	if err := check("defaults", g.Defaults); err != nil {
+		return err
+	}
+	for id, a := range g.AppDefaults {
+		if err := check("appDefaults."+id, a); err != nil {
+			return err
+		}
+	}
+	return nil
 }
