@@ -2,7 +2,7 @@
 
 The wire between the guest compositor (`pocketnix-compositor`) and the app,
 for the decisions in `gui-apps.md`. The agent only carries it. This page
-specifies what step 1 needs and reserves names for later steps, so that
+specifies what steps 1 and 2 need and reserves names for later steps, so that
 those steps only add things. The last section is the contract between the
 compositor, the agent, the NixOS module and the app.
 
@@ -38,7 +38,7 @@ compositor, the agent, the NixOS module and the app.
 | `0x00` | JSON | both | 1 |
 | `0x01` | COMMIT | compositor → app | 1 |
 | `0x02` | COMMIT_DATA | compositor → app | 1 |
-| `0x03` | ICON | compositor → app | reserved, 2 |
+| `0x03` | ICON | compositor → app | 2 |
 | `0x04` | CURSOR_IMAGE | compositor → app | reserved, 4 |
 | `0x10` | PRESENTED | app → compositor | 1 |
 | `0x20` | POINTER_MOTION | app → compositor | 1 |
@@ -55,7 +55,7 @@ compositor, the agent, the NixOS module and the app.
 ### Handshake
 
 1. The app sends `hello`:
-   `{"type":"hello","version":1,"minVersion":1,"app":"<build>","hashes":false}`.
+   `{"type":"hello","version":2,"minVersion":2,"app":"<build>","hashes":false}`.
    `hashes: true` asks for a content hash on every commit that carries pixels.
 2. The compositor answers with
    `{"type":"hello","version":<v>,"compositor":"<build>","instance":"<id>"}`,
@@ -72,20 +72,28 @@ instance differs from the one the app last saw, the compositor restarted and
 its clients died with it: the app closes every window it had.
 
 The protocol version is the GUI protocol's own, independent of the agent's
-protocol version. This page is version 1.
+protocol version. This page is version 2. Version 1 showed every toplevel,
+dialogs included, as a window of its own; version 2 draws a child toplevel
+inside its parent's window (see Dialogs), which changes what `toplevel` and a
+commit's `window` mean for it. Version 1 was never released, so neither side
+speaks it: both send `minVersion` 2. Everything else version 2 adds to
+version 1 is new messages, fields and frame types.
 
 ### Replay
 
 On every connection, after its `hello`, the compositor sends its whole state:
 
-- for each mapped toplevel, parents before children: `toplevel`, a `surface`
-  for each of its surfaces, then one group of FULL commits for every surface
-  of the window that has a buffer
+- for each window: its `toplevel`, then the `toplevel` of each dialog in it
+  (parents before children), a `surface` for each surface in the window
+  (dialogs' included), then one group of FULL commits for every surface of
+  the window that has a buffer
 - `cursor`
+- `apps`
 - `ready`
 
-After `ready` the app closes any window it still had that wasn't replayed.
-Commits that follow are relative to the replayed content.
+After `ready` the app closes any window it still had that wasn't replayed,
+and sends `launch` again for every launch it still waits on (see Resending a
+launch). Commits that follow are relative to the replayed content.
 
 ### One connection at a time
 
@@ -97,12 +105,16 @@ other than frame callbacks pausing while no app is connected.
 
 ## Windows and surfaces
 
-- A **window** is a mapped xdg toplevel, shown as one Android window. Its id
-  is its root `wl_surface`'s id.
-- Every surface the app draws (the toplevel's root surface, its subsurfaces,
+- A **window** is a mapped xdg toplevel without a parent, shown as one
+  Android window. Its id is its root `wl_surface`'s id.
+- A **dialog** is a mapped xdg toplevel with a parent: `xdg_toplevel.set_parent`,
+  or an xdg-foreign-v2 import (a portal's file chooser names its app's window
+  that way). It draws inside the window of its topmost ancestor, never as an
+  Android window of its own (see Dialogs).
+- Every surface the app draws (a toplevel's root surface, its subsurfaces,
   popups and their subsurfaces) belongs to exactly one window and is a layer
-  in that window's stack. The compositor constrains popups inside their
-  window, since Android clips child layers to the task.
+  in that window's stack. The compositor constrains popups, a dialog's
+  included, inside their window, since Android clips child layers to the task.
 - A window's coordinate origin is the top-left of the toplevel's window
   geometry (`xdg_surface.set_window_geometry`, or the whole root surface when
   it's unset). The Android window shows `(0, 0)` to `(width, height)` of that
@@ -111,18 +123,22 @@ other than frame callbacks pausing while no app is connected.
   window's `scale`: an edge at logical `l` is at `round(l × scale)`, and a
   size is the difference of its rounded edges. The app does no scale
   arithmetic for placement.
-- Cursor surfaces aren't sent in step 1 (see `cursor`).
+- Cursor surfaces aren't sent before step 4 (see `cursor`).
 
 ### Compositor → app JSON
 
 | message | fields | meaning |
 |---|---|---|
-| `toplevel` | `id`, `parent`, `title`, `appId`, `width`, `height`, `minWidth`, `minHeight`, `maxWidth`, `maxHeight`, `decoration` | A toplevel mapped, or its metadata changed. Sent whole every time. `parent`: the parent toplevel's id (`xdg_toplevel.set_parent`), 0 for none. `width`/`height`: the window geometry's current size. Min/max: 0 for none. `decoration`: `"client"` or `"server"` (the xdg-decoration mode in effect). Strings may be empty. |
-| `toplevel-removed` | `id` | The toplevel was unmapped or destroyed. The app forgets the window and every surface in it. If it maps again it's announced again, with the same id, followed by FULL commits. |
-| `toplevel-request` | `id`, `request` | The client asked for `minimize`, `maximize`, `unmaximize`, `fullscreen`, `unfullscreen`, `move` or `resize`. Advisory; the app may ignore any of them. |
-| `surface` | `id`, `window`, `role`, `parent` | A surface joined a window, before its first commit. `role`: `"toplevel"`, `"subsurface"` or `"popup"`. `parent`: the parent surface's id (0 for a toplevel root). |
+| `toplevel` | `id`, `window`, `parent`, `title`, `appId`, `app`, `launch`, `tab`, `width`, `height`, `minWidth`, `minHeight`, `maxWidth`, `maxHeight`, `decoration` | A toplevel mapped, or its metadata changed. Sent whole every time. `window`: the window it draws in, its own `id` for a window. `parent`: the parent toplevel's id, 0 for a window. `app`: the app-list entry it belongs to (see Which entry a toplevel is). `launch`: the launch it was bound to when it first mapped (see Binding a window to a launch), kept for the toplevel's life. `tab`: where the window goes (see Where a window goes); `""` for a dialog. `width`/`height`: the window geometry's current size. Min/max: 0 for none. `decoration`: `"client"` or `"server"` (the xdg-decoration mode in effect). Strings may be empty. |
+| `toplevel-removed` | `id` | The toplevel was unmapped or destroyed. For a window, the app forgets the window and every surface and dialog in it. For a dialog, it forgets the dialog and the surfaces whose `toplevel` is `id`. If it maps again it's announced again, with the same id, followed by FULL commits. |
+| `toplevel-request` | `id`, `request` | The client asked for `minimize`, `maximize`, `unmaximize`, `fullscreen`, `unfullscreen`, `move` or `resize`. Advisory; the app may ignore any of them. Never sent for a dialog. |
+| `surface` | `id`, `window`, `toplevel`, `role`, `parent` | A surface joined a window, before its first commit. `toplevel`: the toplevel whose tree it's in (its own id for a toplevel's root surface; a popup belongs to the toplevel it was opened from). `role`: `"toplevel"`, `"subsurface"` or `"popup"`. `parent`: the parent surface's id (0 for a toplevel's root surface, a dialog's included). |
 | `surface-removed` | `id` | Drop the layer and its content. |
 | `cursor` | `window`, `name` | The pointer's cursor over `window`. `name` is a cursor-shape-v1 name (`"default"`, `"text"`, `"pointer"`, `"grab"`, `"ew-resize"`, …) or `"hidden"`. A client-drawn cursor surface comes as `"default"` until CURSOR_IMAGE (step 4). |
+| `apps` | `apps` | The app list (see The app list). |
+| `launch-started` | `id` | A launch's process started (see Launching). |
+| `launch-failed` | `id`, `reason`, `message` | A launch ended without a window (see Launching). |
+| `activate` | `window`, `launch` | A client asked to bring `window` forward (see Activation). |
 | `ready` | | End of the replay. |
 | `error` | `message` | Sent before the compositor closes the connection over a protocol error. |
 
@@ -131,8 +147,12 @@ other than frame callbacks pausing while no app is connected.
 | message | fields | meaning |
 |---|---|---|
 | `output` | `width`, `height`, `scale`, `refresh` | The display a new window opens on: the size in pixels a new window would get, the density (`densityDpi / 160`, a float) and the refresh rate in mHz. Sent after the hello and whenever it changes. The compositor's `wl_output` and the initial configure of new toplevels follow it. |
-| `window` | `id`, `width`, `height`, `scale`, `focused`, `visible`, `maximized`, `fullscreen` | The Android window's state for a toplevel. `width`/`height` in pixels (0: let the client choose). `scale`: pixels per logical pixel for this window (density times any size preset); the compositor gives the client this as its preferred fractional scale (and `ceil` of it as the integer buffer scale) and configures it at `round(width / scale)` × `round(height / scale)`. `focused` maps to the `activated` state and keyboard focus, `visible: false` to `suspended`, and the other two to the xdg states of the same names. Debounce while a resize is in progress. |
-| `close` | `id` | `xdg_toplevel.close`, e.g. from `onDestroy` of a window the user closed. |
+| `window` | `id`, `width`, `height`, `scale`, `focused`, `visible`, `maximized`, `fullscreen` | The Android window's state for a window. `width`/`height` in pixels (0: let the client choose). `scale`: pixels per logical pixel for this window (density times any size preset); the compositor gives the client this as its preferred fractional scale (and `ceil` of it as the integer buffer scale) and configures it at `round(width / scale)` × `round(height / scale)`. `focused` maps to the `activated` state and keyboard focus, `visible: false` to `suspended`, and the other two to the xdg states of the same names. Debounce while a resize is in progress. Ignored for a dialog's id. |
+| `close` | `id` | `xdg_toplevel.close`, e.g. from `onDestroy` of a window the user closed. Works for a dialog too. |
+| `move` | `id`, `tab` | Move window `id` to `tab` (see Moving a window). |
+| `icon` | `icon`, `size` | Render an icon (see Icons). |
+| `launch` | `id`, `app`, `action`, `tab` | Start an app (see Launching). |
+| `launch-cancel` | `id` | The app stopped waiting for a launch (see Launching). |
 
 ## Commits
 
@@ -144,7 +164,7 @@ apart.
 
 | offset | type | field |
 |---|---|---|
-| 0 | u16 | `headerSize`: offset of the rects; 88 in version 1 |
+| 0 | u16 | `headerSize`: offset of the rects; 88 in versions 1 and 2 |
 | 2 | u16 | `flags` |
 | 4 | u32 | `surface` |
 | 8 | u32 | `window` |
@@ -175,6 +195,8 @@ apart.
 
 Fields:
 
+- `window`: the window the surface draws in. For a dialog's surfaces that is
+  its topmost ancestor's window.
 - `seq`: per connection, starting at 1, strictly increasing across all
   surfaces. PRESENTED refers to it.
 - `z`: the surface's place in its window's stack, 0 at the bottom. Unique
@@ -292,11 +314,12 @@ a buffer that's two or three commits behind.
   carrying a group has been committed by SurfaceFlinger. A group with nothing
   to show is acknowledged at the next Choreographer frame. The compositor then
   fires the callbacks of every commit in that window with a `seq` up to that
-  number.
+  number, its dialogs' included.
 - For a window the app isn't showing (`visible: false`, not yet open, or
   closed but still mapped), the app still applies commits but sends no
   PRESENTED. The compositor holds that window's callbacks and tells the client
-  it's `suspended`. With no app connected, all callbacks are held.
+  it's `suspended`, and its dialogs' clients too. With no app connected, all
+  callbacks are held.
 - If commits back up for a surface, the compositor may replace that surface's
   unsent commits with one FULL commit from its mirror.
 
@@ -304,8 +327,9 @@ a buffer that's two or three commits behind.
 
 The app reports input in window pixels, relative to the window's origin. The
 compositor divides by the window's scale, hit-tests the window's surfaces
-(input regions, popups, subsurfaces) and sends the Wayland events. The app
-does no hit-testing. Event times come from the compositor's clock on receipt.
+(input regions, popups, subsurfaces, dialogs) and sends the Wayland events.
+The app does no hit-testing. Event times come from the compositor's clock on
+receipt.
 
 | type | payload |
 |---|---|
@@ -316,10 +340,11 @@ does no hit-testing. Event times come from the compositor's clock on receipt.
 | KEY `0x30` | `[window u32][key u32][state u8]`: `key` a Linux evdev `KEY_*` code (XKB keycode − 8); `state` 1 pressed, 0 released. |
 | MODIFIERS `0x31` | `[window u32][mods u8]`: bit 0 shift, 1 ctrl, 2 alt, 3 logo, 4 caps lock, 5 num lock. |
 
-- KEY and MODIFIERS move keyboard focus to `window` first if it's elsewhere.
-  The app sends MODIFIERS when a window gains focus and whenever the meta
-  state changes, including modifier-only changes: Android's `metaState` as
-  is.
+- KEY and MODIFIERS move keyboard focus to `window` first if it's elsewhere:
+  to the window's topmost grabbing popup, or else its focused toplevel (see
+  Dialogs). The app sends MODIFIERS when a window gains focus and whenever
+  the meta state changes, including modifier-only changes: Android's
+  `metaState` as is.
 - Clients repeat keys themselves, so the app drops events with
   `getRepeatCount() > 0`.
 - When keyboard focus leaves a window, the compositor releases the keys it
@@ -330,6 +355,283 @@ does no hit-testing. Event times come from the compositor's clock on receipt.
   `KeyEvent.getScanCode()` for hardware keyboards, which is the evdev code,
   and maps `keyCode` to evdev for events without one. Following Android's
   keyboard layout is step 3 (`keyboard-layout`).
+
+## Dialogs
+
+A dialog (a toplevel with a parent) is a set of layers in its window, the
+way popups are. The app treats its surfaces like any others in the window;
+everything below is the compositor's.
+
+- **Placement:** centred on its parent's window geometry (the parent may be
+  a dialog), then slid to lie inside the area popups are constrained to. When
+  it doesn't fit, its top-left corner shows. It's centred again whenever its
+  size changes and slid back inside whenever the window's size changes. Once
+  the user has moved it, it keeps its offset from its parent instead,
+  constrained the same way.
+- **Size:** its first configure has no size (the client picks) and
+  `bounds` set to that area's logical size. If it maps larger than the area,
+  the compositor configures it to the area's size; a client whose minimum
+  size is larger stays clipped.
+- **Requests:** the compositor handles `xdg_toplevel.move` itself: the dialog
+  follows the pointer inside the window until the button that started it is
+  released. It ignores a dialog's minimize, maximize, fullscreen and resize
+  requests, and sends no `toplevel-request` for a dialog.
+- **Stacking:** each toplevel's surfaces stack together, its popups at their
+  top. A dialog stacks above its parent, and sibling dialogs in the order they
+  were last raised. Mapping raises a dialog, and so does a pointer press on
+  one of its surfaces. A restack is one group, like any other.
+- **Focus:** each window has a focused toplevel, initially the window's own.
+  A dialog that maps becomes its window's focused toplevel, as does a toplevel
+  a pointer button is pressed on. When a dialog unmaps, focus goes back to its
+  parent. Keyboard input for the window goes to its topmost grabbing popup,
+  or else to its focused toplevel. Only the focused toplevel has the
+  `activated` state, and only while the window is `focused`.
+- **Modal dialogs:** the compositor offers xdg-dialog-v1. While a dialog
+  marked modal (`set_modal`) is mapped, its parent never becomes the focused
+  toplevel, and pointer buttons and scrolls over the parent's surfaces are
+  dropped. Clients without xdg-dialog-v1 (GTK3) make their dialogs modal
+  themselves.
+- **State:** a dialog's surfaces use its window's `scale`, it's `suspended`
+  while its window is, and it's never maximized or fullscreen.
+- **Changing windows:** xdg-shell gives a dialog its grandparent when its
+  parent unmaps, and none when there is no grandparent; `set_parent` can also
+  change it. When the window a dialog draws in changes, the compositor sends
+  `toplevel-removed` for it and announces it again where it now belongs:
+  `toplevel`, its `surface`s and one group of FULL commits. A dialog that
+  becomes a window takes its old window's `tab`.
+
+## The app list
+
+### `apps`
+
+`{"type":"apps","apps":[<entry>, …]}`, compositor → app: the whole list every
+time, sorted by `id`. Sent in every replay and again whenever the list
+changes. The app keeps the last list in its storage, so the launcher and pins
+work with the VM off.
+
+| field | meaning |
+|---|---|
+| `id` | The desktop file id without its `.desktop` suffix: `org.gnome.Calculator` for `org.gnome.Calculator.desktop`. Apps use it as their Wayland app id, and `gui.appDefaults` is keyed by it. |
+| `name` | `Name`. |
+| `genericName` | `GenericName`, or `""`. |
+| `comment` | `Comment`, or `""`. |
+| `keywords` | `Keywords`, a list of strings. |
+| `categories` | `Categories`, a list of strings. |
+| `icon` | The icon's key (see Icons), or `""` for none. |
+| `noDisplay` | `true` for an entry the launcher doesn't show (below). |
+| `actions` | The entry's actions in `Actions=` order: `{"id", "name", "icon"}` each, `id` being the `[Desktop Action <id>]` group's name and `icon` a key or `""`. |
+
+- **Where entries come from:** `$XDG_DATA_HOME/applications` (default
+  `~/.local/share/applications`), then the `applications` directory of each
+  `$XDG_DATA_DIRS` entry, in that order and recursively. The desktop file id
+  is the path below `applications/` with `/` turned into `-`. The first
+  directory that has an id wins, so a user's own file shadows the profile's.
+- **Which ones:**
+  - Only `Type=Application` entries.
+  - `Hidden=true` removes the id, the copies in later directories included.
+  - Dropped: a `TryExec` not found on `PATH`; `Terminal=true` (a terminal
+    program belongs in a tab); no `Name`; no `Exec` without
+    `DBusActivatable=true`; a file that doesn't parse (logged).
+  - `noDisplay: true` for `NoDisplay=true` and for any `OnlyShowIn`: the
+    compositor names no desktop (`XDG_CURRENT_DESKTOP` stays unset), and
+    `NotShowIn` is ignored. These entries are listed anyway so their windows
+    can be named (`toplevel.app`) and a launch of one works.
+- **Strings:** localized keys (`Name[da_DK]`, `Name[da]`, …) are picked for
+  the compositor's own locale (`LC_ALL`, `LC_MESSAGES`, `LANG`) by the
+  Desktop Entry spec's matching rules. That's the guest's locale, the
+  language the apps themselves will show.
+- **Changes:** the compositor rescans when an app connection says hello, on
+  inotify events in any `applications` directory it reads, and on `SIGHUP`
+  (the module's activation sends one on every switch). It debounces by 1 s
+  and sends `apps` only when the list differs from the last one it sent on
+  that connection.
+- **Size:** the message fits in `MaxFramePayload`. Past that the compositor
+  drops `keywords`, then `comment` and `genericName`, and logs it.
+
+### Which entry a toplevel is
+
+A `toplevel`'s `app` is the `id` of: its launch's entry; or else the entry
+whose `id` equals the toplevel's `appId`; or else the one whose
+`StartupWMClass` does; or else `""`. A dialog is matched by its own `appId`.
+When a new list changes a toplevel's `app`, the compositor sends its
+`toplevel` again.
+
+### Icons
+
+- **Keys:** an `icon` key is an opaque string of 1–64 characters from
+  `[0-9a-z]`. The compositor derives it from the content of every file the
+  icon could be rendered from and its own rendering version, so it changes
+  when those do and only then. Entries with the same icon share a key. The
+  app caches rendered icons by key and size, across VM-off, and drops those
+  no entry names any more.
+- **`icon`** (app → compositor), `{"type":"icon","icon":"<key>","size":<px>}`:
+  render that key at `size` × `size` pixels, `size` from 16 to 512 (the
+  compositor clamps others). After each `apps`, the app asks for every key it
+  lacks at every size it draws (the launcher grid, a shortcut, the splash),
+  in pixels for the display. Requests a connection didn't answer are lost
+  with it; the app asks again on the next.
+- **ICON (`0x03`)**, compositor → app: `[size u16][keyLength u8][key][png]`.
+  The PNG is RGBA, exactly `size` × `size`, the icon scaled to fit with its
+  aspect ratio kept, centred on a transparent background. An empty `png`
+  means no icon (the key isn't known any more, or its file can't be
+  rendered); the app shows a generic one. The compositor answers each
+  request once, in any order (it renders off its event loop), and never
+  between a group's commits or a COMMIT's frames.
+- **Lookup:** an absolute `Icon=` path is used as is. A name (a trailing
+  `.png` or `.svg` dropped) is looked up in the `hicolor` theme, then
+  `Adwaita`, under `$XDG_DATA_HOME/icons`, each data dir's `icons` and
+  `~/.icons`, and then in each data dir's `pixmaps`. A theme's sizes come
+  from its `index.theme`, or from the directory names (`48x48`, `scalable`)
+  when it has none. An SVG is rendered at the size asked for; otherwise the
+  smallest PNG at least that size is scaled down, or the largest one up.
+  Other formats (XPM) render as no icon.
+
+## Launching
+
+A tap opens the window's Activity at once, on a splash. The app sends
+`launch`; the compositor starts the app and binds the window it maps to the
+launch, and the Activity then shows that window.
+
+### Messages
+
+- **`launch`** (app → compositor), `{"type":"launch","id":"…","app":"…","action":"…","tab":"…"}`:
+  - `id`: the app's name for this launch, 1–64 characters from
+    `[A-Za-z0-9_-]` and unique (a random UUID). A malformed `id` is a
+    protocol error.
+  - `app`: an entry's `id`. `action`: one of its actions' ids, or `""`.
+  - `tab`: where its windows go, as in `toplevel.tab`: `""` for their own
+    task.
+- **`launch-cancel`** (app → compositor), `{"type":"launch-cancel","id":"…"}`:
+  the app stopped waiting (the user closed the splash). If no window has been
+  bound to the launch yet, the compositor stops its scope; a window that maps
+  later anyway isn't bound to it.
+- **`launch-started`** (compositor → app), `{"type":"launch-started","id":"…"}`:
+  the process started, or its D-Bus activation was sent. Informative: after a
+  reconnect a launch can end without the app having seen it.
+- **`launch-failed`** (compositor → app),
+  `{"type":"launch-failed","id":"…","reason":"…","message":"…"}`. `message`
+  is for display. `reason`:
+  - `unknown`: the current list has no entry `app`, or it has no action
+    `action` (a switch removed it). The app disables the entry's pins.
+  - `exec`: it couldn't be started, or its process exited with a non-zero
+    status before a window was bound ("exited with status 127").
+  - `timeout`: no window within 90 s of the compositor receiving the launch.
+    The process keeps running, and a window it maps later is an ordinary
+    new window.
+  - `closed`: only in answer to a resent launch: its window opened and
+    closed while the app wasn't connected.
+
+A launch ends exactly once: with a new window whose `toplevel` names it in
+`launch`, with an `activate` that names it, or with `launch-failed`. A process
+that exits with status 0 doesn't end it: a single-instance app's second
+process hands the launch to the running one and exits, and that one maps or
+activates a window with the launch's token later.
+
+### Starting the process
+
+- The compositor mints an xdg-activation token for the launch.
+- It runs `systemd-cat --identifier=<id> systemd-run --user --scope
+  --slice=app.slice --unit=app-pocketnix-<escaped id>-<random>
+  --description=<name> -- <argv>`, with `<escaped id>` the entry id through
+  `systemd-escape`. The app gets a scope of its own, named the way systemd
+  names a desktop's apps, and its output goes to the user journal under the
+  entry's id. The compositor watches the process for its exit status.
+- `argv` is the entry's `Exec` (or the action's), unquoted by the Desktop
+  Entry spec's rules. Field codes: `%f`, `%F`, `%u` and `%U` are dropped
+  (launches carry no files yet), `%i` becomes `--icon <Icon>` when there is
+  an icon, `%c` the name, `%k` the desktop file's path, `%%` a `%`; others
+  are dropped. The program resolves through the compositor's `PATH`.
+- The environment is the compositor's, plus `XDG_ACTIVATION_TOKEN` and
+  `DESKTOP_STARTUP_ID` set to the token, and `POCKETNIX_TAB=<tab>` when the
+  launch names a tab, so the process's later windows go there too. The
+  working directory is the entry's `Path`, or the user's home.
+- An entry with `DBusActivatable=true` and no `Exec` is started over the
+  session bus instead: `org.freedesktop.Application.Activate` (or
+  `ActivateAction` for an action) on its well-known name, with
+  `activation-token` and `desktop-startup-id` in the platform data. An entry
+  with both uses `Exec`; the app forwards to its running instance itself.
+
+### Binding a window to a launch
+
+When a toplevel without a parent first maps, the compositor binds it to the
+oldest pending launch that matches, checking in this order:
+
+1. **Token:** the client activated the surface with the launch's token before
+   mapping it. Every app tried does so between its first role commit and its
+   first buffer, and a single-instance app does it from the running process.
+2. **Scope:** the client's pid (`SO_PEERCRED` on its Wayland connection) is in
+   the launch's scope (`/proc/<pid>/cgroup`).
+3. **App id:** its `appId` is the launch's entry `id` or that entry's
+   `StartupWMClass`.
+
+A toplevel nothing matches has `launch` `""`. A dialog never binds a launch.
+
+### Activation
+
+- **`activate`** (compositor → app), `{"type":"activate","window":<id>,"launch":"…"}`:
+  a client activated a mapped toplevel in `window` with a valid token. For a
+  dialog, the compositor also raises it in its window.
+  - `launch`: the launch whose token it was, which this ends (an existing
+    window: a single-instance app's, or one that mapped before activating);
+    `""` otherwise.
+  - Valid tokens are a pending launch's, and those a client minted with the
+    serial of a recent input event on a surface that had keyboard focus.
+    Activations with any other token are dropped, so a background app can't
+    steal focus.
+- The app brings the window forward when Android lets it (pocketnix in the
+  foreground) and otherwise ignores it. A launch's `activate` arrives while
+  its splash is showing, which is in the foreground.
+
+### Resending a launch
+
+The compositor keeps every launch's outcome for its lifetime and never starts
+an `id` twice. A `launch` with an `id` it already has gets that launch's
+state again:
+
+- still pending: `launch-started`
+- ended with a window that's still mapped: `activate` naming the window and
+  the launch
+- ended with a window that's gone: `launch-failed` with `closed`
+- failed: the same `launch-failed`
+- cancelled: nothing
+
+The app queues launches while it has no connection (a tap that boots the VM),
+and after each `ready` sends `launch` for every launch it still waits on that
+no replayed `toplevel` named. A compositor with a new `instance` knows no
+earlier launch, so they start afresh.
+
+## Where a window goes
+
+### `tab`
+
+A window's `tab` is `""` for its own Android task, or a tab id: then it shows
+as a tab in the terminal screen, after that tab, or at the end of the tab
+bar when the app has no such tab (it closed, or the id is from before an
+agent restart). The compositor decides it when the window first maps:
+
+1. A window bound to a launch takes the launch's `tab`, whatever its
+   environment says. A launcher tap gives its own task even to a
+   single-instance app first started from a tab.
+2. Otherwise `POCKETNIX_TAB` from the client's own `/proc/<pid>/environ` (pid
+   from `SO_PEERCRED`), read once per client.
+3. Otherwise `""`.
+
+Only the client's own environment counts, not its ancestors': children
+inherit the variable, so a client without it was started outside a tab
+(systemd, D-Bus activation, ssh) or cleared its environment on purpose. The
+agent's tab ids are 16 lowercase hex digits; the compositor treats the value
+as opaque but takes only 1–64 characters from `[A-Za-z0-9_-]`, and anything
+else as unset.
+
+### Moving a window
+
+`move` (app → compositor), `{"type":"move","id":<window>,"tab":"…"}`: the
+user moved the window between its own task (`""`) and a tab (the id of the
+tab it now follows). The compositor stores the new `tab` for the toplevel's
+life, across reconnects, and sends its `toplevel` again. The app moves the
+window when that `toplevel` arrives, so a move and a replay take one path.
+It doesn't change where the client's later windows go. A `move` for a dialog
+or an unknown id is ignored.
 
 ## Content hash
 
@@ -352,32 +654,24 @@ real compositor with `hashes: true` and compare every hash.
 ## Reserved for later steps
 
 Names only. Each step specifies its own when it lands, and none of these
-change step 1's messages.
+change earlier steps' messages.
 
-- **Step 2, the window model:**
-  - `apps` (compositor → app): the app list
-  - ICON `0x03`: an icon by desktop id
-  - `launch` (app → compositor) and `launch-failed` (compositor → app)
-  - `activate` (compositor → app): an xdg-activation request to raise a window
-  - new `toplevel` fields: `launch` (the launch it fulfils) and `tab`
-    (`POCKETNIX_TAB`)
-  - a dialog's surfaces may come with its parent's `window`, so dialogs draw
-    as layers in the parent with no new message
 - **Step 3, phone input:**
   - TOUCH_* `0x40`–`0x44` and POINTER_RELATIVE `0x24`
   - `text-input` (compositor → app)
   - `ime-commit`, `ime-preedit` and `ime-delete` (app → compositor)
   - `keyboard-layout` and `settings` (app → compositor; per-app size and
     input mode)
-- **Step 4, docked polish:** CURSOR_IMAGE `0x04`, toplevel icons through ICON,
-  and a `decoration` field in `window`.
+- **Step 4, docked polish:** CURSOR_IMAGE `0x04`; toplevel icons
+  (xdg-toplevel-icon) as an `icon` key in `toplevel`, rendered through
+  `icon` and ICON; a `decoration` field in `window`.
 
 No clipboard, ever: the data-control bridge handles it (`gui-apps.md`).
 
 ## Contract
 
-Normative for step 1. Paths are under the session user's runtime directory,
-`$XDG_RUNTIME_DIR` (`/run/user/<uid>`).
+Normative for steps 1 and 2. Paths are under the session user's runtime
+directory, `$XDG_RUNTIME_DIR` (`/run/user/<uid>`).
 
 ### Compositor
 
@@ -398,6 +692,15 @@ Normative for step 1. Paths are under the session user's runtime directory,
 - `--log-hashes`, or `POCKETNIX_COMPOSITOR_LOG_HASHES=1`, logs one stderr line
   per BUFFER commit: `hash surface=<id> seq=<seq> <width>x<height> <hash as %016x>`.
 - Logging follows `RUST_LOG`.
+- It offers xdg-activation-v1, xdg-dialog-v1 and xdg-foreign-v2 (step 2).
+- It reads the app list and icons through its environment's `XDG_DATA_HOME`,
+  `XDG_DATA_DIRS` and `HOME`, names them in its locale (`LC_ALL`,
+  `LC_MESSAGES`, `LANG`), and resolves `TryExec` and `Exec` through its
+  `PATH`. `SIGHUP` makes it rescan the list.
+- It launches with `systemd-cat` and `systemd-run` from its `PATH`, into
+  `app-pocketnix-*` scopes under `app.slice`, outside its own cgroup.
+- It reads `POCKETNIX_TAB` from `/proc/<pid>/environ` of its own uid's
+  clients.
 
 ### Agent
 
@@ -423,7 +726,11 @@ Normative for step 1. Paths are under the session user's runtime directory,
   - GUI is on exactly when `gui.enable` is true. The app then keeps one `gui`
     stream open, reconnecting with backoff.
   - An older app ignores the field, and an older agent never sends it.
-- Step 2: `POCKETNIX_TAB=<id>` in every PTY session's environment.
+- Every PTY session's environment has `POCKETNIX_TAB=<tab>`, and the agent's
+  PTY Hello carries the same id as `tab` (`protocol.Hello.Tab`): that's how
+  the app knows each terminal tab's id. The id is 16 random lowercase hex
+  digits per session, so one from before an agent restart never names a new
+  tab.
 
 ### NixOS module
 
@@ -440,7 +747,10 @@ Normative for step 1. Paths are under the session user's runtime directory,
     `FileDescriptorName=wayland`, `SocketMode=0600`
   - Both are wanted by `sockets.target`, with `Service=pocketnix-compositor.service`.
   - user service `pocketnix-compositor.service`: `ExecStart=pocketnix-compositor`,
-    `Sockets=` both sockets
+    `Sockets=` both sockets, and `ExecReload` sending it `SIGHUP`
+  - in the user activation script that every boot and switch runs: reloading
+    `pocketnix-compositor.service` when it's active, so a switch refreshes
+    the app list
 - It also sets:
   - `WAYLAND_DISPLAY=wayland-0` and `NIXOS_OZONE_WL=1`, both in
     `environment.sessionVariables` (the tabs' login shells) and in the user
@@ -450,5 +760,10 @@ Normative for step 1. Paths are under the session user's runtime directory,
     `xdg.portal.enable` (and through it the FileChooser integration), a GTK
     portal backend as `xdg.portal.config.common.default`, and
     `fonts.enableDefaultPackages`
+- The compositor's `XDG_DATA_DIRS` and `PATH` are the user manager's, which
+  pam_env fills from NixOS's profile-relative session variables: both cover
+  the user's and the system's profiles. The module adds nothing there, but
+  its VM test checks that the compositor lists an app from the system profile
+  and launches it.
 - The session user's lingering, which the module already sets, is what
   starts the user manager and so the sockets.
