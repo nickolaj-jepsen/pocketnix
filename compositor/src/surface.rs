@@ -234,6 +234,11 @@ impl Surf {
         if self.pending.rects.len() > protocol::MAX_RECTS {
             self.pending.rects = vec![bounding(&self.pending.rects)];
         }
+        // Rects pile up over commits until a flush; past the buffer's area the
+        // whole buffer is cheaper, and a commit never carries more than it.
+        if self.pending.rects.iter().map(Rect::area).sum::<u64>() > whole {
+            self.pending = Pending { full: true, ..Default::default() };
+        }
     }
 
     pub fn remove_buffer(&mut self) {
@@ -475,6 +480,29 @@ mod tests {
         assert_eq!(s.pending.scroll, Some(7));
         assert_eq!(s.pending.rects, vec![Rect { x: 0, y: h - 7, w, h: 7 }]);
         assert_eq!(apply_as_app(&app, &s), scrolled);
+    }
+
+    #[test]
+    fn damage_piling_up_past_the_buffer_is_full() {
+        let (w, h) = (16, 16);
+        let mut s = Surf::new(1);
+        let first = image(w, h, 0);
+        s.apply_buffer(&first, w, h, w as usize * 4, 1, vec![], false);
+        let app = s.mirror.as_ref().unwrap().pixels.clone();
+        s.pending = Pending::default();
+
+        // A third of the buffer each time: none alone is big enough to send whole.
+        let mut last = first;
+        for seed in 1..=4 {
+            last = image(w, h, seed);
+            s.apply_buffer(&last, w, h, w as usize * 4, 1, vec![Rect { x: 0, y: 0, w, h: h / 3 }], true);
+        }
+        let area: u64 = s.pending.rects.iter().map(Rect::area).sum();
+        assert!(s.pending.full || area <= (w * h) as u64, "pending rects cover {area} pixels");
+        let mut want = app.clone();
+        let row = w as usize * 4;
+        want[..row * (h / 3) as usize].copy_from_slice(&last[..row * (h / 3) as usize]);
+        assert_eq!(apply_as_app(&app, &s), want);
     }
 
     #[test]

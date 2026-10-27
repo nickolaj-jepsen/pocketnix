@@ -101,6 +101,10 @@ class GuiLink(
             } catch (e: Exception) {
                 error = e
                 Log.w(TAG, "link failed", e)
+            } catch (e: OutOfMemoryError) {
+                // A big commit on a small heap: uncaught, it would end this thread and nothing would reconnect.
+                error = e
+                Log.w(TAG, "link ran out of memory", e)
             } finally {
                 writer = null
                 w?.close()

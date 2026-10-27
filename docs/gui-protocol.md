@@ -181,7 +181,10 @@ Fields:
   within a window once a group has been applied.
 - `x`, `y`, `dstWidth`, `dstHeight`: where the surface shows, in window
   pixels.
-- `width`, `height`: the buffer, in buffer pixels.
+- `width`, `height`: the buffer, in buffer pixels. At most 16384 each, and
+  `width × height × 4` at most 64 MiB: the compositor refuses a bigger
+  `wl_buffer` with `wl_surface`'s `invalid_size` error, so the app can treat
+  one as a protocol error.
 - `srcX`, `srcY`, `srcWidth`, `srcHeight`: the part of the transformed buffer
   that's shown (`wp_viewport` source), in buffer pixels; the whole buffer
   when the client set none. The surface shows that part of the buffer,
@@ -197,6 +200,8 @@ Fields:
   meaning. 0 for nearly every client.
 - `rects`: damage, in buffer pixels of the untransformed buffer, clipped to
   it, applied in order. At most 4096; the compositor merges beyond that.
+  They may overlap, but their areas sum to at most `width × height`: past
+  that the compositor sends the buffer whole.
 - `dataLength`: the total pixel data length across this COMMIT and its
   COMMIT_DATA frames.
 - `hash`: see Content hash. Zero unless the HASH flag is set.

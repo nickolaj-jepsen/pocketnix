@@ -40,8 +40,9 @@ object Gui {
 
     const val HEADER_SIZE = 88
     const val MAX_RECTS = 4096
-    // Far past any display; keeps a corrupt header from asking for gigabytes.
+    // The largest buffer, per side and in bytes; the compositor refuses bigger ones (see COMMIT in gui-protocol.md).
     const val MAX_DIMENSION = 16384
+    const val MAX_BUFFER_BYTES = 64L shl 20
 
     const val BTN_LEFT = 0x110
     const val BTN_RIGHT = 0x111
@@ -303,7 +304,9 @@ class GuiReader(private val input: InputStream) {
         val rects = IntArray(rectCount * 4)
         for (i in rects.indices) rects[i] = b.u32(headerSize + i * 4)
         if (buffer) {
-            if (width !in 1..Gui.MAX_DIMENSION || height !in 1..Gui.MAX_DIMENSION) throw GuiProtocolException("buffer ${width}x$height")
+            if (width !in 1..Gui.MAX_DIMENSION || height !in 1..Gui.MAX_DIMENSION || width.toLong() * height * 4 > Gui.MAX_BUFFER_BYTES) {
+                throw GuiProtocolException("buffer ${width}x$height")
+            }
             if (format != Gui.FORMAT_RGBA8888 && format != Gui.FORMAT_RGBX8888) throw GuiProtocolException("pixel format $format")
             if (encoding != Gui.ENCODING_RAW && encoding != Gui.ENCODING_ZSTD) throw GuiProtocolException("encoding $encoding")
             if (rectCount == 0) throw GuiProtocolException("BUFFER commit without rects")
@@ -321,8 +324,8 @@ class GuiReader(private val input: InputStream) {
 
         var pixelBytes = 0L
         for (i in 0 until rectCount) pixelBytes += rects[i * 4 + 2].toLong() * rects[i * 4 + 3] * 4
-        // Rects may overlap, so the sum isn't bounded by the buffer; keep the allocation sane.
-        if (pixelBytes > MAX_PIXEL_BYTES) throw GuiProtocolException("commit $seqU with $pixelBytes pixel bytes")
+        // Rects may overlap, but the compositor keeps their sum within the buffer's size.
+        if (pixelBytes > Gui.MAX_BUFFER_BYTES) throw GuiProtocolException("commit $seqU with $pixelBytes pixel bytes")
         val most = when {
             !buffer -> 0L
             encoding == Gui.ENCODING_RAW -> pixelBytes
@@ -352,10 +355,6 @@ class GuiReader(private val input: InputStream) {
             flags, surface, window, seq, z, format, encoding, transform, x, y, dstWidth, dstHeight, width, height,
             srcX, srcY, srcWidth, srcHeight, scroll, rects, data, hash,
         )
-    }
-
-    private companion object {
-        const val MAX_PIXEL_BYTES = 512L shl 20
     }
 }
 

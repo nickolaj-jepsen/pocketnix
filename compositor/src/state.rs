@@ -26,6 +26,7 @@ use smithay::reexports::wayland_server::backend::DisconnectReason;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
+use smithay::reexports::wayland_server::protocol::wl_surface;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::Logical;
 use smithay::utils::Rectangle;
@@ -82,6 +83,7 @@ use crate::damage::surface_damage_to_buffer;
 use crate::flush::Layer;
 use crate::gui::Gui;
 use crate::popup::solve_in_toplevel;
+use crate::protocol;
 use crate::protocol::Rect;
 use crate::surface::Surf;
 use crate::surface::SurfCell;
@@ -481,7 +483,7 @@ impl CompositorHandler for State {
         }
 
         let generation = self.gui.generation;
-        let (removed, has_callbacks, entered) = compositor::with_states(surface, |data| {
+        let (removed, has_callbacks, entered, refused) = compositor::with_states(surface, |data| {
             let mut guard = data.cached_state.get::<SurfaceAttributes>();
             let attrs = guard.current();
             let buffer = attrs.buffer.take();
@@ -503,9 +505,10 @@ impl CompositorHandler for State {
                 s.transform = transform;
                 s.viewport = viewport;
                 let mut removed = false;
+                let mut refused = None;
                 match buffer {
                     Some(BufferAssignment::NewBuffer(buffer)) => {
-                        take_buffer(s, &buffer, &damage, generation);
+                        refused = take_buffer(s, &buffer, &damage, generation).err();
                         buffer.release();
                     }
                     Some(BufferAssignment::Removed) => {
@@ -516,10 +519,14 @@ impl CompositorHandler for State {
                 }
                 s.callbacks.extend(callbacks);
                 let entered = std::mem::replace(&mut s.entered_output, true);
-                (removed, !s.callbacks.is_empty(), entered)
+                (removed, !s.callbacks.is_empty(), entered, refused)
             })
-            .unwrap_or((false, false, true))
+            .unwrap_or((false, false, true, None))
         });
+        if let Some(why) = refused {
+            surface.post_error(wl_surface::Error::InvalidSize, why);
+            return;
+        }
         if !entered {
             self.output.enter(surface);
         }
@@ -533,21 +540,34 @@ impl CompositorHandler for State {
     }
 }
 
-fn take_buffer(s: &mut Surf, buffer: &WlBuffer, damage: &[Damage], generation: u64) {
+/// Takes a committed buffer into the surface's mirror. Err for one larger
+/// than the app takes, which would fail every replay: the client gets a
+/// protocol error instead.
+fn take_buffer(s: &mut Surf, buffer: &WlBuffer, damage: &[Damage], generation: u64) -> Result<(), String> {
     let app_has = s.app_has_content(generation);
     let result = shm::with_buffer_contents(buffer, |ptr, len, spec| {
         let Some(format) = wire_format(spec.format) else {
             warn!("unsupported shm format {:?}", spec.format);
-            return;
+            return Ok(());
         };
         let (width, height, stride) = (spec.width, spec.height, spec.stride);
         if width <= 0 || height <= 0 || stride < width * 4 {
-            return;
+            return Ok(());
+        }
+        if width as u32 > protocol::MAX_DIMENSION
+            || height as u32 > protocol::MAX_DIMENSION
+            || width as u64 * height as u64 * 4 > protocol::MAX_BUFFER_BYTES
+        {
+            return Err(format!(
+                "buffer {width}x{height} is over {max} pixels a side or {bytes} bytes",
+                max = protocol::MAX_DIMENSION,
+                bytes = protocol::MAX_BUFFER_BYTES,
+            ));
         }
         let start = spec.offset as usize;
         let size = stride as usize * height as usize;
         if start + size > len {
-            return;
+            return Ok(());
         }
         // SAFETY: smithay keeps the pool mapped for this closure and we
         // checked the range against its length.
@@ -574,10 +594,12 @@ fn take_buffer(s: &mut Surf, buffer: &WlBuffer, damage: &[Damage], generation: u
             })
             .collect();
         s.apply_buffer(src, width as u32, height as u32, stride as usize, format, rects, app_has);
+        Ok(())
     });
-    if let Err(err) = result {
+    result.unwrap_or_else(|err| {
         warn!("buffer contents: {err:?}");
-    }
+        Ok(())
+    })
 }
 
 impl BufferHandler for State {

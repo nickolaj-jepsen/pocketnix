@@ -33,6 +33,9 @@ pub const ENCODING_ZSTD: u8 = 1;
 
 pub const COMMIT_HEADER_SIZE: usize = 88;
 pub const MAX_RECTS: usize = 4096;
+/// The largest buffer the app takes, per side and in bytes at 4 bytes a pixel.
+pub const MAX_DIMENSION: u32 = 16384;
+pub const MAX_BUFFER_BYTES: u64 = 64 << 20;
 
 /// Negotiates a version with a peer speaking `min..=max`, by the agent's
 /// `Negotiate` rule: a `min` of 0 means `max`.
