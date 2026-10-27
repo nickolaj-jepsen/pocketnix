@@ -8,7 +8,8 @@ that provisions a phone over adb. Settled decisions; change them deliberately.
 ## Shape
 
 - Main use: a terminal on the phone first (mostly touch input), and SSH from
-  other machines (e.g. over Tailscale) second. No graphical guest.
+  other machines (e.g. over Tailscale) second. Guest GUI apps, opt-in, show
+  as Android windows next to the terminal (`gui-apps.md`).
 - The app is new and small (Compose, no DI framework, no setup wizard). Its AVF
   engine is ported from [Podroid](https://github.com/ExTV/Podroid) (GPL-2.0+),
   hence GPL-3.0+ here. The terminal widget is Termux's terminal-emulator and
