@@ -31,6 +31,14 @@ android {
         }
     }
 
+    // The GUI renderer's C half: zstd and AHardwareBuffer copies. The SDK's CMake, as AGP would download another.
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "4.1.2"
+        }
+    }
+
     // CI passes the release key as Gradle properties; without them release builds stay unsigned.
     val releaseStore = project.findProperty("POCKETNIX_RELEASE_STORE_FILE") as? String
     signingConfigs {
@@ -50,6 +58,10 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            // The x86_64 emulator runs native code untranslated, so its timings and crashes are real.
+            ndk {
+                abiFilters += "x86_64"
+            }
         }
         release {
             signingConfig = signingConfigs.findByName("release")
@@ -92,4 +104,6 @@ dependencies {
     testImplementation(libs.junit)
     // The platform's org.json is a stub on the JVM; tests need a real one.
     testImplementation(libs.json)
+    // A pure-Java zstd, to mirror a real compositor's commits on the JVM.
+    testImplementation("io.airlift:aircompressor:0.27")
 }

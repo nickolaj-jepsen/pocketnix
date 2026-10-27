@@ -73,6 +73,20 @@ class ProtocolTest {
         assertEquals(emptyList<Forward>(), c.forwards)
         assertEquals(emptyList<List<ExtraKey>>(), c.extraKeys)
         assertNull(c.theme.font)
+        assertNull("an agent without GUI support", c.gui)
+    }
+
+    @Test
+    fun parsesGuiConfig() {
+        val c = GuestConfig.parse(
+            """{"type":"config","gui":{"enable":true,"defaults":{"size":"phone","input":"touch"},
+               "appDefaults":{"org.gnome.Calculator":{"size":"compact"}}}}""",
+        )
+        val gui = c.gui!!
+        assertEquals(true, gui.enable)
+        assertEquals(GuiAppSettings("phone", "touch"), gui.defaults)
+        assertEquals(mapOf("org.gnome.Calculator" to GuiAppSettings("compact", null)), gui.appDefaults)
+        assertEquals(false, GuestConfig.parse("""{"type":"config","gui":{}}""").gui!!.enable)
     }
 
     @Test

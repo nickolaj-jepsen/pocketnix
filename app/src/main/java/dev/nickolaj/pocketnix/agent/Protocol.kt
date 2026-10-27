@@ -75,6 +75,27 @@ data class Theme(val colors: Map<String, String>, val font: String?, val fontSha
 /** A command-palette entry; [submit] presses Enter after typing [command]. */
 data class Snippet(val name: String, val command: String, val submit: Boolean)
 
+/** Per-app GUI settings from the module (gui-protocol.md, Contract); null inherits. */
+data class GuiAppSettings(val size: String?, val input: String?) {
+    companion object {
+        fun parse(o: JSONObject?) = GuiAppSettings(o?.optStringOrNull("size"), o?.optStringOrNull("input"))
+    }
+}
+
+/** The guest's GUI: [enable] keeps the GUI stream open. */
+data class GuiConfig(val enable: Boolean, val defaults: GuiAppSettings, val appDefaults: Map<String, GuiAppSettings>) {
+    companion object {
+        fun parse(o: JSONObject): GuiConfig {
+            val apps = o.optJSONObject("appDefaults") ?: JSONObject()
+            return GuiConfig(
+                enable = o.optBoolean("enable"),
+                defaults = GuiAppSettings.parse(o.optJSONObject("defaults")),
+                appDefaults = apps.keys().asSequence().associateWith { GuiAppSettings.parse(apps.optJSONObject(it)) },
+            )
+        }
+    }
+}
+
 /** What the NixOS module declares for the app; arrives on the control stream. */
 data class GuestConfig(
     val hostname: String,
@@ -84,6 +105,8 @@ data class GuestConfig(
     val extraKeys: List<List<ExtraKey>>,
     val theme: Theme,
     val snippets: List<Snippet> = emptyList(),
+    /** Null from an agent without GUI support. */
+    val gui: GuiConfig? = null,
 ) {
     companion object {
         fun parse(json: String): GuestConfig = parse(JSONObject(json))
@@ -114,6 +137,7 @@ data class GuestConfig(
                 snippets = t.optJSONArray("snippets").objects().map {
                     Snippet(it.getString("name"), it.getString("command"), it.optBoolean("submit"))
                 },
+                gui = o.optJSONObject("gui")?.let(GuiConfig::parse),
             )
         }
     }
