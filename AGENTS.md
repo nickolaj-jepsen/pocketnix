@@ -169,3 +169,10 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
   for `inhibit-block-sleep`: `wakeLocks.enable` turns polkit on and allows
   `pocketnix.guest.user`. logind (systemd 260) does signal `BlockInhibited`
   and `NCurrentInhibitors` changes.
+- "The default network is validated" overreports: a VPN that never goes away
+  (Tailscale) stays the app's validated default network with no underlying
+  link (`UnderlyingNetworks: []`), so with Wi-Fi and mobile data off
+  `host-state` keeps saying online (and metered, from the last network) and
+  `pocketnix-online.target` stays active until the VPN app is stopped. The
+  VM's own `avf_tap_fixed` is a validated ethernet network without INTERNET
+  too.
