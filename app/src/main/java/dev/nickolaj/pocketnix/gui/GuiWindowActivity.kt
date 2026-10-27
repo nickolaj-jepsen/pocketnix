@@ -140,8 +140,9 @@ class GuiWindowActivity : Activity() {
         vm.gui.windowState(
             WindowState(
                 id = windowId,
-                width = if (attached) width else 0,
-                height = if (attached) height else 0,
+                // Hidden, the window keeps its last size: the client needn't redraw at another for nobody.
+                width = width,
+                height = height,
                 scale = resources.displayMetrics.densityDpi / 160f,
                 focused = focused && attached,
                 visible = attached && started,
