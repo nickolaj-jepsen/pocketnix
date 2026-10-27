@@ -1,0 +1,15 @@
+pocketnix-compositor
+Copyright 2026 Nickolaj Jepsen
+
+This crate started from the server half (wprsd) of wprs,
+https://github.com/wayland-transpositor/wprs, at upstream commit
+12b864dc5b308e63edede4714f664afa88507fce, with pocketnix's spike patches
+on top (the fork's ux branch at f1a4239ef0c3602e7f10d65f8c9d1c601aea9f7c:
+damage-only commits, scroll detection, modifier-only key events,
+fractional-scale-v1, data-control, popups constrained to their toplevel,
+xdg-activation). wprs is Copyright 2024 Google LLC and licensed under the
+Apache License, Version 2.0 (LICENSE in this directory).
+
+The wire format, connection handling and window model were replaced with
+pocketnix's GUI protocol (docs/gui-protocol.md in the pocketnix repository).
+Files derived from wprs keep its copyright header and say what changed.
