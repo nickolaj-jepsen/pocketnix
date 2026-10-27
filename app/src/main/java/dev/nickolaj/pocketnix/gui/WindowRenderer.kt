@@ -21,16 +21,21 @@ internal class WindowRenderer(
     private val lock: Any,
     /** The window's commits up to a seq are on screen. */
     private val presented: (window: Int, seq: Int) -> Unit,
-    /** A buffer came free while [deferred]: render again. */
+    /** A buffer came free while [behind]: render every surface again. */
     private val onReleased: (WindowRenderer) -> Unit,
 ) {
     private val root = SurfaceControl.Builder().setName("gui-window-${window.u}").setParent(parent).build()
     private val layers = HashMap<Int, Layer>()
     private var destroyed = false
 
-    /** A surface had no free buffer: the seq to acknowledge once a buffer frees and it's drawn. */
-    var deferred = 0
-        private set
+    /** Surfaces whose newest content waits for a free buffer. */
+    private val starved = HashSet<Int>()
+
+    /** The seq to acknowledge once no surface is starved. */
+    private var deferred = 0
+
+    /** Whether a surface shows older content than it has, for want of a buffer. */
+    val behind: Boolean get() = starved.isNotEmpty()
 
     private class Layer(val sc: SurfaceControl) {
         val slots = ArrayList<Slot>()
@@ -67,29 +72,33 @@ internal class WindowRenderer(
     /**
      * Puts [surfaces] (every surface of the window, or those a group
      * touched) into [t], and acknowledges [seq] once SurfaceFlinger has
-     * committed it; 0 acknowledges nothing.
+     * committed it; 0 acknowledges nothing. While any surface of the window
+     * is starved, nothing is acknowledged: an ack covers every surface.
      */
     fun render(t: SurfaceControl.Transaction, surfaces: Collection<GuiState.Surface>, seq: Int) {
         if (destroyed) return
-        var short = false
-        for (s in surfaces) if (!update(t, s)) short = true
-        if (short) {
-            if (seq != 0) deferred = seq
-            return
-        }
-        val ack = if (seq != 0) seq else deferred
-        deferred = 0
-        if (ack == 0) return
-        // A change of its own, so the transaction is never empty and always reports its commit.
-        t.setVisibility(root, true)
-        t.addTransactionCommittedListener(Runnable::run) { presented(window, ack) }
+        for (s in surfaces) if (update(t, s)) starved -= s.id else starved += s.id
+        if (seq != 0) deferred = seq
+        acknowledge(t)
     }
 
     /** Drops a surface's layer. */
     fun remove(t: SurfaceControl.Transaction, surface: Int) {
+        starved -= surface
         val l = layers.remove(surface) ?: return
         t.reparent(l.sc, null)
         drop(l)
+        // It may have been the one holding the window's ack back.
+        if (!destroyed) acknowledge(t)
+    }
+
+    private fun acknowledge(t: SurfaceControl.Transaction) {
+        val ack = deferred
+        if (ack == 0 || starved.isNotEmpty()) return
+        deferred = 0
+        // A change of its own, so the transaction is never empty and always reports its commit.
+        t.setVisibility(root, true)
+        t.addTransactionCommittedListener(Runnable::run) { presented(window, ack) }
     }
 
     fun destroy() {
@@ -171,7 +180,7 @@ internal class WindowRenderer(
             slot.fence?.close()
             slot.fence = fence
             slot.busy = false
-            deferred != 0
+            starved.isNotEmpty()
         }
         if (retry) onReleased(this)
     }

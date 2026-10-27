@@ -184,7 +184,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         guard("redraw") {
             synchronized(lock) {
                 val v = views.values.firstOrNull { it.renderer === r } ?: return@guard
-                if (!first && r.deferred == 0) return@guard
+                if (!first && !r.behind) return@guard
                 val t = SurfaceControl.Transaction()
                 r.render(t, state.surfaces.values.filter { it.window == v.id }, if (first) state.windows[v.id]?.lastSeq ?: 0 else 0)
                 t.apply()
