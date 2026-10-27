@@ -22,6 +22,7 @@ class EvdevKeysTest {
         assertEquals(103, EvdevKeys.code(KeyEvent.KEYCODE_DPAD_UP, 0, virtual = true))
         assertEquals(88, EvdevKeys.code(KeyEvent.KEYCODE_F12, 0, virtual = true))
         assertEquals(125, EvdevKeys.code(KeyEvent.KEYCODE_META_LEFT, 0, virtual = true))
+        assertEquals(127, EvdevKeys.code(KeyEvent.KEYCODE_MENU, 0, virtual = true))
         // A virtual device's scan code means nothing.
         assertEquals(30, EvdevKeys.code(KeyEvent.KEYCODE_A, 99, virtual = true))
     }

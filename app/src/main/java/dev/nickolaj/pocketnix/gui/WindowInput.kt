@@ -117,7 +117,8 @@ internal class WindowInput(
 
     /** A key event for the window; true when it went to the guest. */
     fun key(e: KeyEvent): Boolean {
-        if (e.isSystem) return false
+        // Menu is a system key, but on a keyboard it's the guest's context-menu key.
+        if (e.isSystem && e.keyCode != KeyEvent.KEYCODE_MENU) return false
         val code = EvdevKeys.code(e.keyCode, e.scanCode, e.deviceId == KeyCharacterMap.VIRTUAL_KEYBOARD)
         if (code == 0) return false
         // Clients repeat keys themselves.

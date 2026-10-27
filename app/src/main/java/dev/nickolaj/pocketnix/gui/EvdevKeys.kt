@@ -100,5 +100,6 @@ object EvdevKeys {
         put(KeyEvent.KEYCODE_NUMPAD_COMMA, 121)
         put(KeyEvent.KEYCODE_META_LEFT, 125)
         put(KeyEvent.KEYCODE_META_RIGHT, 126)
+        put(KeyEvent.KEYCODE_MENU, 127)
     }
 }
