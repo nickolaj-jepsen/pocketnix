@@ -42,7 +42,8 @@ internal class WindowInput(
             MotionEvent.ACTION_SCROLL -> scroll(e, mouse)
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL,
             MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.ACTION_BUTTON_RELEASE,
-            -> if (mouse || e.buttonState != 0 || buttons != 0) mouseButtons(e) else touch(e)
+            // A press without a button state (a touchscreen, or an injected mouse tap) is a left click.
+            -> if (e.buttonState != 0 || buttons != 0) mouseButtons(e) else touch(e)
             else -> return false
         }
         return true
