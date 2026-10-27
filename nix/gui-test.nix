@@ -106,6 +106,8 @@ in
       };
       environment.systemPackages = [pkgs.foot];
       virtualisation.memorySize = 2048;
+      # Test VMs leave it out unless asked; the switch subtest needs it.
+      system.switch.enable = true;
     };
 
     testScript = ''
@@ -143,6 +145,17 @@ in
           out = phone.succeed(f"{A} exec --profile env")
           assert "wayland:wayland-0 ozone:1 tab:" in out, out
           assert "tab: " not in out, out
+          env = phone.succeed(user("systemctl --user show-environment"))
+          assert "WAYLAND_DISPLAY=wayland-0" in env, env
+          assert "NIXOS_OZONE_WL=1" in env, env
+
+      with subtest("a switch brings GUI up in a user manager that's already running"):
+          # As before a switch that turns GUI on: no sockets, no Wayland display.
+          phone.succeed(user("systemctl --user stop pocketnix-gui.socket pocketnix-wayland.socket"))
+          phone.succeed(user("systemctl --user unset-environment WAYLAND_DISPLAY NIXOS_OZONE_WL"))
+          phone.succeed("/run/current-system/bin/switch-to-configuration test")
+          phone.wait_for_unit("pocketnix-gui.socket", "nixos")
+          phone.wait_for_unit("pocketnix-wayland.socket", "nixos")
           env = phone.succeed(user("systemctl --user show-environment"))
           assert "WAYLAND_DISPLAY=wayland-0" in env, env
           assert "NIXOS_OZONE_WL=1" in env, env

@@ -955,7 +955,8 @@ in {
         description = "pocketnix Wayland compositor";
         requires = ["pocketnix-gui.socket" "pocketnix-wayland.socket"];
         after = ["pocketnix-gui.socket" "pocketnix-wayland.socket"];
-        # Its clients die with it: a switch mustn't close every window.
+        # Its clients die with it: a switch mustn't close every window. Newer
+        # switch-to-configuration restarts changed user units too.
         restartIfChanged = false;
         serviceConfig = {
           ExecStart = lib.getExe' gui.package "pocketnix-compositor";
@@ -969,6 +970,15 @@ in {
         WAYLAND_DISPLAY = waylandDisplay;
         NIXOS_OZONE_WL = "1";
       };
+      # A switch turning GUI on finds the user manager running: pam_env set its
+      # environment when it started, and an older switch-to-configuration starts
+      # no new user units. Every boot and switch runs this in each user's manager.
+      system.userActivationScripts.pocketnix-gui = let
+        systemctl = "${config.systemd.package}/bin/systemctl";
+      in ''
+        ${systemctl} --user set-environment WAYLAND_DISPLAY=${waylandDisplay} NIXOS_OZONE_WL=1
+        ${systemctl} --user start --no-block pocketnix-gui.socket pocketnix-wayland.socket
+      '';
 
       services.pipewire = {
         enable = mkDefault true;
