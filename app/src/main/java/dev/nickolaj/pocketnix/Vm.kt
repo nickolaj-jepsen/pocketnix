@@ -251,6 +251,15 @@ class Vm(private val app: Context) {
      * won't boot.
      */
     fun start(bootMenu: Boolean = false) {
+        // The guest still runs while it powers off: start once it's down.
+        if (_stopping.value) {
+            scope.launch {
+                _stopping.first { !it }
+                state.first { it != VmState.Running && it != VmState.Starting }
+                start(bootMenu)
+            }
+            return
+        }
         reloadEngine()
         if (state.value == VmState.Running || state.value == VmState.Starting) return
         val e = _engine.value

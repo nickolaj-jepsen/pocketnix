@@ -3,6 +3,7 @@ package dev.nickolaj.pocketnix
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import dev.nickolaj.pocketnix.engine.DiskImage
 import dev.nickolaj.pocketnix.gui.GuiWindowActivity
 import dev.nickolaj.pocketnix.gui.validAppId
@@ -35,6 +36,7 @@ class ControlActivity : Activity() {
                     startActivity(GuiWindowActivity.appIntent(this, app, intent.getStringExtra(EXTRA_ACTION).orEmpty(), intent.getBooleanExtra(EXTRA_NEW, false)))
                 }
             }
+            else -> Log.w(TAG, "unknown action ${intent?.action}")
         }
         finish()
     }
@@ -67,6 +69,7 @@ class ControlActivity : Activity() {
     }
 
     companion object {
+        private const val TAG = "ControlActivity"
         const val ACTION_START = "dev.nickolaj.pocketnix.action.START"
         const val ACTION_STOP = "dev.nickolaj.pocketnix.action.STOP"
         const val ACTION_TAB = "dev.nickolaj.pocketnix.action.DEBUG_TAB"
