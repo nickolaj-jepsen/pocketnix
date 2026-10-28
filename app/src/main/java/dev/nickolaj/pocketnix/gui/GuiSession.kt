@@ -27,6 +27,7 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
 
 /**
@@ -52,6 +53,13 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
 
     // The factors the compositor last got on this connection.
     @Volatile private var sentFactors: Pair<Float, Map<String, Float>>? = null
+
+    /** The guest's keymap follows the physical keyboard's layout. */
+    private val keyboardLayouts = KeyboardLayouts(app) { l -> if (link.connected) link.send(Gui.keyboardLayout(l.layout, l.variant)) }
+
+    // The focused text input, and the `ime` serials of this connection.
+    @Volatile private var textInput = TextInputState.NONE
+    private val imeSerial = AtomicInteger()
 
     // The splash waiting on each launch, by launch id.
     private val owners = ConcurrentHashMap<String, GuiWindowActivity>()
@@ -180,8 +188,11 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
             }
         }
         for (w in dropped) closeWindow(w.id)
+        imeSerial.set(0)
+        textInput(TextInputState.NONE)
         link.send(output())
         sendSettings(force = true)
+        keyboardLayouts.current.let { link.send(Gui.keyboardLayout(it.layout, it.variant)) }
         for (v in views.values) v.sent?.let { link.send(Gui.window(it)) }
     }
 
@@ -290,6 +301,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                 // A launch's splash handles its own activation.
                 if (l == null || !owners.containsKey(l.id)) onMain("window ${msg.window.u}: activate") { raise(msg.window) }
             }
+            is GuiMessage.TextInput -> textInput(msg.state)
             is GuiMessage.Error -> Log.w(TAG, "compositor error: ${msg.message}")
             is GuiMessage.Hello -> throw GuiProtocolException("a second hello")
         }
@@ -298,9 +310,18 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
     override fun disconnected(error: Throwable?) {
         Log.i(TAG, "disconnected${error?.let { ": ${it.message}" } ?: ""}")
         _ready.value = false
+        // Sessions are per connection: the IME's edits would go nowhere.
+        textInput(TextInputState.NONE)
         launches.disconnected()
         // Null is a stop, which forgot them already, and may come after the next link's hello.
         if (error != null) synchronized(lock) { forgetAcks() }
+    }
+
+    /** The focused text input changed: every shown window hears of it, on the main thread. */
+    private fun textInput(s: TextInputState) {
+        if (s == textInput) return
+        textInput = s
+        onMain("text input") { for (v in views.values) v.host?.surface?.textInput(s) }
     }
 
     /**
@@ -565,6 +586,21 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
     }
 
     internal fun send(frame: ByteArray) = link.send(frame)
+
+    /** The next `ime` serial on this connection. */
+    internal fun nextImeSerial(): Int = imeSerial.incrementAndGet()
+
+    /** The focused text input as last announced. */
+    internal val currentTextInput: TextInputState get() = textInput
+
+    /** A key event came from input device [deviceId]: the guest's keymap follows the keyboard last typed on. */
+    internal fun typedOn(deviceId: Int) = keyboardLayouts.typedOn(deviceId)
+
+    /** How touches reach window [id]: its app's input mode, Pointer where Touch can't reach the client. */
+    fun inputMode(id: Int): InputMode {
+        val m = appSettings.of(appKey(id)).input
+        return if (m == InputMode.TOUCH && !hasTouch(id)) InputMode.POINTER else m
+    }
 
     /**
      * Window [id]'s scale for a [width] × [height] area at the display's

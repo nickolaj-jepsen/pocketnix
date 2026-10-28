@@ -290,4 +290,61 @@ class GuiReaderTest {
         assertEquals(2.625, o.getDouble("scale"), 0.0)
         assertEquals(false, o.getBoolean("fullscreen"))
     }
+
+    @Test
+    fun readsTextInputWithOffsetsInUtf16() {
+        val f = CompositorFrames()
+            .json(
+                JSONObject().put("type", "text-input").put("window", 7).put("session", 3).put("applied", 12)
+                    // Bytes: "ø" is 2, "😀" 4; the cursor after the emoji, the anchor inside it.
+                    .put("text", "ø😀x").put("cursor", 6).put("anchor", 4).put("cause", "input-method")
+                    .put("purpose", "email").put("hints", JSONArray().put("spellcheck").put("multiline"))
+                    .put("cursorRect", JSONObject().put("x", 10).put("y", 20).put("width", 2).put("height", 30)),
+            )
+            .json(
+                JSONObject().put("type", "text-input").put("window", 0).put("session", 0).put("applied", 0)
+                    .put("text", JSONObject.NULL).put("cursor", 0).put("anchor", 0).put("cursorRect", JSONObject.NULL),
+            )
+        val m = read(f)
+        assertEquals(
+            GuiMessage.TextInput(TextInputState(7, 3, 12, "ø😀x", 3, 1, "email", setOf("spellcheck", "multiline"), PixelRect(10, 20, 2, 30))),
+            m[0],
+        )
+        val none = (m[1] as GuiMessage.TextInput).state
+        assertEquals(false, none.active)
+        assertNull(none.text)
+        assertNull(none.cursorRect)
+    }
+
+    @Test
+    fun encodesTouchAndTextAsSpecified() {
+        val d = ByteBuffer.wrap(Gui.touchDown(7, 3, 1.5f, 2f))
+        assertEquals(Gui.TOUCH_DOWN, d.get().toInt())
+        assertEquals(16, d.int)
+        assertEquals(7, d.int)
+        assertEquals(3, d.int)
+        assertEquals(1.5f, d.float)
+        assertEquals(2f, d.float)
+        assertArrayEquals(byteArrayOf(0x41, 0, 0, 0, 8, 0, 0, 0, 7, 0, 0, 0, 3), Gui.touchUp(7, 3))
+        assertArrayEquals(byteArrayOf(0x43, 0, 0, 0, 4, 0, 0, 0, 7), Gui.touchCancel(7))
+        assertArrayEquals(byteArrayOf(0x44, 0, 0, 0, 4, 0, 0, 0, 7), Gui.touchFrame(7))
+
+        fun json(frame: ByteArray) = JSONObject(String(frame, 5, frame.size - 5))
+        val ime = json(Gui.ime(4, 9, ImeEdit(deleteBefore = 2, commit = "ø", preedit = "€")))
+        assertEquals("ime", ime.getString("type"))
+        assertEquals(4, ime.getInt("session"))
+        assertEquals(9, ime.getInt("serial"))
+        assertEquals(2, ime.getInt("deleteBefore"))
+        assertEquals("ø", ime.getString("commit"))
+        assertEquals("€", ime.getString("preedit"))
+        assertEquals("the preedit cursor defaults to its end, in bytes", 3, ime.getInt("preeditCursorBegin"))
+        assertEquals(3, ime.getInt("preeditCursorEnd"))
+        val text = json(Gui.text(-1, "ø\n"))
+        assertEquals(0xffffffffL, text.getLong("window"))
+        assertEquals("ø\n", text.getString("text"))
+        val layout = json(Gui.keyboardLayout("dk", ""))
+        assertEquals("keyboard-layout", layout.getString("type"))
+        assertEquals("dk", layout.getString("layout"))
+        assertEquals("", layout.getString("variant"))
+    }
 }

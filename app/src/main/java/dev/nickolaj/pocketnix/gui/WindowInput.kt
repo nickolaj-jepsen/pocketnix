@@ -11,8 +11,7 @@ import kotlin.math.roundToInt
 /**
  * A window's mouse, touchpad and keyboard as GUI protocol input, in the
  * window's pixels: the SurfaceView's coordinates mapped back through
- * [zoom]. A touchscreen acts as a mouse with one button until touch input
- * lands (gui-apps.md, step 3).
+ * [zoom]. Touchscreen gestures are the input mode's (TouchInput.kt).
  */
 internal class WindowInput(
     private val window: Int,
@@ -25,7 +24,7 @@ internal class WindowInput(
     private var buttons = 0
     private var x = 0f
     private var y = 0f
-    private var touching = false
+    private var pressing = false
     private var swipeX = 0f
     private var swipeY = 0f
     private var mods = -1
@@ -44,8 +43,8 @@ internal class WindowInput(
             MotionEvent.ACTION_SCROLL -> scroll(e, mouse)
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL,
             MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.ACTION_BUTTON_RELEASE,
-            // A press without a button state (a touchscreen, or an injected mouse tap) is a left click.
-            -> if (e.buttonState != 0 || buttons != 0) mouseButtons(e) else touch(e)
+            // A press without a button state (an injected mouse tap) is a left click.
+            -> if (e.buttonState != 0 || buttons != 0) mouseButtons(e) else buttonless(e)
             else -> return false
         }
         return true
@@ -62,7 +61,8 @@ internal class WindowInput(
 
     /** A mouse or touchpad: buttons from the event's button state, whichever path it came by. */
     private fun mouseButtons(e: MotionEvent) {
-        move(e)
+        // A cancel's position is 0, 0.
+        if (e.actionMasked != MotionEvent.ACTION_CANCEL) move(e)
         val now = if (e.actionMasked == MotionEvent.ACTION_CANCEL) 0 else e.buttonState
         val changed = now xor buttons
         for ((bit, btn) in BUTTONS) {
@@ -71,17 +71,17 @@ internal class WindowInput(
         buttons = now
     }
 
-    private fun touch(e: MotionEvent) {
+    private fun buttonless(e: MotionEvent) {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 move(e)
-                touching = true
+                pressing = true
                 send(Gui.pointerButton(window, x, y, Gui.BTN_LEFT, true))
             }
             MotionEvent.ACTION_MOVE -> move(e)
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (touching) {
-                move(e)
-                touching = false
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (pressing) {
+                if (e.actionMasked == MotionEvent.ACTION_UP) move(e)
+                pressing = false
                 send(Gui.pointerButton(window, x, y, Gui.BTN_LEFT, false))
             }
         }
@@ -119,7 +119,7 @@ internal class WindowInput(
         return true
     }
 
-    /** A key event for the window; true when it went to the guest. */
+    /** A hardware key event for the window; true when it went to the guest. */
     fun key(e: KeyEvent): Boolean {
         // Menu is a system key, but on a keyboard it's the guest's context-menu key.
         if (e.isSystem && e.keyCode != KeyEvent.KEYCODE_MENU) return false
@@ -137,6 +137,29 @@ internal class WindowInput(
         if (m == mods) return
         mods = m
         send(Gui.modifiers(window, m))
+    }
+
+    /** Taps evdev [key] [count] times with [extra] (MOD_* bits) added to the modifiers, then restores them. */
+    fun tap(key: Int, count: Int = 1, extra: Int = 0) {
+        withModifiers(extra) {
+            repeat(count) {
+                send(Gui.key(window, key, true))
+                send(Gui.key(window, key, false))
+            }
+        }
+    }
+
+    /** Types [text] as key presses with [extra] modifiers held, as Ctrl or Alt from the extra keys row. */
+    fun type(text: String, extra: Int = 0) {
+        if (text.isEmpty()) return
+        withModifiers(extra) { send(Gui.text(window, text)) }
+    }
+
+    private inline fun withModifiers(extra: Int, block: () -> Unit) {
+        val held = mods.coerceAtLeast(0)
+        if (extra and held.inv() != 0) send(Gui.modifiers(window, held or extra))
+        block()
+        if (extra and held.inv() != 0) send(Gui.modifiers(window, held))
     }
 
     /** The window gained focus: the guest gets the last known modifiers, as Android has no state outside an event. */

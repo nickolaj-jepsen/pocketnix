@@ -38,6 +38,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+/** Used until the agent sends the module's rows (Termux's defaults). */
+val defaultExtraKeys = listOf(
+    listOf(ExtraKey("ESC", null, null), ExtraKey("/", "\\", null), ExtraKey("-", "|", null), ExtraKey("HOME", null, null), ExtraKey("UP", null, null), ExtraKey("END", null, null), ExtraKey("PGUP", null, null)),
+    listOf(ExtraKey("TAB", null, null), ExtraKey("CTRL", null, null), ExtraKey("ALT", null, null), ExtraKey("LEFT", null, null), ExtraKey("DOWN", null, null), ExtraKey("RIGHT", null, null), ExtraKey("PGDN", null, null)),
+)
+
 /** The module's extra-keys rows: tap a key, swipe up for its popup, hold to repeat. */
 @Composable
 fun ExtraKeysBar(rows: List<List<ExtraKey>>, modifiers: Modifiers, revision: Int, foreground: Color, onKey: (String) -> Unit) {

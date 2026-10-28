@@ -5,17 +5,24 @@ import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
 import android.view.InputDevice
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.SurfaceControl
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowInsets
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.widget.FrameLayout
 import kotlin.math.max
 
 /**
  * The view a guest window shows in, for either host: its layers, its size
- * and scale (the size preset and the automatic fit), its zoom, and the
- * touches and mouse events that reach it. Main thread only.
+ * and scale (the size preset and the automatic fit), its zoom, the touches,
+ * mouse events and keys that reach it, and its phone keyboard. Main thread
+ * only.
  */
 class WindowSurface internal constructor(
     context: Context,
@@ -31,7 +38,14 @@ class WindowSurface internal constructor(
     private val id = host.windowId
     private val main = Handler(Looper.getMainLooper())
     private val push = Runnable { pushState() }
-    val view = SurfaceView(context)
+    val view: SurfaceView = GuiView(context)
+    private val cursorView = TrackpadCursor(context).apply { visibility = View.GONE }
+
+    /** What a host puts on screen: the window's view, with Trackpad mode's cursor over it. */
+    val root: FrameLayout = FrameLayout(context).apply {
+        addView(view, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        addView(cursorView)
+    }
     val zoom = Zoom()
     private val gestures = ZoomGestures(zoom) { place() }
 
@@ -39,6 +53,7 @@ class WindowSurface internal constructor(
     var scale = density
         private set
     internal val input = WindowInput(id, session::send, { scale }, zoom)
+    internal val ime = WindowIme(view, id, session, input, zoom)
 
     /** The view's size in pixels: the window's, before zoom. */
     var width = 0
@@ -52,12 +67,14 @@ class WindowSurface internal constructor(
     /** Touch mode's zoom toggle: touches pan and pinch the view instead of reaching the app. */
     var zooming = false
 
-    /** Pixels the phone keyboard takes off the view's height: the fit measures the window without it. */
+    /** Pixels the phone keyboard (and the row above it) takes off the view's height: the fit measures the window without it. */
     var keyboardHeight = 0
         set(v) {
             if (field == v) return
             field = v
-            pushState()
+            // It comes with a resize, which the push waits out.
+            main.removeCallbacks(push)
+            main.postDelayed(push, RESIZE_DEBOUNCE_MS)
         }
 
     /** While set, a swipe up from the view's bottom edge calls it, and that touch never reaches the app. */
@@ -68,6 +85,27 @@ class WindowSurface internal constructor(
     private enum class Edge { NONE, TRACKING, DONE }
 
     private val density: Float get() = view.resources.displayMetrics.densityDpi / 160f
+
+    // The touch modes, and the one the current gesture started in.
+    private val timer = object : Timer {
+        override fun schedule(delayMs: Long, r: Runnable) {
+            val guarded = Runnable { guard("window ${id.u}: touch timer") { r.run() } }
+            timers[r] = guarded
+            main.postDelayed(guarded, delayMs)
+        }
+
+        override fun cancel(r: Runnable) {
+            timers.remove(r)?.let(main::removeCallbacks)
+        }
+    }
+    private val timers = HashMap<Runnable, Runnable>()
+    private val slop = ViewConfiguration.get(context).let {
+        TouchSlop(it.scaledTouchSlop.toFloat(), ViewConfiguration.getLongPressTimeout().toLong(), TAP_MS)
+    }
+    private val touchPoints = TouchPoints(id, session::send, zoom)
+    private val pointer = PointerGestures(id, session::send, zoom, { place() }, timer, slop)
+    private val trackpad = TrackpadGestures(id, session::send, zoom, { place() }, timer, slop, ::windowBounds) { placeCursor() }
+    private var gesture: ((MotionEvent) -> Boolean)? = null
 
     private val callback = object : SurfaceHolder.Callback {
         override fun surfaceCreated(holder: SurfaceHolder) {}
@@ -83,6 +121,7 @@ class WindowSurface internal constructor(
                 layers = Layers(sc)
             }
             relayout()
+            settingsChanged()
             // Docked moves and resizes come as two sizes in a row (the caption inset lands second), and
             // the keyboard resizes a tab in steps.
             main.removeCallbacks(push)
@@ -113,13 +152,30 @@ class WindowSurface internal constructor(
             }
             setOnGenericMotionListener { _, e -> guard("window ${id.u}: motion", false) { bound() && input.motion(e) } }
         }
+        main.post { guard("window ${id.u}: text input") { if (bound()) textInput(session.currentTextInput) } }
     }
 
     private fun touch(e: MotionEvent): Boolean {
         if (edgeSwipe(e)) return true
-        // A mouse reaches the app in every mode.
-        if (zooming && !e.isFromSource(InputDevice.SOURCE_MOUSE)) return gestures.onTouch(e)
-        return input.motion(e)
+        // A mouse or touchpad reaches the app in every mode.
+        if (!e.isFromSource(InputDevice.SOURCE_TOUCHSCREEN) || e.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE) return input.motion(e)
+        // A gesture keeps the mode it started in.
+        if (e.actionMasked == MotionEvent.ACTION_DOWN || gesture == null) gesture = pick()
+        val g = gesture ?: return false
+        val r = g(e)
+        if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) gesture = null
+        return r
+    }
+
+    private fun pick(): (MotionEvent) -> Boolean {
+        val mode = session.inputMode(id)
+        if (zooming && mode == InputMode.TOUCH) return gestures::onTouch
+        val m: TouchMode = when (mode) {
+            InputMode.TOUCH -> touchPoints
+            InputMode.POINTER -> pointer
+            InputMode.TRACKPAD -> trackpad
+        }
+        return { e -> m.on(Touches.of(e)).let { true } }
     }
 
     /** Pinch and pan on the view, for input modes where those are pocketnix's; consumes [e]. */
@@ -149,16 +205,62 @@ class WindowSurface internal constructor(
         return edge != Edge.NONE
     }
 
+    /** A key event for the window; true when it went to the guest. */
+    fun key(e: KeyEvent): Boolean = ime.key(e)
+
+    /** The focused text input changed, whichever window it's in. */
+    internal fun textInput(s: TextInputState) {
+        ime.textInput(s)
+        if (s.active && s.window == id) s.cursorRect?.let(::reveal)
+    }
+
+    /** Pans a clipped or zoomed window so the text cursor at [r] (window pixels) shows. */
+    private fun reveal(r: PixelRect) {
+        if (width <= 0 || height <= 0) return
+        val margin = REVEAL_MARGIN_DP * view.resources.displayMetrics.density
+        val left = zoom.x + r.x * zoom.scale
+        val top = zoom.y + r.y * zoom.scale
+        val right = zoom.x + (r.x + r.width) * zoom.scale
+        val bottom = zoom.y + (r.y + r.height) * zoom.scale
+        val dx = when {
+            left < 0 -> -left + margin
+            right > width -> width - right - margin
+            else -> 0f
+        }
+        val dy = when {
+            top < 0 -> -top + margin
+            bottom > height -> height - bottom - margin
+            else -> 0f
+        }
+        if ((dx != 0f || dy != 0f) && zoom.panBy(dx, dy)) place()
+    }
+
     /** The toplevel or its settings changed: its size, minimum or preset. */
     fun refresh() {
+        settingsChanged()
         relayout()
         main.removeCallbacks(push)
         pushState()
     }
 
+    /** The input mode may have changed: Trackpad mode's cursor shows or goes. */
+    private fun settingsChanged() {
+        val trackpadMode = session.inputMode(id) == InputMode.TRACKPAD
+        if (trackpadMode && width > 0) trackpad.place()
+        cursorView.visibility = if (trackpadMode) View.VISIBLE else View.GONE
+        placeCursor()
+    }
+
+    /** The client's cursor name, for the cursor Trackpad mode draws. */
+    fun cursor(name: String) {
+        cursorView.shape = name
+    }
+
     /** Sends the window's state, with the scale its preset and the fit give it. */
     fun pushState() {
-        if (!bound()) return
+        // Before the view has a size, 0 × 0 would let the client pick one, which can be past what the
+        // compositor accepts (GTK's natural size at the output's integer scale): wait for the first.
+        if (!bound() || width <= 0 || height <= 0) return
         val f = flags(attached)
         scale = session.fitScale(id, width, height + keyboardHeight, density)
         session.windowState(
@@ -178,14 +280,37 @@ class WindowSurface internal constructor(
     }
 
     private fun place() {
+        placeCursor()
         val l = layers ?: return
         SurfaceControl.Transaction().also { l.place(it, width, height, zoom) }.apply()
+    }
+
+    private fun placeCursor() {
+        if (cursorView.visibility != View.VISIBLE || trackpad.x.isNaN()) return
+        cursorView.moveTo(zoom.x + trackpad.x * zoom.scale, zoom.y + trackpad.y * zoom.scale)
+    }
+
+    /** The window's size in window pixels: the view's, or the client's geometry where that's larger. */
+    private fun windowBounds(): Pair<Int, Int> {
+        val (cw, ch) = session.contentSize(id)
+        return max(width, cw) to max(height, ch)
     }
 
     /** The host stops showing the window. */
     fun release() {
         main.removeCallbacks(push)
+        for (r in timers.values) main.removeCallbacks(r)
+        timers.clear()
         input.release()
+        ime.release()
+    }
+
+    /** The window's view: a text editor to Android, whose keyboard input goes through [ime]. */
+    private inner class GuiView(context: Context) : SurfaceView(context) {
+        override fun onCheckIsTextEditor(): Boolean = true
+
+        override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? =
+            guard("window ${id.u}: input connection", null) { ime.connect(outAttrs) }
     }
 
     /**
@@ -216,5 +341,9 @@ class WindowSurface internal constructor(
         const val RESIZE_DEBOUNCE_MS = 150L
         // How far above the system's own gesture area a swipe may start, and how far up it must go.
         const val EDGE_DP = 32
+        // The longest two-finger tap that still right-clicks.
+        const val TAP_MS = 300L
+        // Room kept around a text cursor panned into view.
+        const val REVEAL_MARGIN_DP = 16
     }
 }

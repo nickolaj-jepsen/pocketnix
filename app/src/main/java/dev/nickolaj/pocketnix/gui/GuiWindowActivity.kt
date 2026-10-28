@@ -13,6 +13,7 @@ import android.util.Log
 import android.view.KeyEvent
 import android.view.PointerIcon
 import android.view.WindowInsetsController
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
 import androidx.activity.compose.setContent
@@ -28,18 +29,29 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.nickolaj.pocketnix.engine.VmState
+import dev.nickolaj.pocketnix.ui.ExtraKeysBar
+import dev.nickolaj.pocketnix.ui.defaultExtraKeys
 import dev.nickolaj.pocketnix.ui.missingRequirements
 import dev.nickolaj.pocketnix.vm
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -51,6 +63,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import java.util.UUID
+import kotlin.math.max
 
 /**
  * One guest toplevel as an Android window: its own document task, so it has
@@ -83,8 +96,8 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
     /** The bar's keyboard button does this; without it the bar has none. */
     internal var keyboardAction by mutableStateOf<(() -> Unit)?>(null)
 
-    /** While set, shown in the bar's place: the extra keys row, while typing. */
-    internal var typingRow by mutableStateOf<(@Composable () -> Unit)?>(null)
+    // Redraws the extra keys row when its modifiers change.
+    private var modifierRevision by mutableIntStateOf(0)
 
     // A launch's splash, until it's bound to the window.
     private val scope = CoroutineScope(
@@ -99,6 +112,8 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         onBackPressedDispatcher.addCallback(this) { moveTaskToBack(true) }
+        // The window's view is a text editor to Android, which would otherwise show the keyboard on opening it.
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN or WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         target = intent.data?.let(::parseApp)
         if (target != null) {
             guard("splash: create") { createLaunch(savedInstanceState) }
@@ -133,6 +148,8 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
             )
         }
         surface = s
+        keyboardAction = s.ime::toggleKeyboard
+        s.ime.onModifiers = { modifierRevision++ }
         setContent {
             val colors = when {
                 isSystemInDarkTheme() -> dynamicDarkColorScheme(this)
@@ -146,24 +163,56 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
         if (focused) s.input.focused()
     }
 
-    /** The window, and the bar under it; a full-screen window's bar shows over it only while revealed. */
+    /**
+     * The window, and the bar under it; a full-screen window's bar shows over
+     * it only while revealed. While the phone keyboard is up, the extra keys
+     * row sits above it in the bar's place.
+     */
     @Composable
     private fun WindowContent(s: WindowSurface) {
+        val density = LocalDensity.current
+        val config by vm.config.collectAsState()
+        val imeBottom = WindowInsets.ime.getBottom(density)
+        val insets = WindowInsets.systemBars.union(WindowInsets.displayCutout)
+        val barsBottom = insets.getBottom(density)
+        val typing = imeBottom > 0
+        var typingRowHeight by remember { mutableIntStateOf(0) }
+        val typingRow: (@Composable () -> Unit)? = if (typing) {
+            {
+                modifierRevision.let {}
+                ExtraKeysBar(
+                    rows = config?.extraKeys?.takeIf { it.isNotEmpty() } ?: defaultExtraKeys,
+                    modifiers = s.ime.modifiers,
+                    revision = modifierRevision,
+                    foreground = Color(0xffdddddd),
+                    onKey = s.ime::extraKey,
+                )
+            }
+        } else {
+            null
+        }
+        // The fit measures the window as if the keyboard and the row above it weren't there.
+        val barPx = if (fullscreen) 0 else with(density) { BAR_HEIGHT.dp.roundToPx() }
+        val keyboard = if (typing) max(0, imeBottom - barsBottom) + max(0, typingRowHeight - barPx) else 0
+        SideEffect { s.keyboardHeight = keyboard }
+        LaunchedEffect(typing) { if (!typing) s.ime.keyboardHidden() }
         val bar: @Composable () -> Unit = {
             WindowBar(barTitle, keyboardAction, typingRow, menu = ::menu, onMenu = ::menuOpened)
         }
-        // Edge to edge is enforced: keep the guest's window out from under the bars, cutout and caption.
+        // Edge to edge is enforced: keep the guest's window out from under the bars, cutout, caption and keyboard.
         Column(
             Modifier
                 .fillMaxSize()
                 .background(Color.Black)
-                .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout)),
+                .windowInsetsPadding(insets.union(WindowInsets.ime)),
         ) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                AndroidView(factory = { s.view }, modifier = Modifier.fillMaxSize())
-                if (fullscreen && barRevealed) Box(Modifier.align(Alignment.BottomCenter)) { bar() }
+                AndroidView(factory = { s.root }, modifier = Modifier.fillMaxSize())
+                if (fullscreen && barRevealed && !typing) Box(Modifier.align(Alignment.BottomCenter)) { bar() }
             }
-            if (!fullscreen) bar()
+            if (!fullscreen || typing) {
+                Box(Modifier.onSizeChanged { if (typing) typingRowHeight = it.height }) { bar() }
+            }
         }
     }
 
@@ -337,7 +386,7 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean =
-        (bound && surface?.input?.key(event) == true) || super.dispatchKeyEvent(event)
+        guard("window ${windowId.u}: key", false) { bound && surface?.key(event) == true } || super.dispatchKeyEvent(event)
 
     override fun onDestroy() {
         scope.cancel()
@@ -403,6 +452,7 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
 
     override fun cursor(name: String) {
         surface?.view?.pointerIcon = PointerIcon.getSystemIcon(this, pointerType(name))
+        surface?.cursor(name)
     }
 
     /** An app-list entry to launch, and the action ("" for none). */

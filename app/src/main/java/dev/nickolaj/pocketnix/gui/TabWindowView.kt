@@ -36,9 +36,9 @@ internal class TabWindowView(context: Context, private val session: GuiSession, 
     init {
         bound = session.bindTab(this, windowId)
         val s = surface.view
-        s.setOnKeyListener { _, _, e -> bound && surface.input.key(e) }
+        s.setOnKeyListener { _, _, e -> guard("tab window ${windowId.u}: key", false) { bound && surface.key(e) } }
         view.setBackgroundColor(Color.BLACK)
-        view.addView(s)
+        view.addView(surface.root)
         view.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(v: View) {
                 v.viewTreeObserver.addOnWindowFocusChangeListener(focusListener)
@@ -69,7 +69,9 @@ internal class TabWindowView(context: Context, private val session: GuiSession, 
     override fun settingsChanged() = surface.refresh()
 
     override fun cursor(name: String) {
-        if (bound) surface.view.pointerIcon = PointerIcon.getSystemIcon(view.context, GuiWindowActivity.pointerType(name))
+        if (!bound) return
+        surface.view.pointerIcon = PointerIcon.getSystemIcon(view.context, GuiWindowActivity.pointerType(name))
+        surface.cursor(name)
     }
 
     // A tab has nothing to minimize to, and is no place for full screen.

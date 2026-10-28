@@ -26,6 +26,11 @@ object Gui {
     const val POINTER_LEAVE = 0x23
     const val KEY = 0x30
     const val MODIFIERS = 0x31
+    const val TOUCH_DOWN = 0x40
+    const val TOUCH_UP = 0x41
+    const val TOUCH_MOTION = 0x42
+    const val TOUCH_CANCEL = 0x43
+    const val TOUCH_FRAME = 0x44
 
     const val FLAG_BUFFER = 1 shl 0
     const val FLAG_FULL = 1 shl 1
@@ -95,6 +100,27 @@ object Gui {
         return json(JSONObject().put("type", "settings").put("size", size.toDouble()).put("apps", o))
     }
 
+    /** The guest's XKB layout and variant; "" for the compositor's default. */
+    fun keyboardLayout(layout: String, variant: String): ByteArray =
+        json(JSONObject().put("type", "keyboard-layout").put("layout", layout).put("variant", variant))
+
+    /** Types [text] into [window] as key presses. */
+    fun text(window: Int, text: String): ByteArray = json(JSONObject().put("type", "text").put("window", window.toUInt().toLong()).put("text", text))
+
+    /** One text-input-v3 `done` for text input [session]: lengths and the preedit cursor in UTF-8 bytes. */
+    fun ime(session: Int, serial: Int, edit: ImeEdit): ByteArray = json(
+        JSONObject()
+            .put("type", "ime")
+            .put("session", session)
+            .put("serial", serial)
+            .put("deleteBefore", edit.deleteBefore)
+            .put("deleteAfter", edit.deleteAfter)
+            .put("commit", edit.commit)
+            .put("preedit", edit.preedit)
+            .put("preeditCursorBegin", edit.preeditCursorBegin)
+            .put("preeditCursorEnd", edit.preeditCursorEnd),
+    )
+
     fun close(window: Int): ByteArray = json(JSONObject().put("type", "close").put("id", window.toUInt().toLong()))
 
     /** Moves [window] into the terminal tab with agent id [tab], or "" to its own task. */
@@ -133,6 +159,16 @@ object Gui {
     /** [mods]: MOD_* bits. */
     fun modifiers(window: Int, mods: Int): ByteArray = binary(MODIFIERS, 5) { putInt(window).put(mods.toByte()) }
 
+    fun touchDown(window: Int, id: Int, x: Float, y: Float): ByteArray = binary(TOUCH_DOWN, 16) { putInt(window).putInt(id).putFloat(x).putFloat(y) }
+
+    fun touchUp(window: Int, id: Int): ByteArray = binary(TOUCH_UP, 8) { putInt(window).putInt(id) }
+
+    fun touchMotion(window: Int, id: Int, x: Float, y: Float): ByteArray = binary(TOUCH_MOTION, 16) { putInt(window).putInt(id).putFloat(x).putFloat(y) }
+
+    fun touchCancel(window: Int): ByteArray = binary(TOUCH_CANCEL, 4) { putInt(window) }
+
+    fun touchFrame(window: Int): ByteArray = binary(TOUCH_FRAME, 4) { putInt(window) }
+
     private inline fun binary(type: Int, size: Int, fill: ByteBuffer.() -> Unit): ByteArray {
         val b = ByteBuffer.allocate(5 + size).put(type.toByte()).putInt(size)
         b.fill()
@@ -152,6 +188,45 @@ data class WindowState(
     val maximized: Boolean,
     val fullscreen: Boolean = false,
 )
+
+/**
+ * An `ime` message's edit: delete around the client's cursor, insert
+ * [commit], and show [preedit] with its cursor at [preeditCursorBegin] to
+ * [preeditCursorEnd]. Lengths and positions are UTF-8 bytes.
+ */
+data class ImeEdit(
+    val deleteBefore: Int = 0,
+    val deleteAfter: Int = 0,
+    val commit: String = "",
+    val preedit: String = "",
+    val preeditCursorBegin: Int = Utf8.length(preedit),
+    val preeditCursorEnd: Int = preeditCursorBegin,
+)
+
+/** A text input's state, as `text-input` carries it: offsets converted to UTF-16 indices into [text]. */
+data class TextInputState(
+    /** 0 for none. */
+    val window: Int,
+    /** 0 for none. */
+    val session: Int,
+    val applied: Int,
+    /** Null when the client sent no surrounding text. */
+    val text: String?,
+    val cursor: Int,
+    val anchor: Int,
+    val purpose: String,
+    val hints: Set<String>,
+    /** In window pixels; null when the client set none. */
+    val cursorRect: PixelRect?,
+) {
+    val active: Boolean get() = window != 0 && session != 0
+
+    companion object {
+        val NONE = TextInputState(0, 0, 0, null, 0, 0, "normal", emptySet(), null)
+    }
+}
+
+data class PixelRect(val x: Int, val y: Int, val width: Int, val height: Int)
 
 /** One surface commit, its COMMIT_DATA frames gathered. Ids are u32s held as Int bit patterns. */
 class Commit(
@@ -239,6 +314,8 @@ sealed interface GuiMessage {
     /** A client activated [window]; [launch] is the launch whose token it was, or "". */
     data class Activate(val window: Int, val launch: String) : GuiMessage
 
+    data class TextInput(val state: TextInputState) : GuiMessage
+
     /** Commits applied atomically: every one but the last had GROUPED set. */
     class Group(val commits: List<Commit>) : GuiMessage
 }
@@ -315,11 +392,31 @@ class GuiReader(private val input: InputStream) {
                 "launch-started" -> GuiMessage.LaunchStarted(o.getString("id"))
                 "launch-failed" -> GuiMessage.LaunchFailed(o.getString("id"), o.optString("reason"), o.optString("message"))
                 "activate" -> GuiMessage.Activate(o.id("window"), o.optString("launch"))
+                "text-input" -> GuiMessage.TextInput(textInput(o))
                 else -> null
             }
         } catch (e: JSONException) {
             throw GuiProtocolException("${o.optString("type")}: ${e.message}")
         }
+    }
+
+    private fun textInput(o: JSONObject): TextInputState {
+        val text = if (o.isNull("text")) null else o.optString("text")
+        val rect = o.optJSONObject("cursorRect")?.let {
+            PixelRect(it.optInt("x"), it.optInt("y"), it.optInt("width").coerceAtLeast(0), it.optInt("height").coerceAtLeast(0))
+        }
+        val hints = o.optJSONArray("hints")?.let { a -> (0 until a.length()).map { a.optString(it) }.toSet() }.orEmpty()
+        return TextInputState(
+            window = o.optId("window"),
+            session = o.optLong("session").coerceIn(0, Int.MAX_VALUE.toLong()).toInt(),
+            applied = o.optLong("applied").coerceIn(0, Int.MAX_VALUE.toLong()).toInt(),
+            text = text,
+            cursor = text?.let { Utf8.index(it, o.optInt("cursor")) } ?: 0,
+            anchor = text?.let { Utf8.index(it, o.optInt("anchor")) } ?: 0,
+            purpose = o.optString("purpose", "normal"),
+            hints = hints,
+            cursorRect = rect,
+        )
     }
 
     /** `[size u16][keyLength u8][key][png]`. */

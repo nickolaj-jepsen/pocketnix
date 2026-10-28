@@ -15,7 +15,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
@@ -32,6 +35,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -44,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.key
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -51,12 +56,12 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import dev.nickolaj.pocketnix.Vm
 import dev.nickolaj.pocketnix.agent.ControlChannel
-import dev.nickolaj.pocketnix.agent.ExtraKey
 import dev.nickolaj.pocketnix.engine.DiskImage
 import dev.nickolaj.pocketnix.engine.VmState
 import dev.nickolaj.pocketnix.gui.LauncherActivity
 import dev.nickolaj.pocketnix.gui.MOVE_OUT
 import dev.nickolaj.pocketnix.gui.MenuAction
+import dev.nickolaj.pocketnix.gui.WindowSurface
 import dev.nickolaj.pocketnix.gui.WindowMenu
 import dev.nickolaj.pocketnix.gui.windowMenu
 import dev.nickolaj.pocketnix.gui.TabStripItem
@@ -68,11 +73,6 @@ import dev.nickolaj.pocketnix.terminal.Tab
 import dev.nickolaj.pocketnix.terminal.TerminalTheme
 
 
-/** Used until the agent sends the module's rows (Termux's defaults). */
-private val defaultExtraKeys = listOf(
-    listOf(ExtraKey("ESC", null, null), ExtraKey("/", "\\", null), ExtraKey("-", "|", null), ExtraKey("HOME", null, null), ExtraKey("UP", null, null), ExtraKey("END", null, null), ExtraKey("PGUP", null, null)),
-    listOf(ExtraKey("TAB", null, null), ExtraKey("CTRL", null, null), ExtraKey("ALT", null, null), ExtraKey("LEFT", null, null), ExtraKey("DOWN", null, null), ExtraKey("RIGHT", null, null), ExtraKey("PGDN", null, null)),
-)
 
 @Composable
 fun MainScreen(vm: Vm) {
@@ -104,6 +104,21 @@ fun MainScreen(vm: Vm) {
     }
 
     DisposableEffect(controller) { onDispose { controller.release() } }
+
+    // The window tab's own keyboard, which the extra keys type into while it shows; bound once its view is.
+    var windowSurface by remember { mutableStateOf<WindowSurface?>(null) }
+    DisposableEffect(shownWindow) {
+        val s = vm.gui.surfaceOf(shownWindow)
+        s?.ime?.onModifiers = { modifierRevision++ }
+        windowSurface = s
+        onDispose { windowSurface = null }
+    }
+    val density = LocalDensity.current
+    val imeBottom = WindowInsets.ime.getBottom(density)
+    // The fit measures a tab's window as if the keyboard weren't there.
+    val keyboardHeight = (imeBottom - WindowInsets.systemBars.getBottom(density)).coerceAtLeast(0)
+    SideEffect { windowSurface?.keyboardHeight = keyboardHeight }
+    LaunchedEffect(imeBottom > 0, windowSurface) { if (imeBottom == 0) windowSurface?.ime?.keyboardHidden() }
     var keepScreenOn by remember { mutableStateOf(vm.settings.keepScreenOn) }
 
     // Resumes count: `pocketnix provision` grants and pushes while the app is open.
@@ -231,7 +246,15 @@ fun MainScreen(vm: Vm) {
             onSelectWindow = vm.tabs::selectWindow,
             // The client decides: it may ask about unsaved work first.
             onCloseWindow = vm.gui::requestClose,
-            windowMenu = { id -> windowMenu(vm.gui, id, listOf(MenuAction(MOVE_OUT) { vm.gui.move(id, "") })) },
+            windowMenu = { id ->
+                windowMenu(
+                    vm.gui, id,
+                    listOf(
+                        MenuAction("Keyboard") { vm.gui.surfaceOf(id)?.ime?.toggleKeyboard() },
+                        MenuAction(MOVE_OUT) { vm.gui.move(id, "") },
+                    ),
+                )
+            },
             onOpen = vm::openTab,
         )
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -251,7 +274,18 @@ fun MainScreen(vm: Vm) {
                 }
             }
         }
-        // The extra keys and the composer type into the terminal; a window's own come with step 3.
+        // The extra keys and the composer type into the terminal, or into the window tab that shows.
+        val ime = windowSurface?.ime
+        if (shownWindow != 0 && ime != null) {
+            modifierRevision.let {}
+            ExtraKeysBar(
+                rows = config?.extraKeys?.takeIf { it.isNotEmpty() } ?: defaultExtraKeys,
+                modifiers = ime.modifiers,
+                revision = modifierRevision,
+                foreground = foreground,
+                onKey = ime::extraKey,
+            )
+        }
         if (shownWindow == 0) {
             modifierRevision.let {}
             ExtraKeysBar(
