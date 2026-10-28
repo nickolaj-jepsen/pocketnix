@@ -246,10 +246,24 @@ internal class WindowIme(
     }
 
     /**
-     * Text from a key: with Ctrl or Alt (the event's [mods], or the row's) a
-     * key combination; else an edit like the IME's own.
+     * Text from a key, or from the IME while the row holds a modifier, as
+     * the terminal takes it: Fn maps the first character (FnKeys); with Ctrl
+     * or Alt (the event's [mods], or the row's) it's a key combination;
+     * else an edit like the IME's own, upper-cased by Shift.
      */
     private fun type(text: String, mods: Int) {
+        if (text.isEmpty() || !modifiers.consume(Modifier.FN)) return typeText(text, mods)
+        onModifiers()
+        val first = text.offsetByCodePoints(0, 1)
+        when (val f = FnKeys.action(text.codePointAt(0))) {
+            is KeyAction.Code -> press(f.keyCode, mods or consumeModifiers())
+            is KeyAction.Text -> typeText(f.text, mods)
+            else -> typeText(text.substring(0, first), mods)
+        }
+        if (first < text.length) typeText(text.substring(first), mods)
+    }
+
+    private fun typeText(text: String, mods: Int) {
         var m = mods
         if (modifiers.active(Modifier.CTRL) || modifiers.active(Modifier.ALT)) {
             m = m or consumeModifiers()
@@ -262,8 +276,17 @@ internal class WindowIme(
             return
         }
         model.finishComposingText()
-        model.commitText(text, 1)
+        model.commitText(shifted(text), 1)
         flush()
+    }
+
+    /** [text] with the row's Shift: its first character upper-cased, or all of it while Shift is locked or held. */
+    private fun shifted(text: String): String {
+        if (text.isEmpty() || !modifiers.consume(Modifier.SHIFT)) return text
+        onModifiers()
+        if (modifiers.active(Modifier.SHIFT)) return text.uppercase()
+        val first = text.offsetByCodePoints(0, 1)
+        return text.substring(0, first).uppercase() + text.substring(first)
     }
 
     /** A non-printing key (an Android key code) as a tap, the composing text committed first. */
@@ -411,9 +434,13 @@ internal class WindowIme(
         override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean = edit("commit") {
             val t = text?.toString().orEmpty()
             when {
-                latched() -> typeLatched(t)
                 // Return in a single-line field is its action; in any field it's what a keyboard's Return does.
-                t == "\n" -> press(KeyEvent.KEYCODE_ENTER, 0)
+                t == "\n" -> {
+                    val m = consumeModifiers()
+                    if (m != 0) onModifiers()
+                    press(KeyEvent.KEYCODE_ENTER, m)
+                }
+                latched() -> typeLatched(t)
                 else -> model.commitText(t, newCursorPosition)
             }
         }
@@ -541,15 +568,13 @@ internal class WindowIme(
             super.closeConnection()
         }
 
-        /** Whether the extra keys row holds Ctrl or Alt for the next character. */
-        private fun latched(): Boolean = modifiers.active(Modifier.CTRL) || modifiers.active(Modifier.ALT)
+        /** Whether the extra keys row holds a modifier for the next character. */
+        private fun latched(): Boolean = Modifier.entries.any(modifiers::active)
 
-        /** Text typed with the row's latched modifiers: a key combination, and no composing text left behind. */
+        /** Text typed with the row's latched modifiers (see [type]), and no composing text left behind. */
         private fun typeLatched(t: String) {
             settle()
-            val m = consumeModifiers()
-            onModifiers()
-            if (t.isNotEmpty()) input.type(if (m and Gui.MOD_SHIFT != 0) t.uppercase() else t, m and Gui.MOD_SHIFT.inv())
+            type(t, 0)
             // The IME still composes what it thinks it typed: tell it there's no composing text.
             reported = IntArray(4) { -2 }
         }

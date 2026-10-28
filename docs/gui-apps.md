@@ -118,7 +118,9 @@ files the system and user profiles already have.
   becomes key events, with the keymap swapped for missing characters as
   `wtype` does. Nested desktops ignore keymaps they're sent, so there it's
   limited to the layout's own characters.
-- The terminal's extra keys row shows above the keyboard in GUI windows too.
+- The terminal's extra keys row shows above the keyboard in GUI windows too,
+  and its modifiers act on what the phone keyboard types as they do in the
+  terminal.
 - The guest's keyboard layout follows Android's physical keyboard layout, and
   nested desktops get it as `XKB_DEFAULT_LAYOUT`.
 
