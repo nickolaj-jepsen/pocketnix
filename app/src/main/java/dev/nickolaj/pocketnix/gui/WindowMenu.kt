@@ -158,4 +158,4 @@ private fun BarButton(glyph: String, description: String, onClick: () -> Unit) {
 
 const val BAR_HEIGHT = 36
 private val BAR_BACKGROUND = Color(0xff1e1e1e)
-private val BAR_TEXT = Color(0xffdddddd)
+internal val BAR_TEXT = Color(0xffdddddd)

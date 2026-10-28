@@ -8,13 +8,8 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.ui.platform.LocalContext
 import dev.nickolaj.pocketnix.ui.MainScreen
+import dev.nickolaj.pocketnix.ui.PocketnixTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -27,13 +22,7 @@ class MainActivity : ComponentActivity() {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
         }
         setContent {
-            val context = LocalContext.current
-            // The terminal is dark by default; keep the chrome around it dark too.
-            val colors = when {
-                isSystemInDarkTheme() -> dynamicDarkColorScheme(context)
-                else -> runCatching { dynamicLightColorScheme(context) }.getOrDefault(darkColorScheme())
-            }
-            MaterialTheme(colorScheme = colors) {
+            PocketnixTheme {
                 MainScreen(vm)
             }
         }

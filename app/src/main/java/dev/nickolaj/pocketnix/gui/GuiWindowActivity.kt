@@ -18,11 +18,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
@@ -51,7 +46,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.nickolaj.pocketnix.engine.VmState
 import dev.nickolaj.pocketnix.ui.ExtraKeysBar
-import dev.nickolaj.pocketnix.ui.defaultExtraKeys
+import dev.nickolaj.pocketnix.ui.PocketnixTheme
+import dev.nickolaj.pocketnix.ui.extraKeyRows
 import dev.nickolaj.pocketnix.ui.missingRequirements
 import dev.nickolaj.pocketnix.vm
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -151,11 +147,7 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
         keyboardAction = s.ime::toggleKeyboard
         s.ime.onModifiers = { modifierRevision++ }
         setContent {
-            val colors = when {
-                isSystemInDarkTheme() -> dynamicDarkColorScheme(this)
-                else -> runCatching { dynamicLightColorScheme(this) }.getOrDefault(darkColorScheme())
-            }
-            MaterialTheme(colorScheme = colors) { WindowContent(s) }
+            PocketnixTheme { WindowContent(s) }
         }
         toplevelChanged()
         // The activity started before its window existed.
@@ -182,10 +174,10 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
             {
                 modifierRevision.let {}
                 ExtraKeysBar(
-                    rows = config?.extraKeys?.takeIf { it.isNotEmpty() } ?: defaultExtraKeys,
+                    rows = extraKeyRows(config),
                     modifiers = s.ime.modifiers,
                     revision = modifierRevision,
-                    foreground = Color(0xffdddddd),
+                    foreground = BAR_TEXT,
                     onKey = s.ime::extraKey,
                 )
             }

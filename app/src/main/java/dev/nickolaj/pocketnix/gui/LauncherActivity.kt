@@ -9,7 +9,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,9 +26,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -42,7 +38,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -51,6 +46,7 @@ import dev.nickolaj.pocketnix.R
 import dev.nickolaj.pocketnix.Vm
 import dev.nickolaj.pocketnix.agent.ControlChannel
 import dev.nickolaj.pocketnix.engine.VmState
+import dev.nickolaj.pocketnix.ui.PocketnixTheme
 import dev.nickolaj.pocketnix.vm
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -66,12 +62,7 @@ class LauncherActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            val context = LocalContext.current
-            val colors = when {
-                isSystemInDarkTheme() -> dynamicDarkColorScheme(context)
-                else -> runCatching { dynamicLightColorScheme(context) }.getOrDefault(darkColorScheme())
-            }
-            MaterialTheme(colorScheme = colors) {
+            PocketnixTheme {
                 Surface(Modifier.fillMaxSize()) {
                     Launcher(vm, ::open, ::pin)
                 }

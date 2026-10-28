@@ -31,6 +31,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.nickolaj.pocketnix.agent.ExtraKey
+import dev.nickolaj.pocketnix.agent.GuestConfig
 import dev.nickolaj.pocketnix.terminal.ExtraKeys
 import dev.nickolaj.pocketnix.terminal.KeyAction
 import dev.nickolaj.pocketnix.terminal.Modifiers
@@ -43,6 +44,9 @@ val defaultExtraKeys = listOf(
     listOf(ExtraKey("ESC", null, null), ExtraKey("/", "\\", null), ExtraKey("-", "|", null), ExtraKey("HOME", null, null), ExtraKey("UP", null, null), ExtraKey("END", null, null), ExtraKey("PGUP", null, null)),
     listOf(ExtraKey("TAB", null, null), ExtraKey("CTRL", null, null), ExtraKey("ALT", null, null), ExtraKey("LEFT", null, null), ExtraKey("DOWN", null, null), ExtraKey("RIGHT", null, null), ExtraKey("PGDN", null, null)),
 )
+
+/** The module's rows, or [defaultExtraKeys] while it has declared none. */
+fun extraKeyRows(config: GuestConfig?): List<List<ExtraKey>> = config?.extraKeys?.takeIf { it.isNotEmpty() } ?: defaultExtraKeys
 
 /** The module's extra-keys rows: tap a key, swipe up for its popup, hold to repeat. */
 @Composable

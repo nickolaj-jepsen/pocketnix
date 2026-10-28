@@ -279,7 +279,7 @@ fun MainScreen(vm: Vm) {
         if (shownWindow != 0 && ime != null) {
             modifierRevision.let {}
             ExtraKeysBar(
-                rows = config?.extraKeys?.takeIf { it.isNotEmpty() } ?: defaultExtraKeys,
+                rows = extraKeyRows(config),
                 modifiers = ime.modifiers,
                 revision = modifierRevision,
                 foreground = foreground,
@@ -289,7 +289,7 @@ fun MainScreen(vm: Vm) {
         if (shownWindow == 0) {
             modifierRevision.let {}
             ExtraKeysBar(
-                rows = config?.extraKeys?.takeIf { it.isNotEmpty() } ?: defaultExtraKeys,
+                rows = extraKeyRows(config),
                 modifiers = controller.modifiers,
                 revision = modifierRevision,
                 foreground = foreground,
