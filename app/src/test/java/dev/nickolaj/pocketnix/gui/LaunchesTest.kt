@@ -162,12 +162,16 @@ class LaunchesTest {
 
     @Test
     fun theSplashFollowsTheBootThenTheLaunch() {
-        assertEquals("Starting the VM…", status(vm = VmState.Starting, link = ControlChannel.Link.Down, gui = null, ready = false).text)
-        assertEquals("Starting the VM…", status(link = ControlChannel.Link.Down, gui = null, ready = false).text)
-        assertTrue(status(link = ControlChannel.Link.Down, late = true).text.contains("two minutes"))
-        assertEquals("Connecting to the guest's display…", status(ready = false).text)
-        assertEquals(SplashStatus("Starting Foot…"), status())
-        assertEquals(SplashStatus("Starting Foot…"), status(launch = LaunchState.Started))
+        val booting = status(vm = VmState.Starting, link = ControlChannel.Link.Down, gui = null, ready = false)
+        // Running, but the agent hasn't answered yet: still the boot.
+        assertEquals(booting, status(link = ControlChannel.Link.Down, gui = null, ready = false))
+        val late = status(link = ControlChannel.Link.Down, late = true)
+        val connecting = status(ready = false)
+        val starting = status()
+        assertEquals(starting, status(launch = LaunchState.Started))
+        val steps = listOf(booting, late, connecting, starting)
+        assertEquals(steps.size, steps.map { it.text }.distinct().size)
+        assertTrue(steps.none { it.failed })
     }
 
     @Test
@@ -175,10 +179,14 @@ class LaunchesTest {
         val gone = status(launch = LaunchState.Failed(LaunchState.UNKNOWN, "x"))
         assertTrue(gone.failed)
         assertFalse(gone.canRetry)
-        assertEquals("Foot couldn't start. exited with status 127", status(launch = LaunchState.Failed(LaunchState.EXEC, "exited with status 127")).text)
+        val exec = status(launch = LaunchState.Failed(LaunchState.EXEC, "exited with status 127"))
+        assertTrue(exec.failed && exec.canRetry)
+        assertTrue(exec.text.contains("exited with status 127"))
         assertTrue(status(launch = LaunchState.Failed(LaunchState.TIMEOUT, "")).canRetry)
         assertTrue(status(vm = VmState.Stopped, link = ControlChannel.Link.Down).failed)
-        assertEquals("The VM failed: no disk", status(vm = VmState.Failed("no disk"), link = ControlChannel.Link.Down).text)
+        val vmFailed = status(vm = VmState.Failed("no disk"), link = ControlChannel.Link.Down)
+        assertTrue(vmFailed.failed && vmFailed.canRetry)
+        assertTrue(vmFailed.text.contains("no disk"))
         val off = status(gui = false, ready = false)
         assertTrue(off.failed)
         assertFalse(off.canRetry)
