@@ -57,6 +57,18 @@ class GuiReaderTest {
     }
 
     @Test
+    fun aToplevelSaysTheScaleOfItsSizesAndWhetherItTakesTouch() {
+        val t = JSONObject().put("type", "toplevel").put("id", 3).put("window", 3).put("minWidth", 1260).put("scale", 2.625).put("touch", true)
+        val m = read(CompositorFrames().json(t).toplevel(4))
+        val step3 = m[0] as GuiMessage.Toplevel
+        assertEquals(2.625f, step3.scale, 0f)
+        assertEquals(true, step3.touch)
+        val step2 = m[1] as GuiMessage.Toplevel
+        assertEquals("a compositor that doesn't say", 0f, step2.scale, 0f)
+        assertEquals(false, step2.touch)
+    }
+
+    @Test
     fun readsTheWindowModel() {
         val app = JSONObject().put("id", "org.gnome.Calculator").put("name", "Calculator").put("genericName", "Calculator")
             .put("keywords", JSONArray(listOf("math", "sum"))).put("categories", JSONArray(listOf("Utility"))).put("icon", "k1")

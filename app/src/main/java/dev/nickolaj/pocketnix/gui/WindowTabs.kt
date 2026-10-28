@@ -35,11 +35,20 @@ interface WindowHost {
     /** Stop showing the window, without asking the client to close: the guest unmapped it, or it moved. */
     fun dismiss()
 
-    /** The toplevel's title, app id or app-list entry changed. */
+    /** What shows the window's layers; null before it's bound. */
+    val surface: WindowSurface?
+
+    /** The toplevel changed: its title, app id, app-list entry, size or minimum. */
     fun toplevelChanged()
+
+    /** The app's settings changed (gui-apps.md, Per-app settings): they apply at once. */
+    fun settingsChanged()
 
     fun cursor(name: String)
 
     /** The client asked to be minimized. */
     fun minimize()
+
+    /** The client asked to enter or leave full screen. */
+    fun fullscreen(on: Boolean)
 }

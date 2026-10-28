@@ -10,14 +10,16 @@ import kotlin.math.roundToInt
 
 /**
  * A window's mouse, touchpad and keyboard as GUI protocol input, in the
- * window's pixels (the SurfaceView's coordinates). A touchscreen acts as a
- * mouse with one button until touch input lands (gui-apps.md, step 3).
+ * window's pixels: the SurfaceView's coordinates mapped back through
+ * [zoom]. A touchscreen acts as a mouse with one button until touch input
+ * lands (gui-apps.md, step 3).
  */
 internal class WindowInput(
     private val window: Int,
     private val send: (ByteArray) -> Unit,
     /** Window pixels per logical pixel, for wheel steps. */
     private val scale: () -> Float,
+    private val zoom: Zoom,
 ) {
     private val main = Handler(Looper.getMainLooper())
     private var buttons = 0
@@ -50,9 +52,11 @@ internal class WindowInput(
     }
 
     private fun move(e: MotionEvent) {
-        if (e.x == x && e.y == y) return
-        x = e.x
-        y = e.y
+        val wx = zoom.windowX(e.x)
+        val wy = zoom.windowY(e.y)
+        if (wx == x && wy == y) return
+        x = wx
+        y = wy
         send(Gui.pointerMotion(window, x, y))
     }
 
@@ -104,8 +108,8 @@ internal class WindowInput(
                 swipeY = e.y
             }
             MotionEvent.ACTION_MOVE -> {
-                val dx = swipeX - e.x
-                val dy = swipeY - e.y
+                val dx = (swipeX - e.x) / zoom.scale
+                val dy = (swipeY - e.y) / zoom.scale
                 swipeX = e.x
                 swipeY = e.y
                 if (dx != 0f || dy != 0f) send(Gui.pointerAxis(window, x, y, Gui.AXIS_FINGER, 0, dx, dy, 0, 0))

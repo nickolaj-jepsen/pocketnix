@@ -55,6 +55,10 @@ import dev.nickolaj.pocketnix.agent.ExtraKey
 import dev.nickolaj.pocketnix.engine.DiskImage
 import dev.nickolaj.pocketnix.engine.VmState
 import dev.nickolaj.pocketnix.gui.LauncherActivity
+import dev.nickolaj.pocketnix.gui.MOVE_OUT
+import dev.nickolaj.pocketnix.gui.MenuAction
+import dev.nickolaj.pocketnix.gui.WindowMenu
+import dev.nickolaj.pocketnix.gui.windowMenu
 import dev.nickolaj.pocketnix.gui.TabStripItem
 import dev.nickolaj.pocketnix.gui.closingWindows
 import dev.nickolaj.pocketnix.gui.stopQuestion
@@ -63,7 +67,6 @@ import dev.nickolaj.pocketnix.terminal.Modifiers
 import dev.nickolaj.pocketnix.terminal.Tab
 import dev.nickolaj.pocketnix.terminal.TerminalTheme
 
-private const val MOVE_OUT = "Move to its own window"
 
 /** Used until the agent sends the module's rows (Termux's defaults). */
 private val defaultExtraKeys = listOf(
@@ -228,7 +231,7 @@ fun MainScreen(vm: Vm) {
             onSelectWindow = vm.tabs::selectWindow,
             // The client decides: it may ask about unsaved work first.
             onCloseWindow = vm.gui::requestClose,
-            onMoveWindowOut = { vm.gui.move(it, "") },
+            windowMenu = { id -> windowMenu(vm.gui, id, listOf(MenuAction(MOVE_OUT) { vm.gui.move(id, "") })) },
             onOpen = vm::openTab,
         )
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -322,7 +325,8 @@ private fun TabRow(
     onClose: (Int) -> Unit,
     onSelectWindow: (Int) -> Unit,
     onCloseWindow: (Int) -> Unit,
-    onMoveWindowOut: (Int) -> Unit,
+    /** A window tab's menu, read when it opens. */
+    windowMenu: (Int) -> List<MenuAction>,
     onOpen: (String?) -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -348,7 +352,7 @@ private fun TabRow(
                 }
                 is TabStripItem.Window -> {
                     val w = item.window
-                    var windowMenu by remember(w.id) { mutableStateOf(false) }
+                    var windowMenuOpen by remember(w.id) { mutableStateOf(false) }
                     Box {
                         TabChip(
                             mark = "▣ ",
@@ -356,13 +360,10 @@ private fun TabRow(
                             selected = w.id == selectedWindow,
                             foreground = foreground,
                             onSelect = { onSelectWindow(w.id) },
-                            onLongPress = { windowMenu = true },
+                            onLongPress = { windowMenuOpen = true },
                             onClose = { onCloseWindow(w.id) },
                         )
-                        DropdownMenu(expanded = windowMenu, onDismissRequest = { windowMenu = false }) {
-                            DropdownMenuItem(text = { Text(MOVE_OUT) }, onClick = { windowMenu = false; onMoveWindowOut(w.id) })
-                            DropdownMenuItem(text = { Text("Close") }, onClick = { windowMenu = false; onCloseWindow(w.id) })
-                        }
+                        WindowMenu(windowMenuOpen, onDismiss = { windowMenuOpen = false }) { windowMenu(w.id) }
                     }
                 }
             }

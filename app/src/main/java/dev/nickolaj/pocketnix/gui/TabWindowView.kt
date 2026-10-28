@@ -2,11 +2,7 @@ package dev.nickolaj.pocketnix.gui
 
 import android.content.Context
 import android.graphics.Color
-import android.os.Handler
-import android.os.Looper
 import android.view.PointerIcon
-import android.view.SurfaceHolder
-import android.view.SurfaceView
 import android.view.View
 import android.view.ViewTreeObserver
 import android.widget.FrameLayout
@@ -18,67 +14,36 @@ import android.widget.FrameLayout
  * showing; the window itself stays in the session.
  */
 internal class TabWindowView(context: Context, private val session: GuiSession, override val windowId: Int) : WindowHost {
-    private val surface = SurfaceView(context)
     val view: FrameLayout = FrameLayout(context)
-    private val input = WindowInput(windowId, session::send) { context.resources.displayMetrics.densityDpi / 160f }
-    private val main = Handler(Looper.getMainLooper())
-    private val pushState = Runnable { pushState() }
-    private var width = 0
-    private var height = 0
-    private var attached = false
+    private var bound = false
 
-    private val callback = object : SurfaceHolder.Callback {
-        override fun surfaceCreated(holder: SurfaceHolder) {}
-
-        override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) = guard("tab window ${windowId.u}: surface") {
-            val resized = w != width || h != height
-            width = w
-            height = h
-            attached = true
-            if (bound) session.attach(this@TabWindowView, surface.surfaceControl, w, h)
-            main.removeCallbacks(pushState)
-            // The keyboard coming up resizes the tab in steps.
-            if (resized) main.postDelayed(pushState, RESIZE_DEBOUNCE_MS) else pushState()
-        }
-
-        override fun surfaceDestroyed(holder: SurfaceHolder) = guard("tab window ${windowId.u}: surface gone") {
-            attached = false
-            if (bound) session.detach(this@TabWindowView)
-            main.removeCallbacks(pushState)
-            pushState()
-        }
+    override val surface: WindowSurface = WindowSurface(context, session, this, { bound }) { attached ->
+        WindowSurface.Flags(
+            focused = attached && view.hasWindowFocus(),
+            visible = attached,
+            // Tiled into the terminal screen: no shadows or rounded corners to draw.
+            maximized = true,
+        )
     }
 
     private val focusListener = ViewTreeObserver.OnWindowFocusChangeListener { focused ->
         guard("tab window ${windowId.u}: focus") {
-            pushState()
-            if (focused && bound) input.focused()
+            surface.pushState()
+            if (focused && bound) surface.input.focused()
         }
     }
 
-    private var bound = session.bindTab(this, windowId)
-
     init {
-        surface.apply {
-            holder.addCallback(callback)
-            isFocusable = true
-            isFocusableInTouchMode = true
-            defaultFocusHighlightEnabled = false
-            setOnTouchListener { v, e ->
-                // The listener consumes the touch, so the view never takes focus itself.
-                if (!v.isFocused) v.requestFocus()
-                bound && input.motion(e)
-            }
-            setOnGenericMotionListener { _, e -> bound && input.motion(e) }
-            setOnKeyListener { _, _, e -> bound && input.key(e) }
-        }
+        bound = session.bindTab(this, windowId)
+        val s = surface.view
+        s.setOnKeyListener { _, _, e -> bound && surface.input.key(e) }
         view.setBackgroundColor(Color.BLACK)
-        view.addView(surface)
+        view.addView(s)
         view.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(v: View) {
                 v.viewTreeObserver.addOnWindowFocusChangeListener(focusListener)
                 // Keys go to the focused view: take it from the terminal once Compose has placed this.
-                surface.post { surface.requestFocus() }
+                s.post { s.requestFocus() }
             }
 
             override fun onViewDetachedFromWindow(v: View) {
@@ -87,27 +52,9 @@ internal class TabWindowView(context: Context, private val session: GuiSession, 
         })
     }
 
-    private fun pushState() {
-        if (!bound) return
-        session.windowState(
-            this,
-            WindowState(
-                id = windowId,
-                width = width,
-                height = height,
-                scale = view.resources.displayMetrics.densityDpi / 160f,
-                focused = attached && view.hasWindowFocus(),
-                visible = attached,
-                // Tiled into the terminal screen: no shadows or rounded corners to draw.
-                maximized = true,
-            ),
-        )
-    }
-
     /** The tab stopped showing. */
     fun release() = guard("tab window ${windowId.u}: release") {
-        main.removeCallbacks(pushState)
-        input.release()
+        surface.release()
         if (bound) session.unbind(this, userClosed = false)
         bound = false
     }
@@ -117,16 +64,16 @@ internal class TabWindowView(context: Context, private val session: GuiSession, 
         bound = false
     }
 
-    override fun toplevelChanged() {}
+    override fun toplevelChanged() = surface.refresh()
+
+    override fun settingsChanged() = surface.refresh()
 
     override fun cursor(name: String) {
-        if (bound) surface.pointerIcon = PointerIcon.getSystemIcon(view.context, GuiWindowActivity.pointerType(name))
+        if (bound) surface.view.pointerIcon = PointerIcon.getSystemIcon(view.context, GuiWindowActivity.pointerType(name))
     }
 
-    // A tab has nothing to minimize to.
+    // A tab has nothing to minimize to, and is no place for full screen.
     override fun minimize() {}
 
-    private companion object {
-        const val RESIZE_DEBOUNCE_MS = 150L
-    }
+    override fun fullscreen(on: Boolean) {}
 }

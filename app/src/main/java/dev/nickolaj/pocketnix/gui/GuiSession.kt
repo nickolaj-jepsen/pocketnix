@@ -19,6 +19,7 @@ import android.view.SurfaceControl
 import dev.nickolaj.pocketnix.MainActivity
 import dev.nickolaj.pocketnix.R
 import dev.nickolaj.pocketnix.agent.AgentDialer
+import dev.nickolaj.pocketnix.agent.GuiConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,6 +46,12 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
     val catalog = AppCatalog(File(app.filesDir, "gui"))
     val launches = Launches(link::send)
     val shortcuts = AppShortcuts(app, catalog) { iconSize(large = true) }
+
+    /** Each app's size preset and input mode: the module's, under the user's changes. */
+    val appSettings = AppSettings(PrefsOverrideStore(app))
+
+    // The factors the compositor last got on this connection.
+    @Volatile private var sentFactors: Pair<Float, Map<String, Float>>? = null
 
     // The splash waiting on each launch, by launch id.
     private val owners = ConcurrentHashMap<String, GuiWindowActivity>()
@@ -118,6 +125,21 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
             main,
         )
         Foreground.onVisible { launchPending() }
+        appSettings.onChange = {
+            sendSettings(force = false)
+            onMain("app settings: windows") { for (v in views.values) v.host?.settingsChanged() }
+        }
+    }
+
+    /** The module's GUI config; null (no config yet, or the VM is off) keeps the last one. */
+    fun config(c: GuiConfig?) = appSettings.config(c)
+
+    /** Sends `settings` when the factors differ from what this connection has, or [force]d at its start. */
+    private fun sendSettings(force: Boolean) {
+        val f = appSettings.factors()
+        if (!force && f == sentFactors) return
+        sentFactors = f
+        link.send(Gui.settings(f.first, f.second))
     }
 
     /** Keeps the GUI stream connected through [dialer]; [hashes] has the compositor send content hashes to check. */
@@ -159,6 +181,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         }
         for (w in dropped) closeWindow(w.id)
         link.send(output())
+        sendSettings(force = true)
         for (v in views.values) v.sent?.let { link.send(Gui.window(it)) }
     }
 
@@ -210,8 +233,11 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                 }
                 if (window) closeWindow(msg.id)
             }
-            is GuiMessage.ToplevelRequest -> if (msg.request == "minimize") {
-                onMain("window ${msg.id.u}: minimize") { views[msg.id]?.host?.minimize() }
+            is GuiMessage.ToplevelRequest -> when (msg.request) {
+                "minimize" -> onMain("window ${msg.id.u}: minimize") { views[msg.id]?.host?.minimize() }
+                "fullscreen", "unfullscreen" -> onMain("window ${msg.id.u}: ${msg.request}") {
+                    views[msg.id]?.host?.fullscreen(msg.request == "fullscreen")
+                }
             }
             is GuiMessage.Surface -> synchronized(lock) {
                 val moved = state.surface(msg) ?: return@synchronized
@@ -540,6 +566,37 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
 
     internal fun send(frame: ByteArray) = link.send(frame)
 
+    /**
+     * Window [id]'s scale for a [width] × [height] area at the display's
+     * [density]: its app's size preset, lowered by the fit while the
+     * client's minimum doesn't fit.
+     */
+    internal fun fitScale(id: Int, width: Int, height: Int, density: Float): Float {
+        val t = synchronized(lock) { state.windows[id]?.toplevel }
+        val factor = appSettings.of(appKey(t)).size.factor
+        // Without it (a compositor from before step 3) the minimum's scale is a guess that can be stale: no fit.
+        val at = t?.scale ?: 0f
+        return WindowFit.scale(
+            density, factor, width, height,
+            WindowFit.logical(t?.minWidth ?: 0, at), WindowFit.logical(t?.minHeight ?: 0, at),
+        )
+    }
+
+    /** Window [id]'s geometry in window pixels, larger than its view when the client's minimum is. */
+    internal fun contentSize(id: Int): Pair<Int, Int> =
+        synchronized(lock) { state.windows[id]?.toplevel }?.let { it.width to it.height } ?: (0 to 0)
+
+    /** The id window [id]'s settings go by: its app-list entry's, else its app id; "" for neither. */
+    fun appKey(id: Int): String = appKey(synchronized(lock) { state.windows[id]?.toplevel })
+
+    private fun appKey(t: GuiMessage.Toplevel?): String = t?.app?.ifEmpty { t.appId }.orEmpty()
+
+    /** Whether window [id]'s client has a wl_touch, so Touch mode can reach it. */
+    fun hasTouch(id: Int): Boolean = synchronized(lock) { state.windows[id]?.toplevel?.touch } == true
+
+    /** What shows window [id], for its menu's zoom items; null while nothing does. */
+    fun surfaceOf(id: Int): WindowSurface? = views[id]?.host?.surface
+
     /** Asks window [id]'s client to close, as its close button would; the client may ask first, or refuse. */
     fun requestClose(id: Int) = link.send(Gui.close(id))
 
@@ -658,6 +715,8 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                     .joinToString(" ") { "${it.id.u}:${it.role}:${it.content.width}x${it.content.height}" }
                 "window ${w.id.u} '${title(w.id)}' app=${w.toplevel.app} launch=${w.toplevel.launch} tab=${w.toplevel.tab} " +
                     "host=${v?.host?.javaClass?.simpleName} shown=${v?.renderer != null} " +
+                    "settings=${appSettings.of(appKey(w.toplevel))} min=${w.toplevel.minWidth}x${w.toplevel.minHeight}@${w.toplevel.scale} " +
+                    "geometry=${w.toplevel.width}x${w.toplevel.height} zoom=${v?.host?.surface?.zoom?.let { "${it.scale}@${it.x},${it.y}" }} " +
                     "seq=${w.lastSeq.u} sent=${v?.sent} surfaces=[$surfaces]"
             }
     }

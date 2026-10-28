@@ -1,29 +1,44 @@
 package dev.nickolaj.pocketnix.gui
 
-import android.app.Activity
 import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.text.TextUtils
-import android.view.Gravity
+import android.util.Log
 import android.view.KeyEvent
 import android.view.PointerIcon
-import android.view.SurfaceHolder
-import android.view.SurfaceView
-import android.view.View
-import android.view.WindowInsets
-import android.widget.LinearLayout
-import android.widget.PopupMenu
-import android.widget.TextView
-import android.window.OnBackInvokedDispatcher
-import android.util.Log
+import android.view.WindowInsetsController
+import androidx.activity.ComponentActivity
+import androidx.activity.addCallback
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.viewinterop.AndroidView
 import dev.nickolaj.pocketnix.engine.VmState
 import dev.nickolaj.pocketnix.ui.missingRequirements
 import dev.nickolaj.pocketnix.vm
@@ -46,20 +61,30 @@ import java.util.UUID
  * first shows a splash: it boots the VM if needed, launches the app and
  * becomes the window the launch opens.
  */
-class GuiWindowActivity : Activity(), WindowHost {
+class GuiWindowActivity : ComponentActivity(), WindowHost {
     override var windowId = 0
         private set
     private var bound = false
     private var closedByGuest = false
-    private lateinit var view: SurfaceView
-    private lateinit var input: WindowInput
+    override var surface: WindowSurface? = null
+        private set
     private val handler = Handler(Looper.getMainLooper())
-    private var width = 0
-    private var height = 0
-    private var attached = false
     private var focused = false
     private var started = false
-    private val pushState = Runnable { pushState() }
+
+    private var barTitle by mutableStateOf("")
+    private var fullscreen by mutableStateOf(false)
+
+    // A full-screen window's bar, shown over it for a while after a swipe up from the bottom edge.
+    private var barRevealed by mutableStateOf(false)
+    private var menuOpen = false
+    private val hideBar = Runnable { if (!menuOpen) barRevealed = false }
+
+    /** The bar's keyboard button does this; without it the bar has none. */
+    internal var keyboardAction by mutableStateOf<(() -> Unit)?>(null)
+
+    /** While set, shown in the bar's place: the extra keys row, while typing. */
+    internal var typingRow by mutableStateOf<(@Composable () -> Unit)?>(null)
 
     // A launch's splash, until it's bound to the window.
     private val scope = CoroutineScope(
@@ -70,11 +95,10 @@ class GuiWindowActivity : Activity(), WindowHost {
     private var watch: Job? = null
     private var splash: SplashView? = null
     private var stale: Runnable? = null
-    private var barTitle: TextView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT) { moveTaskToBack(true) }
+        onBackPressedDispatcher.addCallback(this) { moveTaskToBack(true) }
         target = intent.data?.let(::parseApp)
         if (target != null) {
             guard("splash: create") { createLaunch(savedInstanceState) }
@@ -100,81 +124,77 @@ class GuiWindowActivity : Activity(), WindowHost {
             vm.gui.launches.forget(it.id)
         }
         launch = null
-        input = WindowInput(windowId, vm.gui::send) { resources.displayMetrics.densityDpi / 160f }
-        view = SurfaceView(this).apply {
-            holder.addCallback(surfaceCallback)
-            isFocusable = true
-            isFocusableInTouchMode = true
-            // A hardware key leaves touch mode, and the focus highlight would tint the whole window.
-            defaultFocusHighlightEnabled = false
-            setOnTouchListener { _, e -> input.motion(e) }
-            setOnGenericMotionListener { _, e -> input.motion(e) }
+        val s = WindowSurface(this, vm.gui, this, { bound }) { attached ->
+            WindowSurface.Flags(
+                focused = focused && attached,
+                visible = attached && started,
+                maximized = !isInMultiWindowMode,
+                fullscreen = fullscreen,
+            )
         }
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.BLACK)
-            addView(view, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
-            addView(windowBar())
-            // Edge to edge is enforced: keep the guest's window out from under the bars, cutout and caption.
-            setOnApplyWindowInsetsListener { v, insets ->
-                val i = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-                v.setPadding(i.left, i.top, i.right, i.bottom)
-                WindowInsets.CONSUMED
+        surface = s
+        setContent {
+            val colors = when {
+                isSystemInDarkTheme() -> dynamicDarkColorScheme(this)
+                else -> runCatching { dynamicLightColorScheme(this) }.getOrDefault(darkColorScheme())
             }
+            MaterialTheme(colorScheme = colors) { WindowContent(s) }
         }
-        setContentView(root)
         toplevelChanged()
         // The activity started before its window existed.
-        if (started) pushState()
-        if (focused) input.focused()
+        if (started) s.pushState()
+        if (focused) s.input.focused()
     }
 
-    /** The slim bar under the window: its title and its menu. */
-    private fun windowBar(): View {
-        val pad = (8 * resources.displayMetrics.density).toInt()
-        val title = TextView(this).apply {
-            setTextColor(BAR_TEXT)
-            textSize = 13f
-            maxLines = 1
-            ellipsize = TextUtils.TruncateAt.END
-            setPadding(pad * 2, 0, pad, 0)
+    /** The window, and the bar under it; a full-screen window's bar shows over it only while revealed. */
+    @Composable
+    private fun WindowContent(s: WindowSurface) {
+        val bar: @Composable () -> Unit = {
+            WindowBar(barTitle, keyboardAction, typingRow, menu = ::menu, onMenu = ::menuOpened)
         }
-        barTitle = title
-        val menu = TextView(this).apply {
-            text = "⋮"
-            setTextColor(BAR_TEXT)
-            textSize = 18f
-            gravity = Gravity.CENTER
-            setPadding(pad * 2, 0, pad * 2, 0)
-            contentDescription = "Window menu"
-            setOnClickListener { v -> guard("window menu") { showMenu(v) } }
-        }
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(BAR_BACKGROUND)
-            addView(title, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(menu, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.MATCH_PARENT))
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (BAR_DP * resources.displayMetrics.density).toInt())
-        }
-    }
-
-    private fun showMenu(anchor: View) {
-        val m = PopupMenu(this, anchor)
-        val targets = vm.tabs.windowTargets()
-        if (targets.isEmpty()) {
-            // Only a running shell tab has an id the guest knows.
-            m.menu.add(MOVE_TO_TAB).isEnabled = false
-        } else {
-            val sub = m.menu.addSubMenu(MOVE_TO_TAB)
-            for (t in targets) {
-                val tab = t.agentId
-                sub.add(t.title).setOnMenuItemClickListener { guard("window ${windowId.u}: move") { vm.gui.move(windowId, tab) }; true }
+        // Edge to edge is enforced: keep the guest's window out from under the bars, cutout and caption.
+        Column(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout)),
+        ) {
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                AndroidView(factory = { s.view }, modifier = Modifier.fillMaxSize())
+                if (fullscreen && barRevealed) Box(Modifier.align(Alignment.BottomCenter)) { bar() }
             }
+            if (!fullscreen) bar()
         }
-        m.menu.add("Close").setOnMenuItemClickListener { guard("window ${windowId.u}: close") { vm.gui.requestClose(windowId) }; true }
-        m.show()
     }
+
+    private fun menu(): List<MenuAction> {
+        val id = windowId
+        val targets = vm.tabs.windowTargets()
+        val extra = buildList {
+            if (fullscreen) add(MenuAction("Leave full screen") { fullscreen(false) })
+            // Only a running shell tab has an id the guest knows.
+            add(
+                MenuAction(MOVE_TO_TAB, enabled = targets.isNotEmpty(), children = targets.map { t ->
+                    val tab = t.agentId
+                    MenuAction(t.title) { vm.gui.move(id, tab) }
+                }),
+            )
+        }
+        return windowMenu(vm.gui, id, extra)
+    }
+
+    private fun menuOpened(open: Boolean) {
+        menuOpen = open
+        handler.removeCallbacks(hideBar)
+        if (!open) handler.postDelayed(hideBar, BAR_REVEAL_MS)
+    }
+
+    private fun revealBar() {
+        barRevealed = true
+        handler.removeCallbacks(hideBar)
+        handler.postDelayed(hideBar, BAR_REVEAL_MS)
+    }
+
 
     // --- A launch's splash ---
 
@@ -290,42 +310,15 @@ class GuiWindowActivity : Activity(), WindowHost {
     private fun iconBitmap(app: AppEntry): Bitmap? =
         vm.gui.catalog.icon(app.icon, vm.gui.iconSize(large = true))?.let { BitmapFactory.decodeFile(it.path) }
 
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        moveTaskToBack(true)
-    }
-
-    private val surfaceCallback = object : SurfaceHolder.Callback {
-        override fun surfaceCreated(holder: SurfaceHolder) {}
-
-        override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {
-            val resized = w != width || h != height
-            width = w
-            height = h
-            attached = true
-            vm.gui.attach(this@GuiWindowActivity, view.surfaceControl, w, h)
-            // Docked moves and resizes come as two sizes in a row (the caption inset lands second).
-            handler.removeCallbacks(pushState)
-            if (resized) handler.postDelayed(pushState, RESIZE_DEBOUNCE_MS) else pushState()
-        }
-
-        override fun surfaceDestroyed(holder: SurfaceHolder) {
-            attached = false
-            vm.gui.detach(this@GuiWindowActivity)
-            handler.removeCallbacks(pushState)
-            pushState()
-        }
-    }
-
     override fun onStart() {
         super.onStart()
         started = true
-        if (bound) pushState()
+        surface?.pushState()
     }
 
     override fun onStop() {
         started = false
-        if (bound) pushState()
+        surface?.pushState()
         super.onStop()
     }
 
@@ -333,20 +326,22 @@ class GuiWindowActivity : Activity(), WindowHost {
         super.onWindowFocusChanged(hasFocus)
         // Kept on a splash too: the window it becomes has the focus it had.
         focused = hasFocus
-        if (!bound) return
-        pushState()
-        if (hasFocus) input.focused()
+        val s = surface ?: return
+        s.pushState()
+        if (hasFocus) s.input.focused()
     }
 
     override fun onMultiWindowModeChanged(isInMultiWindowMode: Boolean, newConfig: android.content.res.Configuration) {
         super.onMultiWindowModeChanged(isInMultiWindowMode, newConfig)
-        if (bound) pushState()
+        surface?.pushState()
     }
 
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean = (bound && input.key(event)) || super.dispatchKeyEvent(event)
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+        (bound && surface?.input?.key(event) == true) || super.dispatchKeyEvent(event)
 
     override fun onDestroy() {
         scope.cancel()
+        handler.removeCallbacks(hideBar)
         launch?.let {
             // Closed while waiting: the user doesn't want it any more.
             if (isFinishing) {
@@ -356,29 +351,11 @@ class GuiWindowActivity : Activity(), WindowHost {
             vm.gui.disown(it.id, this)
         }
         if (bound) {
-            handler.removeCallbacks(pushState)
-            input.release()
+            surface?.release()
             // Finishing without the guest asking: the user closed it (caption X, a Recents swipe).
             vm.gui.unbind(this, userClosed = isFinishing && !closedByGuest && !isChangingConfigurations)
         }
         super.onDestroy()
-    }
-
-    private fun pushState() {
-        if (!bound) return
-        vm.gui.windowState(
-            this,
-            WindowState(
-                id = windowId,
-                // Hidden, the window keeps its last size: the client needn't redraw at another for nobody.
-                width = width,
-                height = height,
-                scale = resources.displayMetrics.densityDpi / 160f,
-                focused = focused && attached,
-                visible = attached && started,
-                maximized = !isInMultiWindowMode,
-            ),
-        )
     }
 
     /** The guest unmapped the window, or it moved to a tab: the task goes without the client hearing of it. */
@@ -391,18 +368,41 @@ class GuiWindowActivity : Activity(), WindowHost {
         moveTaskToBack(true)
     }
 
+    /** Full screen hides the system bars and the window's own, until a swipe up from the bottom edge. */
+    override fun fullscreen(on: Boolean) {
+        if (!bound || fullscreen == on) return
+        fullscreen = on
+        barRevealed = false
+        window.insetsController?.let {
+            val bars = android.view.WindowInsets.Type.systemBars()
+            if (on) {
+                it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                it.hide(bars)
+            } else {
+                it.show(bars)
+            }
+        }
+        surface?.onEdgeSwipe = if (on) ::revealBar else null
+        surface?.pushState()
+    }
+
     override fun toplevelChanged() {
         if (!bound) return
         val t = vm.gui.title(windowId)
         title = t
-        barTitle?.text = t
+        barTitle = t
         val icon = vm.gui.appOf(windowId)?.let(::iconBitmap)
         @Suppress("DEPRECATION") // The Builder takes an icon only as a resource.
         setTaskDescription(ActivityManager.TaskDescription(t, icon))
+        surface?.refresh()
+    }
+
+    override fun settingsChanged() {
+        surface?.refresh()
     }
 
     override fun cursor(name: String) {
-        if (bound) view.pointerIcon = PointerIcon.getSystemIcon(this, pointerType(name))
+        surface?.view?.pointerIcon = PointerIcon.getSystemIcon(this, pointerType(name))
     }
 
     /** An app-list entry to launch, and the action ("" for none). */
@@ -410,14 +410,10 @@ class GuiWindowActivity : Activity(), WindowHost {
 
     companion object {
         internal const val SCHEME = "pocketnix-gui"
-        private const val RESIZE_DEBOUNCE_MS = 150L
         private const val TAG = "GuiWindowActivity"
         private const val KEY_WINDOW = "window"
         private const val KEY_LAUNCH = "launch"
-        private const val MOVE_TO_TAB = "Move to a terminal tab"
-        private const val BAR_DP = 36
-        private const val BAR_BACKGROUND = 0xff1e1e1e.toInt()
-        private const val BAR_TEXT = 0xffdddddd.toInt()
+        private const val BAR_REVEAL_MS = 4_000L
 
         /**
          * Launches entry [app] ([action] "" for none) on a splash that becomes

@@ -201,6 +201,7 @@ class Vm(private val app: Context) {
                 if (on != null) gui.shortcuts.setLauncherEnabled(on)
             }
         }
+        scope.launch { control.config.map { it?.gui }.distinctUntilChanged().collect { gui.config(it) } }
         scope.launch {
             combine(control.config, state) { cfg, s -> cfg?.forwards.orEmpty() to (s == VmState.Running) }
                 .distinctUntilChanged()

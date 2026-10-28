@@ -88,6 +88,13 @@ object Gui {
             .put("fullscreen", state.fullscreen),
     )
 
+    /** New windows' size factors: [size] for any entry, [apps] by entry id for those that differ. */
+    fun settings(size: Float, apps: Map<String, Float>): ByteArray {
+        val o = JSONObject()
+        for ((id, f) in apps) o.put(id, JSONObject().put("size", f.toDouble()))
+        return json(JSONObject().put("type", "settings").put("size", size.toDouble()).put("apps", o))
+    }
+
     fun close(window: Int): ByteArray = json(JSONObject().put("type", "close").put("id", window.toUInt().toLong()))
 
     /** Moves [window] into the terminal tab with agent id [tab], or "" to its own task. */
@@ -208,6 +215,10 @@ sealed interface GuiMessage {
         val launch: String = "",
         /** "" for its own task, else the terminal tab it follows. */
         val tab: String = "",
+        /** The scale its pixel sizes were computed with; 0 from a compositor that didn't say. */
+        val scale: Float = 0f,
+        /** Whether its client has a wl_touch. */
+        val touch: Boolean = false,
     ) : GuiMessage {
         val isDialog: Boolean get() = window != id
     }
@@ -291,6 +302,8 @@ class GuiReader(private val input: InputStream) {
                     app = o.optString("app"),
                     launch = o.optString("launch"),
                     tab = o.optString("tab"),
+                    scale = o.optDouble("scale", 0.0).toFloat().takeIf { it.isFinite() && it > 0f } ?: 0f,
+                    touch = o.optBoolean("touch"),
                 )
                 "toplevel-removed" -> GuiMessage.ToplevelRemoved(o.id("id"))
                 "toplevel-request" -> GuiMessage.ToplevelRequest(o.id("id"), o.optString("request"))
