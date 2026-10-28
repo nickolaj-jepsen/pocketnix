@@ -18,6 +18,11 @@ pub const POINTER_AXIS: u8 = 0x22;
 pub const POINTER_LEAVE: u8 = 0x23;
 pub const KEY: u8 = 0x30;
 pub const MODIFIERS: u8 = 0x31;
+pub const TOUCH_DOWN: u8 = 0x40;
+pub const TOUCH_UP: u8 = 0x41;
+pub const TOUCH_MOTION: u8 = 0x42;
+pub const TOUCH_CANCEL: u8 = 0x43;
+pub const TOUCH_FRAME: u8 = 0x44;
 
 pub const FLAG_BUFFER: u16 = 1 << 0;
 pub const FLAG_FULL: u16 = 1 << 1;

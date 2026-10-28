@@ -48,6 +48,8 @@ use wayland_client::protocol::wl_shm;
 use wayland_client::protocol::wl_shm::WlShm;
 use wayland_client::protocol::wl_shm_pool::WlShmPool;
 use wayland_client::protocol::wl_surface::WlSurface;
+use wayland_client::protocol::wl_touch;
+use wayland_client::protocol::wl_touch::WlTouch;
 use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1::XdgActivationV1;
 use wayland_protocols::xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1;
 use wayland_protocols::xdg::dialog::v1::client::xdg_wm_dialog_v1::XdgWmDialogV1;
@@ -61,6 +63,10 @@ use wayland_protocols::xdg::shell::client::xdg_toplevel;
 use wayland_protocols::xdg::shell::client::xdg_toplevel::XdgToplevel;
 use wayland_protocols::xdg::shell::client::xdg_wm_base;
 use wayland_protocols::xdg::shell::client::xdg_wm_base::XdgWmBase;
+use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_manager_v3::ZwpTextInputManagerV3;
+use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3;
+use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::ZwpTextInputV3;
+use xkbcommon::xkb;
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -439,7 +445,23 @@ struct Wl {
     pointer: Vec<String>,
     keys: Vec<(u32, u32)>,
     mods_depressed: u32,
+    mods_locked: u32,
+    group: u32,
     keyboard_focus: bool,
+    /// Every keymap the keyboard was sent, in order.
+    keymaps: Vec<String>,
+    /// Key presses, with what was in effect: key, keymap index, depressed
+    /// and locked modifiers, group.
+    presses: Vec<(u32, usize, u32, u32, u32)>,
+    has_touch: bool,
+    /// wl_touch events: "down <id> <x> <y>", "motion …", "up <id>", "frame", "cancel".
+    touch: Vec<String>,
+    /// The surface each `down` went to, in order.
+    touch_surfaces: Vec<WlSurface>,
+    popup_done: bool,
+    /// The surface the text input last entered, and its events.
+    ti_entered: Option<WlSurface>,
+    ti: Vec<String>,
 }
 
 /// A Wayland client drawing known pixels with known damage.
@@ -461,6 +483,9 @@ struct Pattern {
     next: usize,
     width: i32,
     height: i32,
+    seat: WlSeat,
+    /// The last popup `popup_from` opened.
+    popup_surface: Option<WlSurface>,
 }
 
 impl Pattern {
@@ -472,7 +497,6 @@ impl Pattern {
         let shm: WlShm = globals.bind(&qh, 1..=1, ()).unwrap();
         let wm_base: XdgWmBase = globals.bind(&qh, 1..=6, ()).unwrap();
         let seat: WlSeat = globals.bind(&qh, 1..=7, ()).unwrap();
-        let _ = seat;
         let names = globals.contents().with_list(|list| list.iter().map(|g| g.interface.clone()).collect());
 
         // SAFETY: memfd_create with a valid C string.
@@ -512,6 +536,8 @@ impl Pattern {
             next: 0,
             width,
             height,
+            seat,
+            popup_surface: None,
         };
         p.dispatch_until("the initial configure", |s| s.configure.is_some());
         p
@@ -584,7 +610,13 @@ impl Pattern {
         surface.damage_buffer(0, 0, w, h);
         surface.commit();
         self.conn.flush().unwrap();
+        self.popup_surface = Some(surface);
         geometry
+    }
+
+    fn text_input(&mut self) -> ZwpTextInputV3 {
+        let manager: ZwpTextInputManagerV3 = self.registry.bind(&self.qh, 1..=1, ()).unwrap();
+        manager.get_text_input(&self.seat, &self.qh, ())
     }
 
     fn roundtrip(&mut self) {
@@ -1202,6 +1234,236 @@ fn a_dialog_draws_inside_its_parents_window() {
     client.dispatch_until("the parent's keyboard focus back", |s| s.keyboard_surface.as_ref() == Some(&main));
 }
 
+fn f(v: f32) -> [u8; 4] {
+    v.to_be_bytes()
+}
+
+#[test]
+fn touch_lands_on_the_surface_under_each_point() {
+    let compositor = Compositor::start("touch");
+    let mut app = App::connect(&compositor);
+    app.auto_ack = true;
+    app.wait_json("ready");
+    app.send_json(json!({"type": "output", "width": 800, "height": 600, "scale": 1.75, "refresh": 60000}));
+    std::thread::sleep(Duration::from_millis(100));
+
+    let (w, h) = (200, 100);
+    let mut client = Pattern::connect(&compositor, w, h);
+    client.dispatch_until("a wl_touch", |s| s.has_touch);
+    client.draw(&pattern(w, h, 0), [0, 0, w, h], false);
+    let t = app.wait_json("toplevel");
+    assert_eq!((&t["touch"], &t["scale"]), (&json!(true), &json!(1.75)));
+    let window = t["id"].as_u64().unwrap() as u32;
+    app.send_json(json!({"type": "window", "id": window, "width": 700, "height": 350, "scale": 1.75,
+        "focused": true, "visible": true, "maximized": false, "fullscreen": false}));
+    client.dispatch_until("the window's configure", |s| s.size == (400, 200));
+
+    // At 1.75 a popup's edges round on their own: logical (160, 70) to (200, 100).
+    assert_eq!(client.popup([150, 60, 10, 10], (40, 30)), (160, 70, 40, 30));
+    let popup = app.wait_json_where("surface", |v| v["role"] == "popup")["id"].as_u64().unwrap() as u32;
+    let commit = app.wait_commit("the popup's commit", |c| c.surface == popup && c.flags & FLAG_BUFFER != 0);
+    assert_eq!((commit.x, commit.y, commit.dst_width, commit.dst_height), (280, 123, 70, 52));
+
+    let w32 = window.to_be_bytes();
+    // One finger on the toplevel, then one on the popup, in window pixels.
+    app.send_binary(0x40, &[&w32, &7u32.to_be_bytes(), &f(35.0), &f(52.5)]);
+    app.send_binary(0x44, &[&w32]);
+    app.send_binary(0x40, &[&w32, &9u32.to_be_bytes(), &f(297.5), &f(140.0)]);
+    app.send_binary(0x44, &[&w32]);
+    // The first moves past its surface's edge and stays its surface's.
+    app.send_binary(0x42, &[&w32, &7u32.to_be_bytes(), &f(420.0), &f(280.0)]);
+    app.send_binary(0x44, &[&w32]);
+    app.send_binary(0x41, &[&w32, &7u32.to_be_bytes()]);
+    app.send_binary(0x41, &[&w32, &9u32.to_be_bytes()]);
+    app.send_binary(0x44, &[&w32]);
+    client.dispatch_until("both points up", |s| s.touch.iter().filter(|e| *e == "frame").count() == 4);
+    assert_eq!(
+        client.state.touch,
+        ["down 0 20 30", "frame", "down 1 10 10", "frame", "motion 0 240 160", "frame", "up 0", "up 1", "frame"]
+    );
+    let popup_surface = client.popup_surface.clone().unwrap();
+    assert_eq!(client.state.touch_surfaces, [client.surface.clone(), popup_surface]);
+
+    // A cancel ends a point without effect.
+    client.state.touch.clear();
+    app.send_binary(0x40, &[&w32, &7u32.to_be_bytes(), &f(35.0), &f(52.5)]);
+    app.send_binary(0x44, &[&w32]);
+    app.send_binary(0x43, &[&w32]);
+    app.send_binary(0x41, &[&w32, &7u32.to_be_bytes()]);
+    app.send_binary(0x44, &[&w32]);
+    client.dispatch_until("the cancel", |s| s.touch.iter().any(|e| e == "cancel"));
+    client.roundtrip();
+    assert_eq!(client.state.touch[..2], ["down 0 20 30", "frame"]);
+    assert_eq!(client.state.touch.last().map(String::as_str), Some("cancel"));
+    assert!(!client.state.touch.iter().any(|e| e.starts_with("up")), "{:?}", client.state.touch);
+
+    // A new scale dismisses the popups, placed for the old logical size.
+    app.send_json(json!({"type": "window", "id": window, "width": 700, "height": 350, "scale": 2.0,
+        "focused": true, "visible": true, "maximized": false, "fullscreen": false}));
+    client.dispatch_until("the popup's dismissal", |s| s.popup_done);
+}
+
+#[test]
+fn a_new_window_opens_at_its_apps_size_factor() {
+    let entry = "[Desktop Entry]\nType=Application\nName=Pattern\nExec=true\n";
+    let (compositor, dir, _) = start_launcher("settings", &[("test.pattern", entry.into())]);
+    let mut app = connect_ready(&compositor);
+    app.send_json(json!({"type": "output", "width": 800, "height": 600, "scale": 2.0, "refresh": 60000}));
+    app.send_json(json!({"type": "settings", "size": 0.75, "apps": {"test.pattern": {"size": 0.5}}}));
+    std::thread::sleep(Duration::from_millis(100));
+    let (w, h) = (200, 100);
+    let mut client = Pattern::connect(&compositor, w, h);
+    assert_eq!(client.state.size, (800, 600), "the output's size at 2 × 0.5");
+    client.draw(&pattern(w, h, 0), [0, 0, w, h], false);
+    let t = app.wait_json("toplevel");
+    assert_eq!((&t["scale"], &t["width"]), (&json!(1.0), &json!(200)));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn text_input_bridges_the_ime() {
+    let compositor = Compositor::start("text-input");
+    let mut app = connect_ready(&compositor);
+    app.send_json(json!({"type": "output", "width": 800, "height": 600, "scale": 2.0, "refresh": 60000}));
+    std::thread::sleep(Duration::from_millis(100));
+    let (w, h) = (200, 100);
+    let mut client = Pattern::connect(&compositor, w, h);
+    let ti = client.text_input();
+    client.draw(&pattern(w, h, 0), [0, 0, w, h], false);
+    let window = app.wait_json("toplevel")["id"].as_u64().unwrap() as u32;
+    app.send_json(json!({"type": "window", "id": window, "width": 400, "height": 200, "scale": 2.0,
+        "focused": true, "visible": true, "maximized": false, "fullscreen": false}));
+    let main = client.surface.clone();
+    client.dispatch_until("the text input's enter", |s| s.ti_entered.as_ref() == Some(&main));
+
+    // Offsets are UTF-8 bytes: the cursor is after "wö", byte 10 of 13.
+    ti.enable();
+    ti.set_surrounding_text("héllo wörld".into(), 10, 10);
+    ti.set_content_type(
+        zwp_text_input_v3::ContentHint::Spellcheck | zwp_text_input_v3::ContentHint::Multiline,
+        zwp_text_input_v3::ContentPurpose::Email,
+    );
+    ti.set_cursor_rectangle(10, 5, 2, 12);
+    ti.commit();
+    client.roundtrip();
+    let state = app.wait_json_where("text-input", |v| v["session"] != 0);
+    assert_eq!(
+        state,
+        json!({"type": "text-input", "window": window, "session": 1, "applied": 0, "text": "héllo wörld",
+            "cursor": 10, "anchor": 10, "cause": "other", "purpose": "email", "hints": ["spellcheck", "multiline"],
+            "cursorRect": {"x": 20, "y": 10, "width": 4, "height": 24}})
+    );
+
+    // Replace "ö" (2 bytes) with "ø", and show a preedit after it.
+    app.send_json(json!({"type": "ime", "session": 1, "serial": 1, "deleteBefore": 2, "commit": "ø", "preedit": "ab"}));
+    client.dispatch_until("the IME's done", |s| s.ti.iter().any(|e| e.starts_with("done")));
+    assert_eq!(client.state.ti, ["delete 2 0", "commit ø", "preedit ab 2 2", "done 1"]);
+    ti.set_surrounding_text("héllo wørld".into(), 10, 10);
+    ti.set_text_change_cause(zwp_text_input_v3::ChangeCause::InputMethod);
+    ti.commit();
+    client.roundtrip();
+    let applied = app.wait_json_where("text-input", |v| v["applied"] == 1);
+    assert_eq!(
+        (&applied["session"], &applied["text"], &applied["cause"]),
+        (&json!(1), &json!("héllo wørld"), &json!("input-method"))
+    );
+
+    // A new connection replays it, its sessions counting from 1 again.
+    let mut app = App::connect(&compositor);
+    app.auto_ack = true;
+    let replayed = app.wait_json("text-input");
+    assert_eq!(
+        (&replayed["session"], &replayed["applied"], &replayed["text"]),
+        (&json!(1), &json!(0), &json!("héllo wørld"))
+    );
+    app.wait_json("ready");
+
+    // Enabling again is a new session, and an edit for the old one is dropped.
+    ti.enable();
+    ti.commit();
+    client.roundtrip();
+    let fresh = app.wait_json_where("text-input", |v| v["session"] == 2);
+    assert_eq!(fresh["text"], Value::Null);
+    client.state.ti.clear();
+    app.send_json(json!({"type": "ime", "session": 1, "serial": 1, "commit": "stale"}));
+    app.send_json(json!({"type": "ime", "session": 2, "serial": 2, "commit": "fresh"}));
+    client.dispatch_until("the IME's done", |s| s.ti.iter().any(|e| e.starts_with("done")));
+    assert_eq!(client.state.ti, ["commit fresh", "done 3"]);
+
+    ti.disable();
+    ti.commit();
+    client.roundtrip();
+    let ended = app.wait_json_where("text-input", |v| v["session"] == 0);
+    assert_eq!(ended["window"], 0);
+}
+
+/// The keysym each key press typed, from the keymap and modifiers in effect.
+fn typed(s: &Wl) -> Vec<u32> {
+    let ctx = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+    s.presses
+        .iter()
+        .map(|(key, keymap, depressed, locked, group)| {
+            let keymap = xkb::Keymap::new_from_string(&ctx, s.keymaps[*keymap].clone(), xkb::KEYMAP_FORMAT_TEXT_V1, 0).unwrap();
+            let mut state = xkb::State::new(&keymap);
+            state.update_mask(*depressed, 0, *locked, 0, 0, *group);
+            state.key_get_one_sym(xkb::Keycode::new(key + 8)).raw()
+        })
+        .collect()
+}
+
+/// Whether any key of `keymap` types `sym`.
+fn keymap_has(keymap: &str, sym: u32) -> bool {
+    let ctx = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+    let keymap = xkb::Keymap::new_from_string(&ctx, keymap.to_owned(), xkb::KEYMAP_FORMAT_TEXT_V1, 0).unwrap();
+    (keymap.min_keycode().raw()..=keymap.max_keycode().raw()).any(|k| {
+        let k = xkb::Keycode::new(k);
+        (0..keymap.num_layouts_for_key(k)).any(|l| {
+            (0..keymap.num_levels_for_key(k, l))
+                .any(|v| keymap.key_get_syms_by_level(k, l, v).iter().any(|s| s.raw() == sym))
+        })
+    })
+}
+
+#[test]
+fn text_becomes_key_presses_in_the_guests_layout() {
+    let compositor = Compositor::start_with("typing", |cmd| {
+        cmd.env_remove("XKB_DEFAULT_LAYOUT").env_remove("XKB_DEFAULT_VARIANT");
+    });
+    let mut app = connect_ready(&compositor);
+    std::thread::sleep(Duration::from_millis(100));
+    let (w, h) = (200, 100);
+    let mut client = Pattern::connect(&compositor, w, h);
+    client.draw(&pattern(w, h, 0), [0, 0, w, h], false);
+    let window = app.wait_json("toplevel")["id"].as_u64().unwrap() as u32;
+    app.send_json(json!({"type": "window", "id": window, "width": 400, "height": 300, "scale": 1.0,
+        "focused": true, "visible": true, "maximized": false, "fullscreen": false}));
+    client.dispatch_until("keyboard focus", |s| s.keyboard_focus && !s.keymaps.is_empty());
+
+    // "語" isn't in the layout: it's typed through a keymap with it, and the layout's comes back.
+    // BEL, a control character, is dropped.
+    let cjk = 0x0100_8a9e;
+    app.send_json(json!({"type": "text", "window": window, "text": "hI!\n語a\u{7}"}));
+    client.dispatch_until("six key presses", |s| s.presses.len() == 6);
+    client.roundtrip();
+    assert_eq!(typed(&client.state), [0x68, 0x49, 0x21, 0xff0d, cjk, 0x61]);
+    assert!(keymap_has(&client.state.keymaps[client.state.presses[4].1], cjk));
+    let last = client.state.keymaps.last().unwrap();
+    assert!(!keymap_has(last, cjk), "the layout's keymap wasn't restored");
+    assert_eq!(client.state.mods_depressed, 0, "a typed character's modifiers stayed");
+
+    // The guest's layout: "z" is on the Y key in German.
+    const KEY_Y: u32 = 21;
+    app.send_json(json!({"type": "keyboard-layout", "layout": "de", "variant": ""}));
+    app.send_json(json!({"type": "text", "window": window, "text": "z"}));
+    client.dispatch_until("a key press", |s| s.presses.len() == 7);
+    assert_eq!(client.state.presses[6].0, KEY_Y);
+    // One that doesn't compile keeps it.
+    app.send_json(json!({"type": "keyboard-layout", "layout": "no-such-layout", "variant": ""}));
+    app.send_json(json!({"type": "text", "window": window, "text": "z"}));
+    client.dispatch_until("a key press", |s| s.presses.len() == 8);
+    assert_eq!(client.state.presses[7].0, KEY_Y);
+}
+
 /// Not a test on its own: the Wayland client the launch and tab tests
 /// start, when `PNC_CHILD` names its app id. It activates with
 /// `XDG_ACTIVATION_TOKEN` between its first commit and its first buffer, as
@@ -1328,8 +1590,10 @@ impl Dispatch<XdgSurface, u32> for Wl {
 
 impl Dispatch<XdgPopup, ()> for Wl {
     fn event(state: &mut Self, _: &XdgPopup, event: xdg_popup::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
-        if let xdg_popup::Event::Configure { x, y, width, height } = event {
-            state.popup_geometry = Some((x, y, width, height));
+        match event {
+            xdg_popup::Event::Configure { x, y, width, height } => state.popup_geometry = Some((x, y, width, height)),
+            xdg_popup::Event::PopupDone => state.popup_done = true,
+            _ => {}
         }
     }
 }
@@ -1377,7 +1641,7 @@ impl Dispatch<WlCallback, ()> for Wl {
 }
 
 impl Dispatch<WlSeat, ()> for Wl {
-    fn event(_: &mut Self, seat: &WlSeat, event: wl_seat::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
+    fn event(state: &mut Self, seat: &WlSeat, event: wl_seat::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
         if let wl_seat::Event::Capabilities { capabilities: WEnum::Value(caps) } = event {
             if caps.contains(wl_seat::Capability::Pointer) {
                 seat.get_pointer(qh, ());
@@ -1385,6 +1649,46 @@ impl Dispatch<WlSeat, ()> for Wl {
             if caps.contains(wl_seat::Capability::Keyboard) {
                 seat.get_keyboard(qh, ());
             }
+            if caps.contains(wl_seat::Capability::Touch) && !state.has_touch {
+                seat.get_touch(qh, ());
+                state.has_touch = true;
+            }
+        }
+    }
+}
+
+impl Dispatch<WlTouch, ()> for Wl {
+    fn event(state: &mut Self, _: &WlTouch, event: wl_touch::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        match event {
+            wl_touch::Event::Down { surface, id, x, y, .. } => {
+                state.touch.push(format!("down {id} {x} {y}"));
+                state.touch_surfaces.push(surface);
+            }
+            wl_touch::Event::Motion { id, x, y, .. } => state.touch.push(format!("motion {id} {x} {y}")),
+            wl_touch::Event::Up { id, .. } => state.touch.push(format!("up {id}")),
+            wl_touch::Event::Frame => state.touch.push("frame".into()),
+            wl_touch::Event::Cancel => state.touch.push("cancel".into()),
+            _ => {}
+        }
+    }
+}
+
+wayland_client::delegate_noop!(Wl: ignore ZwpTextInputManagerV3);
+
+impl Dispatch<ZwpTextInputV3, ()> for Wl {
+    fn event(state: &mut Self, _: &ZwpTextInputV3, event: zwp_text_input_v3::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        match event {
+            zwp_text_input_v3::Event::Enter { surface } => state.ti_entered = Some(surface),
+            zwp_text_input_v3::Event::Leave { .. } => state.ti_entered = None,
+            zwp_text_input_v3::Event::PreeditString { text, cursor_begin, cursor_end } => {
+                state.ti.push(format!("preedit {} {cursor_begin} {cursor_end}", text.unwrap_or_default()))
+            }
+            zwp_text_input_v3::Event::CommitString { text } => state.ti.push(format!("commit {}", text.unwrap_or_default())),
+            zwp_text_input_v3::Event::DeleteSurroundingText { before_length, after_length } => {
+                state.ti.push(format!("delete {before_length} {after_length}"))
+            }
+            zwp_text_input_v3::Event::Done { serial } => state.ti.push(format!("done {serial}")),
+            _ => {}
         }
     }
 }
@@ -1415,8 +1719,24 @@ impl Dispatch<WlKeyboard, ()> for Wl {
                 state.keyboard_focus = false;
                 state.keyboard_surface = None;
             }
-            wl_keyboard::Event::Key { key, state: WEnum::Value(s), .. } => state.keys.push((key, s as u32)),
-            wl_keyboard::Event::Modifiers { mods_depressed, .. } => state.mods_depressed = mods_depressed,
+            wl_keyboard::Event::Key { key, state: WEnum::Value(s), .. } => {
+                state.keys.push((key, s as u32));
+                if s == wl_keyboard::KeyState::Pressed {
+                    let keymap = state.keymaps.len().saturating_sub(1);
+                    state.presses.push((key, keymap, state.mods_depressed, state.mods_locked, state.group));
+                }
+            }
+            wl_keyboard::Event::Modifiers { mods_depressed, mods_locked, group, .. } => {
+                state.mods_depressed = mods_depressed;
+                state.mods_locked = mods_locked;
+                state.group = group;
+            }
+            wl_keyboard::Event::Keymap { fd, size, .. } => {
+                let mut buf = vec![0; size as usize];
+                std::fs::File::from(fd).read_exact_at(&mut buf, 0).unwrap();
+                let text = String::from_utf8(buf).unwrap();
+                state.keymaps.push(text.trim_end_matches('\0').to_owned());
+            }
             _ => {}
         }
     }

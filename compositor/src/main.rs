@@ -7,12 +7,15 @@ mod damage;
 mod flush;
 mod gui;
 mod icons;
+mod keyboard;
 mod launch;
 mod launcher;
 mod popup;
 mod protocol;
 mod state;
 mod surface;
+mod text_input;
+mod touch;
 mod watch;
 mod windows;
 

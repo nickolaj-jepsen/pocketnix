@@ -64,6 +64,7 @@ impl State {
     pub fn flush(&mut self) {
         self.grabs.retain(|p| p.alive());
         self.update_tree();
+        self.touch_unmapped();
         let windows: Vec<(u32, Vec<Member>)> = self.tree.windows.iter().map(|w| (w.id, w.members.clone())).collect();
         let mut layouts = std::collections::HashMap::new();
         for (window, members) in &windows {
@@ -87,6 +88,7 @@ impl State {
             }
         }
         self.windowless_callbacks();
+        self.sync_text_input();
     }
 
     /// Tells the app about toplevels it knows that went away or now draw
@@ -155,7 +157,7 @@ impl State {
 
     /// Tells a surface the scale its window renders at, and the client its
     /// integer scale, when they changed.
-    fn apply_scale(&mut self, surface: &WlSurface, scale: f64, root: bool) {
+    pub fn apply_scale(&mut self, surface: &WlSurface, scale: f64, root: bool) {
         let changed = compositor::with_states(surface, |d| {
             let changed = with_surf(d, |s| {
                 let changed = s.applied_scale != Some(scale);
@@ -227,7 +229,9 @@ impl State {
             "minHeight": to_px(min.h, scale),
             "maxWidth": to_px(max.w, scale),
             "maxHeight": to_px(max.h, scale),
+            "scale": scale,
             "decoration": decoration,
+            "touch": self.client_has_touch(root),
         })
     }
 

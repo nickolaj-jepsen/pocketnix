@@ -100,6 +100,9 @@ use crate::surface::Surf;
 use crate::surface::SurfCell;
 use crate::surface::wire_format;
 use crate::surface::with_surf;
+use crate::text_input::TextInputs;
+use crate::touch::PerPointGrab;
+use crate::touch::Touch;
 use crate::watch::Inotify;
 use crate::windows::Dialog;
 use crate::windows::Drag;
@@ -116,11 +119,25 @@ pub struct OutputCfg {
 }
 
 impl OutputCfg {
-    pub fn logical_size(&self) -> Size<i32, Logical> {
+    /// The output's size in logical pixels of a window at `scale`.
+    pub fn logical_size_at(&self, scale: f64) -> Size<i32, Logical> {
         Size::from((
-            (self.width as f64 / self.scale).round() as i32,
-            (self.height as f64 / self.scale).round() as i32,
+            (self.width as f64 / scale).round() as i32,
+            (self.height as f64 / scale).round() as i32,
         ))
+    }
+}
+
+/// The size factors new windows open at, from the app's `settings`.
+#[derive(Clone, Debug)]
+pub struct Settings {
+    pub size: f64,
+    pub apps: HashMap<String, f64>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { size: 1.0, apps: HashMap::new() }
     }
 }
 
@@ -164,11 +181,18 @@ pub struct State {
     pub seat: Seat<State>,
     pub output: Output,
     pub output_cfg: OutputCfg,
+    pub settings: Settings,
+    /// The XKB layout and variant from the app's `keyboard-layout`; empty
+    /// for the compositor's own default.
+    pub keyboard_layout: (String, String),
     next_surface_id: u32,
 
     pub gui: Gui,
     /// Per window id, from the app.
     pub windows: HashMap<u32, WindowCfg>,
+    /// Per toplevel id, the scale it was first configured at, until the
+    /// app's first `window` for it.
+    pub initial_scales: HashMap<u32, f64>,
     /// Per window id, the surfaces as the last flush laid them out.
     pub layouts: HashMap<u32, Vec<Layer>>,
     /// Frame callbacks sent to the app with a commit, per window id, with
@@ -199,6 +223,8 @@ pub struct State {
     /// `POCKETNIX_TAB` per client, read once.
     pub client_tabs: HashMap<ClientId, Option<String>>,
     pub input_serials: InputSerials,
+    pub touch: Touch,
+    pub ti: TextInputs,
 
     pub env: Env,
     pub apps: AppList,
@@ -227,6 +253,8 @@ impl State {
         seat.add_keyboard(Default::default(), 400, 25)
             .map_err(|e| anyhow::anyhow!("keyboard: {e:?}"))?;
         seat.add_pointer();
+        seat.add_touch_with_default_grab(|| Box::new(PerPointGrab::new()));
+        crate::text_input::create_global(dh);
 
         let primary_selection_state = PrimarySelectionState::new::<Self>(dh);
         // Clipboard tools (wl-copy, the guest's clipboard bridge) need no surface with these.
@@ -278,9 +306,12 @@ impl State {
             seat,
             output,
             output_cfg,
+            settings: Settings::default(),
+            keyboard_layout: Default::default(),
             next_surface_id: 1,
             gui,
             windows: HashMap::new(),
+            initial_scales: HashMap::new(),
             layouts: HashMap::new(),
             held: HashMap::new(),
             cb_surfaces: Vec::new(),
@@ -300,6 +331,8 @@ impl State {
             drag: None,
             client_tabs: HashMap::new(),
             input_serials: InputSerials::default(),
+            touch: Touch::default(),
+            ti: TextInputs::default(),
             env: Env::from_process(),
             apps: AppList::default(),
             hashes: HashCache::default(),
@@ -342,12 +375,13 @@ impl State {
         self.client_scales.clear();
     }
 
-    /// The scale a window's surfaces render at: the app's, or the output's
-    /// until the app has said.
+    /// The scale a window's surfaces render at: the app's, or until the app
+    /// has said, the one it was first configured at, or the output's.
     pub fn window_scale(&self, window: u32) -> f64 {
         self.windows
             .get(&window)
             .map(|w| w.scale)
+            .or_else(|| self.initial_scales.get(&window).copied())
             .filter(|s| *s > 0.0)
             .unwrap_or(self.output_cfg.scale)
     }
@@ -376,11 +410,24 @@ impl State {
             .cloned()
     }
 
-    fn initial_configure(&self, toplevel: &ToplevelSurface) {
+    fn initial_configure(&mut self, toplevel: &ToplevelSurface) {
         let id = surface_id(toplevel.wl_surface()).unwrap_or(0);
         let cfg = self.windows.get(&id).copied();
-        let output = self.output_cfg.logical_size();
         let parent = toplevel.parent();
+        if cfg.is_none() {
+            // A window opens at its entry's size factor, a dialog at its window's scale.
+            let scale = match &parent {
+                Some(p) => self.window_of(p).map_or(self.output_cfg.scale, |w| self.window_scale(w)),
+                None => {
+                    let entry = self.entry_for_new(id, toplevel);
+                    let factor = entry.and_then(|e| self.settings.apps.get(&e).copied()).unwrap_or(self.settings.size);
+                    self.output_cfg.scale * factor
+                }
+            };
+            self.initial_scales.insert(id, scale);
+            self.apply_scale(toplevel.wl_surface(), scale, true);
+        }
+        let output = self.output_cfg.logical_size_at(self.window_scale(id));
         let has_parent = parent.is_some();
         let bounds = parent.and_then(|p| self.dialog_bounds(&p)).unwrap_or(output);
         toplevel.with_pending_state(|s| {
@@ -767,23 +814,31 @@ impl XdgShellHandler for State {
         self.toplevel_request(&surface, "minimize");
     }
 
-    fn move_request(&mut self, surface: ToplevelSurface, _seat: WlSeat, _serial: Serial) {
+    fn move_request(&mut self, surface: ToplevelSurface, _seat: WlSeat, serial: Serial) {
         let Some(id) = surface_id(surface.wl_surface()) else { return };
         if !self.is_dialog(id) {
             self.toplevel_request(&surface, "move");
             return;
         }
-        // A dialog follows the pointer while the button that started it is held.
+        // A dialog follows the pointer while the button that started it is
+        // held, or the touch point whose down it names until it lifts.
         let Some((window, parent)) = self.tree.of.get(&id).copied() else { return };
-        let Some(pointer) = self.seat.get_pointer() else { return };
-        if self.pressed_buttons.is_empty() || self.pointer_window != Some(window) {
-            return;
-        }
+        let (touch, start) = match self.touch_point_by_serial(serial) {
+            Some((point, at)) if point.0 == window => (Some(point), at),
+            _ => {
+                let Some(pointer) = self.seat.get_pointer() else { return };
+                if self.pressed_buttons.is_empty() || self.pointer_window != Some(window) {
+                    return;
+                }
+                (None, pointer.current_location())
+            }
+        };
         let origin = |id| self.tree.origin.get(&id).copied().unwrap_or_default();
         self.drag = Some(Drag {
             dialog: id,
             window,
-            start: pointer.current_location(),
+            touch,
+            start,
             start_offset: origin(id) - origin(parent),
         });
     }
@@ -833,6 +888,7 @@ impl SeatHandler for State {
         let client = focused.and_then(|s| self.dh.get_client(s.id()).ok());
         set_data_device_focus(&self.dh, seat, client.clone());
         set_primary_focus(&self.dh, seat, client);
+        self.text_input_focus(focused.cloned());
     }
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
@@ -935,7 +991,11 @@ smithay::delegate_compositor!(State);
 smithay::delegate_xdg_shell!(State);
 smithay::delegate_xdg_decoration!(State);
 smithay::delegate_shm!(State);
-smithay::delegate_seat!(State);
+// The seat as smithay::delegate_seat! has it, but for wl_seat and wl_touch,
+// which crate::touch dispatches to count each client's wl_touch.
+smithay::reexports::wayland_server::delegate_global_dispatch!(State: [WlSeat: smithay::wayland::seat::SeatGlobalData<State>] => SeatState<State>);
+smithay::reexports::wayland_server::delegate_dispatch!(State: [smithay::reexports::wayland_server::protocol::wl_pointer::WlPointer: smithay::wayland::seat::PointerUserData<State>] => SeatState<State>);
+smithay::reexports::wayland_server::delegate_dispatch!(State: [smithay::reexports::wayland_server::protocol::wl_keyboard::WlKeyboard: smithay::wayland::seat::KeyboardUserData<State>] => SeatState<State>);
 smithay::delegate_data_device!(State);
 smithay::delegate_primary_selection!(State);
 smithay::delegate_ext_data_control!(State);

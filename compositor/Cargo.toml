@@ -25,6 +25,7 @@ zstd = "0.13.3"
 wayland-client = "0.31.11"
 png = "0.18"
 wayland-protocols = { version = "0.32.9", features = ["client", "staging", "unstable"] }
+xkbcommon = "0.8.0"
 
 [profile.release]
 debug = "line-tables-only"

@@ -68,10 +68,12 @@ pub struct Dialog {
     pub raised: u64,
 }
 
-/// A dialog following the pointer after its `move` request.
+/// A dialog following the pointer, or a touch point, after its `move` request.
 pub struct Drag {
     pub dialog: u32,
     pub window: u32,
+    /// The touch point it follows, by window and id; None for the pointer.
+    pub touch: Option<(u32, u32)>,
     pub start: Point<f64, Logical>,
     pub start_offset: Point<i32, Logical>,
 }
@@ -275,6 +277,29 @@ impl State {
         meta.tab = tab;
     }
 
+    /// The entry a toplevel that hasn't mapped yet belongs to, as far as
+    /// is known when its first configure goes out: a pending launch whose
+    /// token it activated with or whose scope it runs in, else its app id's.
+    pub fn entry_for_new(&self, id: u32, toplevel: &ToplevelSurface) -> Option<String> {
+        let pending = |l: &&launch::Launch| l.outcome == Outcome::Pending;
+        if let Some(l) = self.activations.get(&id).and_then(|l| self.launches.get(l)).filter(pending) {
+            return Some(l.app.clone());
+        }
+        let pid = toplevel
+            .wl_surface()
+            .client()
+            .and_then(|c| self.dh.backend_handle().get_client_credentials(c.id()).ok())
+            .map(|c| c.pid as u32);
+        if let Some(pid) = pid {
+            let mut launches: Vec<&launch::Launch> = self.launches.values().filter(pending).collect();
+            launches.sort_by_key(|l| l.started);
+            if let Some(l) = launches.into_iter().find(|l| launch::in_scope(pid, &l.unit)) {
+                return Some(l.app.clone());
+            }
+        }
+        self.apps.for_app_id(&app_id(toplevel)).map(|e| e.id.clone())
+    }
+
     /// `POCKETNIX_TAB` from the client's own environment, read once per client.
     fn client_tab(&mut self, toplevel: &ToplevelSurface) -> Option<String> {
         let client = toplevel.wl_surface().client()?;
@@ -464,6 +489,7 @@ impl State {
     /// Forgets what a destroyed toplevel kept for its life.
     pub fn forget_toplevel(&mut self, id: u32) {
         self.meta.remove(&id);
+        self.initial_scales.remove(&id);
         self.dialogs.remove(&id);
         self.activations.remove(&id);
         if self.drag.as_ref().is_some_and(|d| d.dialog == id) {

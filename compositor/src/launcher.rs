@@ -213,7 +213,7 @@ impl State {
         };
         l.token = self.xdg_activation_state.create_external_token(None).0.as_str().to_owned();
         let started = launch::command(&entry, &m.action, &l.token)
-            .and_then(|argv| launch::spawn(&self.env, &entry, &argv, &l.token, &l.tab).map_err(|e| format!("couldn't start: {e}")));
+            .and_then(|argv| launch::spawn(&self.env, &entry, &argv, &l.token, &l.tab, &self.keyboard_layout).map_err(|e| format!("couldn't start: {e}")));
         let (unit, mut child) = match started {
             Ok(s) => s,
             Err(message) => {

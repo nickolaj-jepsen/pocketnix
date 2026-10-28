@@ -90,13 +90,15 @@ pub fn command(entry: &Entry, action: &str, token: &str) -> Result<Vec<String>, 
 }
 
 /// Starts `argv` in its own scope, its output in the journal under the
-/// entry's id. Returns the scope's unit name and the child.
+/// entry's id. Returns the scope's unit name and the child. `layout` is the
+/// XKB layout and variant the app sent, for nested desktops.
 pub fn spawn(
     env: &Env,
     entry: &Entry,
     argv: &[String],
     token: &str,
     tab: &str,
+    layout: &(String, String),
 ) -> std::io::Result<(String, std::process::Child)> {
     let unit = format!("app-pocketnix-{}-{}", systemd_escape(&entry.id), random_hex());
     let mut cmd = Command::new("systemd-cat");
@@ -113,6 +115,9 @@ pub fn spawn(
         cmd.env_remove("POCKETNIX_TAB");
     } else {
         cmd.env("POCKETNIX_TAB", tab);
+    }
+    if !layout.0.is_empty() {
+        cmd.env("XKB_DEFAULT_LAYOUT", &layout.0).env("XKB_DEFAULT_VARIANT", &layout.1);
     }
     let dir = entry
         .working_dir

@@ -50,6 +50,7 @@ use crate::protocol;
 use crate::protocol::Fields;
 use crate::protocol::FrameReader;
 use crate::state::OutputCfg;
+use crate::state::Settings;
 use crate::state::State;
 use crate::state::WindowCfg;
 use crate::state::apply_window_cfg;
@@ -258,6 +259,31 @@ struct CloseMsg {
     id: u32,
 }
 
+#[derive(Deserialize)]
+#[serde(default)]
+struct SettingsMsg {
+    size: f64,
+    apps: HashMap<String, AppSettings>,
+}
+
+impl Default for SettingsMsg {
+    fn default() -> Self {
+        Self { size: 1.0, apps: HashMap::new() }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(default)]
+struct AppSettings {
+    size: f64,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self { size: 1.0 }
+    }
+}
+
 impl State {
     pub fn accept_gui(&mut self, listener: &UnixListener) {
         loop {
@@ -442,6 +468,26 @@ impl State {
                 let (window, mods) = (f.u32()?, f.u8()?);
                 self.modifiers(window, mods);
             }
+            protocol::TOUCH_DOWN => {
+                let (window, id, x, y) = (f.u32()?, f.u32()?, f.f32()?, f.f32()?);
+                self.touch_down(window, id, x, y);
+            }
+            protocol::TOUCH_UP => {
+                let (window, id) = (f.u32()?, f.u32()?);
+                self.touch_up(window, id);
+            }
+            protocol::TOUCH_MOTION => {
+                let (window, id, x, y) = (f.u32()?, f.u32()?, f.f32()?, f.f32()?);
+                self.touch_motion(window, id, x, y);
+            }
+            protocol::TOUCH_CANCEL => {
+                let window = f.u32()?;
+                self.touch_cancel(window);
+            }
+            protocol::TOUCH_FRAME => {
+                let _window = f.u32()?;
+                self.touch_frame();
+            }
             _ => {}
         }
         Ok(())
@@ -495,9 +541,12 @@ impl State {
 
         // The replay names each toplevel's entry, so the list comes first.
         self.scan_apps();
+        self.reset_text_input();
         self.flush();
         let (window, name) = self.cursor.clone();
         self.send_json(json!({"type": "cursor", "window": window, "name": name}));
+        self.ti.hold = false;
+        self.sync_text_input();
         self.send_apps();
         self.send_json(json!({"type": "ready"}));
         Ok(())
@@ -528,6 +577,22 @@ impl State {
                     toplevel.send_close();
                 }
             }
+            "settings" => {
+                let m: SettingsMsg = serde_json::from_value(msg).context("malformed settings")?;
+                let valid = |f: f64| f.is_finite() && f > 0.0;
+                if !valid(m.size) || m.apps.values().any(|a| !valid(a.size)) {
+                    bail!("settings: size factors must be positive");
+                }
+                self.settings = Settings {
+                    size: m.size,
+                    apps: m.apps.into_iter().map(|(id, a)| (id, a.size)).collect(),
+                };
+            }
+            "keyboard-layout" => {
+                self.set_keyboard_layout(serde_json::from_value(msg).context("malformed keyboard-layout")?);
+            }
+            "text" => self.type_text(serde_json::from_value(msg).context("malformed text")?),
+            "ime" => self.on_ime(serde_json::from_value(msg).context("malformed ime")?),
             "move" => self.on_move(serde_json::from_value(msg).context("malformed move")?),
             "icon" => self.on_icon(conn, serde_json::from_value(msg).context("malformed icon")?),
             "launch" => self.on_launch(serde_json::from_value(msg).context("malformed launch")?)?,
@@ -542,7 +607,12 @@ impl State {
         if self.is_dialog(m.id) {
             return;
         }
-        let scale = if m.scale > 0.0 { m.scale } else { self.window_scale(m.id) };
+        let old_scale = self.window_scale(m.id);
+        let scale = if m.scale > 0.0 { m.scale } else { old_scale };
+        if scale != old_scale {
+            // Placed for the old logical size.
+            self.dismiss_popups(m.id);
+        }
         let cfg = WindowCfg {
             width: m.width,
             height: m.height,
@@ -567,6 +637,28 @@ impl State {
         }
     }
 
+    /// Closes every popup drawn in `window`, innermost first.
+    fn dismiss_popups(&mut self, window: u32) {
+        let popups: Vec<_> = self
+            .xdg_shell_state
+            .popup_surfaces()
+            .iter()
+            .filter(|p| p.alive() && self.window_of(p.wl_surface()) == Some(window))
+            .cloned()
+            .collect();
+        if popups.is_empty() {
+            return;
+        }
+        for popup in popups.iter().rev() {
+            popup.send_popup_done();
+        }
+        self.grabs.retain(|g| !popups.contains(g));
+        if self.keyboard_window() == Some(window) {
+            let target = self.focus_target(window);
+            self.set_keyboard_focus(target);
+        }
+    }
+
     fn presented(&mut self, window: u32, seq: u32) {
         let time = self.time_ms();
         if let Some(held) = self.held.get_mut(&window) {
@@ -588,7 +680,7 @@ impl State {
     }
 
     /// `hit_test`'s surface and origin, and the toplevel it belongs to.
-    fn hit_layer(&self, window: u32, p: Point<f64, Logical>) -> Option<(WlSurface, Point<f64, Logical>, u32)> {
+    pub fn hit_layer(&self, window: u32, p: Point<f64, Logical>) -> Option<(WlSurface, Point<f64, Logical>, u32)> {
         let layers = self.layouts.get(&window)?;
         layers.iter().rev().find_map(|l| {
             if !l.mapped || !l.surface.is_alive() {
@@ -612,6 +704,7 @@ impl State {
         let p: Point<f64, Logical> = (x as f64 / scale, y as f64 / scale).into();
         if let Some(drag) = &self.drag
             && drag.window == window
+            && drag.touch.is_none()
         {
             let offset = drag.start_offset + (p - drag.start).to_i32_round();
             self.dialogs.entry(drag.dialog).or_default().offset = Some(offset);
@@ -634,7 +727,7 @@ impl State {
     }
 
     /// Whether `surface` draws in a popup that holds a grab.
-    fn in_grab(&self, surface: &WlSurface) -> bool {
+    pub fn in_grab(&self, surface: &WlSurface) -> bool {
         let mut s = surface.clone();
         while let Some(parent) = compositor::get_parent(&s) {
             s = parent;
@@ -653,7 +746,7 @@ impl State {
             pointer.frame(self);
             return;
         }
-        if !pressed {
+        if !pressed && self.drag.as_ref().is_some_and(|d| d.touch.is_none()) {
             self.drag = None;
         }
         if pressed {
@@ -661,13 +754,7 @@ impl State {
             let target = pointer.current_focus();
             if !self.grabs.is_empty() && !target.as_ref().is_some_and(|t| self.in_grab(t)) {
                 // A press outside a grabbing popup dismisses it, and goes no further.
-                for popup in std::mem::take(&mut self.grabs).into_iter().rev() {
-                    popup.send_popup_done();
-                }
-                if self.keyboard_window() == Some(window) {
-                    let target = self.focus_target(window);
-                    self.set_keyboard_focus(target);
-                }
+                self.dismiss_grabs(window);
                 self.swallowed_buttons.insert(button);
                 pointer.frame(self);
                 return;
@@ -738,6 +825,18 @@ impl State {
         pointer.frame(self);
     }
 
+    /// Dismisses the grabbing popups, handing the keyboard back to
+    /// `window`'s focused toplevel if it had it.
+    pub fn dismiss_grabs(&mut self, window: u32) {
+        for popup in std::mem::take(&mut self.grabs).into_iter().rev() {
+            popup.send_popup_done();
+        }
+        if self.keyboard_window() == Some(window) {
+            let target = self.focus_target(window);
+            self.set_keyboard_focus(target);
+        }
+    }
+
     fn pointer_leave(&mut self, window: u32) {
         let Some(pointer) = self.seat.get_pointer() else { return };
         if !self.dnd_active {
@@ -764,7 +863,7 @@ impl State {
         }
     }
 
-    fn focus_window(&mut self, window: u32) {
+    pub fn focus_window(&mut self, window: u32) {
         if self.keyboard_window() != Some(window) {
             let target = self.focus_target(window);
             if target.is_some() {
