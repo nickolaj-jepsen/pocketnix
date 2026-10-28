@@ -20,6 +20,8 @@ data class VmSettings(
     val network: Boolean,
     /** A name AvfEngine.gpuSpec knows; empty means the default (2d when networked). */
     val gpu: String = "",
+    /** A virtio-snd speaker (no microphone), played through AAudio. */
+    val audio: Boolean = false,
 )
 
 /** What runs the guest: AVF on the phone, or (debug builds) an agent on another machine. */

@@ -53,6 +53,8 @@ class ControlActivity : Activity() {
         if (BuildConfig.DEBUG && intent.hasExtra(EXTRA_GPU)) {
             s.gpu = intent.getStringExtra(EXTRA_GPU).orEmpty().takeUnless { it == "default" }.orEmpty()
         }
+        // Debug builds: `--ez audio true` gives the guest a speaker from the next VM start.
+        if (BuildConfig.DEBUG && intent.hasExtra(EXTRA_AUDIO)) s.audio = intent.getBooleanExtra(EXTRA_AUDIO, false)
         // Debug builds: `--ez guiHashes true` checks every GUI commit against the compositor's content hash.
         if (BuildConfig.DEBUG && intent.hasExtra(EXTRA_GUI_HASHES)) s.guiHashes = intent.getBooleanExtra(EXTRA_GUI_HASHES, false)
         // Debug builds: `--es tcp <host:port>` runs against a desktop agent, `--es tcp ""` back to AVF.
@@ -83,6 +85,7 @@ class ControlActivity : Activity() {
         const val EXTRA_CPUS = "cpus"
         const val EXTRA_GPU = "gpu"
         const val EXTRA_GUI_HASHES = "guiHashes"
+        const val EXTRA_AUDIO = "audio"
         const val EXTRA_PROFILE = "profile"
         const val EXTRA_INPUT = "input"
     }

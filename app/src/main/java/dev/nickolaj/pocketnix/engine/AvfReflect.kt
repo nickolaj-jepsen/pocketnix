@@ -158,6 +158,26 @@ object AvfReflect {
         false
     }
 
+    /**
+     * A speaker and no microphone (the microphone needs RECORD_AUDIO). virtmgr
+     * then runs `crosvm_vu_snd` with the AAudio backend; fixed at VM start.
+     * False when this revision has no AudioConfig or refuses it.
+     */
+    fun setAudioConfig(b: Any): Boolean = runCatching {
+        val cfgCls = Class.forName("$PKG.VirtualMachineCustomImageConfig\$AudioConfig")
+        val audioB = Class.forName("$PKG.VirtualMachineCustomImageConfig\$AudioConfig\$Builder")
+            .getDeclaredConstructor().apply { isAccessible = true }.newInstance()
+        if (!set(audioB, "setUseSpeaker", true)) error("AudioConfig.Builder.setUseSpeaker is missing or failed")
+        set(audioB, "setUseMicrophone", false)
+        val cfg = invoke(audioB, "build") ?: error("AudioConfig.Builder.build() returned null")
+        invoke(b, "setAudioConfig", cfgCls to cfg)
+        Log.i(TAG, "audio config: speaker")
+        true
+    }.getOrElse {
+        Log.w(TAG, "setAudioConfig failed; the guest gets no sound device", it)
+        false
+    }
+
     /** A VirtualMachineCallback proxy; the interface is @SystemApi, so it can't be implemented directly. */
     fun newVmCallback(onError: (Int, String?) -> Unit, onStopped: (Int) -> Unit): Any {
         val cls = Class.forName("$PKG.VirtualMachineCallback")

@@ -115,7 +115,7 @@ class AvfEngine(private val context: Context) : VmEngine {
             AvfReflect.run(v)
             vm = v
             _state.value = VmState.Running
-            Log.i(TAG, "VM running (${settings.memoryMb} MB, cpus=${settings.cpus}, network=${settings.network}, gpu=${settings.gpu.ifEmpty { "-" }})")
+            Log.i(TAG, "VM running (${settings.memoryMb} MB, cpus=${settings.cpus}, network=${settings.network}, gpu=${settings.gpu.ifEmpty { "-" }}, audio=${settings.audio})")
         } catch (e: Throwable) {
             val cause = (e as? java.lang.reflect.InvocationTargetException)?.cause ?: e
             Log.e(TAG, "VM start failed", cause)
@@ -134,6 +134,7 @@ class AvfEngine(private val context: Context) : VmEngine {
         // default is the backend alone: the config the test phone has always run.
         val gpu = if (settings.gpu.isNotEmpty()) gpuSpec(settings.gpu) else if (settings.network) AvfReflect.Gpu("2d") else null
         if (gpu != null) AvfReflect.setGpuConfig(custom, gpu)
+        if (settings.audio) AvfReflect.setAudioConfig(custom)
         // Hands the guest's free pages back to Android while the VM runs.
         AvfReflect.useAutoMemoryBalloon(custom, true)
 
