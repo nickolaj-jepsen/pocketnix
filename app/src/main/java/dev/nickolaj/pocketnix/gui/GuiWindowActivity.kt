@@ -24,7 +24,6 @@ import android.widget.PopupMenu
 import android.widget.TextView
 import android.window.OnBackInvokedDispatcher
 import android.util.Log
-import dev.nickolaj.pocketnix.R
 import dev.nickolaj.pocketnix.engine.VmState
 import dev.nickolaj.pocketnix.ui.missingRequirements
 import dev.nickolaj.pocketnix.vm
@@ -147,7 +146,7 @@ class GuiWindowActivity : Activity(), WindowHost {
             textSize = 18f
             gravity = Gravity.CENTER
             setPadding(pad * 2, 0, pad * 2, 0)
-            contentDescription = getString(R.string.gui_window_menu)
+            contentDescription = "Window menu"
             setOnClickListener { v -> guard("window menu") { showMenu(v) } }
         }
         return LinearLayout(this).apply {
@@ -165,15 +164,15 @@ class GuiWindowActivity : Activity(), WindowHost {
         val targets = vm.tabs.windowTargets()
         if (targets.isEmpty()) {
             // Only a running shell tab has an id the guest knows.
-            m.menu.add(R.string.gui_move_to_tab).isEnabled = false
+            m.menu.add(MOVE_TO_TAB).isEnabled = false
         } else {
-            val sub = m.menu.addSubMenu(R.string.gui_move_to_tab)
+            val sub = m.menu.addSubMenu(MOVE_TO_TAB)
             for (t in targets) {
                 val tab = t.agentId
                 sub.add(t.title).setOnMenuItemClickListener { guard("window ${windowId.u}: move") { vm.gui.move(windowId, tab) }; true }
             }
         }
-        m.menu.add(R.string.gui_close).setOnMenuItemClickListener { guard("window ${windowId.u}: close") { vm.gui.requestClose(windowId) }; true }
+        m.menu.add("Close").setOnMenuItemClickListener { guard("window ${windowId.u}: close") { vm.gui.requestClose(windowId) }; true }
         m.show()
     }
 
@@ -221,7 +220,7 @@ class GuiWindowActivity : Activity(), WindowHost {
         if (s == VmState.Stopped || s is VmState.Failed) {
             val missing = missingRequirements(this, vm)
             if (missing.isNotEmpty()) {
-                splash?.show(SplashStatus(getString(dev.nickolaj.pocketnix.R.string.gui_vm_cant_start, missing.joinToString { it.name }), failed = true))
+                splash?.show(SplashStatus("The VM can't start yet: ${missing.joinToString { it.name }}. pocketnix shows what's missing.", failed = true))
                 return
             }
             // Through the same foreground service the tile uses.
@@ -414,6 +413,7 @@ class GuiWindowActivity : Activity(), WindowHost {
         private const val TAG = "GuiWindowActivity"
         private const val KEY_WINDOW = "window"
         private const val KEY_LAUNCH = "launch"
+        private const val MOVE_TO_TAB = "Move to a terminal tab"
         private const val BAR_DP = 36
         private const val BAR_BACKGROUND = 0xff1e1e1e.toInt()
         private const val BAR_TEXT = 0xffdddddd.toInt()

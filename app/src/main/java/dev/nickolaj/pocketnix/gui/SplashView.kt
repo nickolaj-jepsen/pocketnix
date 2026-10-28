@@ -22,8 +22,8 @@ internal class SplashView(context: Context, onCancel: () -> Unit, onRetry: () ->
     private val status = TextView(context)
     private val progress = ProgressBar(context)
     private val cancel = button(context.getString(android.R.string.cancel), onCancel)
-    private val retry = button(context.getString(R.string.gui_retry), onRetry)
-    private val close = button(context.getString(R.string.gui_close), onClose)
+    private val retry = button("Retry", onRetry)
+    private val close = button("Close", onClose)
 
     init {
         orientation = VERTICAL

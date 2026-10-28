@@ -44,7 +44,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.key
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -55,14 +54,16 @@ import dev.nickolaj.pocketnix.agent.ControlChannel
 import dev.nickolaj.pocketnix.agent.ExtraKey
 import dev.nickolaj.pocketnix.engine.DiskImage
 import dev.nickolaj.pocketnix.engine.VmState
-import dev.nickolaj.pocketnix.R
 import dev.nickolaj.pocketnix.gui.LauncherActivity
 import dev.nickolaj.pocketnix.gui.TabStripItem
 import dev.nickolaj.pocketnix.gui.closingWindows
+import dev.nickolaj.pocketnix.gui.stopQuestion
 import dev.nickolaj.pocketnix.gui.tabStrip
 import dev.nickolaj.pocketnix.terminal.Modifiers
 import dev.nickolaj.pocketnix.terminal.Tab
 import dev.nickolaj.pocketnix.terminal.TerminalTheme
+
+private const val MOVE_OUT = "Move to its own window"
 
 /** Used until the agent sends the module's rows (Termux's defaults). */
 private val defaultExtraKeys = listOf(
@@ -150,7 +151,7 @@ fun MainScreen(vm: Vm) {
             foreground = foreground,
             onStart = { vm.start() },
             onStop = {
-                confirm = "Stop the VM? The guest shuts down and every tab ends. ${closingWindows(vm.gui.windowTitles())}".trim() to vm::stop
+                confirm = stopQuestion(vm.gui.windowTitles()) to vm::stop
             },
             composerOpen = composerOpen,
             onComposer = { composerOpen = !composerOpen },
@@ -164,7 +165,7 @@ fun MainScreen(vm: Vm) {
                 }
             }
             if (shownWindow != 0) {
-                MenuItem(context.getString(R.string.gui_move_out)) { dismiss(); vm.gui.move(shownWindow, "") }
+                MenuItem(MOVE_OUT) { dismiss(); vm.gui.move(shownWindow, "") }
             }
             MenuItem("Commands", enabled = agentUp) { dismiss(); showPalette = true }
             MenuItem("System and updates", enabled = agentUp) { dismiss(); showUpdates = true }
@@ -359,8 +360,8 @@ private fun TabRow(
                             onClose = { onCloseWindow(w.id) },
                         )
                         DropdownMenu(expanded = windowMenu, onDismissRequest = { windowMenu = false }) {
-                            DropdownMenuItem(text = { Text(stringResource(R.string.gui_move_out)) }, onClick = { windowMenu = false; onMoveWindowOut(w.id) })
-                            DropdownMenuItem(text = { Text(stringResource(R.string.gui_close)) }, onClick = { windowMenu = false; onCloseWindow(w.id) })
+                            DropdownMenuItem(text = { Text(MOVE_OUT) }, onClick = { windowMenu = false; onMoveWindowOut(w.id) })
+                            DropdownMenuItem(text = { Text("Close") }, onClick = { windowMenu = false; onCloseWindow(w.id) })
                         }
                     }
                 }

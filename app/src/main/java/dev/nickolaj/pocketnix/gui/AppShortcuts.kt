@@ -66,7 +66,7 @@ class AppShortcuts(private val context: Context, private val catalog: AppCatalog
         handler.post {
             guard("shortcuts: disable $app") {
                 val ids = sm.pinnedShortcuts.filter { it.isEnabled && appOf(it.id) == app }
-                for (s in ids) sm.disableShortcuts(listOf(s.id), context.getString(R.string.gui_app_gone, s.shortLabel ?: app))
+                for (s in ids) sm.disableShortcuts(listOf(s.id), appGone((s.shortLabel ?: app).toString()))
             }
         }
     }
@@ -88,7 +88,7 @@ class AppShortcuts(private val context: Context, private val catalog: AppCatalog
         val gone = pinned.filter { it.isEnabled && appOf(it.id) !in apps }
         if (gone.isNotEmpty()) {
             Log.i(TAG, "disabling pins of apps the guest no longer has: ${gone.map { it.id }}")
-            for (s in gone) sm.disableShortcuts(listOf(s.id), context.getString(R.string.gui_app_gone, s.shortLabel ?: appOf(s.id)))
+            for (s in gone) sm.disableShortcuts(listOf(s.id), appGone((s.shortLabel ?: appOf(s.id)).toString()))
         }
         val present = pinned.filter { appOf(it.id) in apps }
         val back = present.filter { !it.isEnabled }.map { it.id }

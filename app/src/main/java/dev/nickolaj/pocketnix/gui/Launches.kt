@@ -137,6 +137,9 @@ class Launches(private val send: (ByteArray) -> Unit, private val newId: () -> S
 /** What a launch's splash says, and whether it ended without a window. */
 data class SplashStatus(val text: String, val failed: Boolean = false, val canRetry: Boolean = false)
 
+/** Why app-list entry [name] can't launch any more, on its splash and its disabled pins. */
+fun appGone(name: String): String = "$name is no longer installed in the guest."
+
 /**
  * The splash's line for launching [name]: the VM booting, the GUI stream
  * connecting, the app starting, or why none of it worked. [guiEnabled] is
@@ -153,7 +156,7 @@ fun splashStatus(
     launch: LaunchState,
 ): SplashStatus = when {
     launch is LaunchState.Failed -> when (launch.reason) {
-        LaunchState.UNKNOWN -> SplashStatus("$name is no longer installed in the guest.", failed = true)
+        LaunchState.UNKNOWN -> SplashStatus(appGone(name), failed = true)
         LaunchState.CLOSED -> SplashStatus("$name opened and closed its window while pocketnix was away.", failed = true, canRetry = true)
         LaunchState.TIMEOUT -> SplashStatus("$name opened no window. ${launch.message}".trim(), failed = true, canRetry = true)
         else -> SplashStatus("$name couldn't start. ${launch.message}".trim(), failed = true, canRetry = true)

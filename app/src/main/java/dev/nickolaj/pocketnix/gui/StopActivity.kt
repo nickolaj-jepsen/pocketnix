@@ -5,7 +5,6 @@ import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
-import dev.nickolaj.pocketnix.R
 import dev.nickolaj.pocketnix.vm
 
 /**
@@ -22,8 +21,8 @@ class StopActivity : Activity() {
             return
         }
         AlertDialog.Builder(this)
-            .setMessage(getString(R.string.gui_stop_question, closingWindows(windows)))
-            .setPositiveButton(R.string.gui_stop) { _, _ -> guard("stop") { vm.stop() } }
+            .setMessage(stopQuestion(windows))
+            .setPositiveButton("Stop") { _, _ -> guard("stop") { vm.stop() } }
             .setNegativeButton(android.R.string.cancel, null)
             .setOnDismissListener { finish() }
             .show()
@@ -33,6 +32,10 @@ class StopActivity : Activity() {
         fun intent(context: Context): Intent = Intent(context, StopActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
 }
+
+/** The question before stopping the VM, naming the open windows [titles]. */
+fun stopQuestion(titles: List<String>): String =
+    "Stop the VM? The guest shuts down and every tab ends. ${closingWindows(titles)}".trim()
 
 /** "Its windows close too: A, B." for [titles], or "" with none. */
 fun closingWindows(titles: List<String>): String =

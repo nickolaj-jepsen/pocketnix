@@ -370,7 +370,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         val n = Notification.Builder(app, CHANNEL)
             .setSmallIcon(R.drawable.ic_pocketnix)
             .setContentTitle(title)
-            .setContentText(app.getString(R.string.gui_window_opened))
+            .setContentText("Opened a window. Tap to show it.")
             .setContentIntent(pi)
             .setAutoCancel(true)
             .build()

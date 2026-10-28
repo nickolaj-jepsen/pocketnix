@@ -85,8 +85,8 @@ class LauncherActivity : ComponentActivity() {
 
     private fun pin(app: AppEntry) = guard("launcher: pin ${app.id}") {
         when (vm.gui.shortcuts.pin(app)) {
-            AppShortcuts.Pin.ALREADY -> Toast.makeText(this, getString(R.string.gui_already_pinned, app.label), Toast.LENGTH_SHORT).show()
-            AppShortcuts.Pin.UNSUPPORTED -> Toast.makeText(this, R.string.gui_pin_unsupported, Toast.LENGTH_SHORT).show()
+            AppShortcuts.Pin.ALREADY -> Toast.makeText(this, "${app.label} is already on the home screen", Toast.LENGTH_SHORT).show()
+            AppShortcuts.Pin.UNSUPPORTED -> Toast.makeText(this, "This launcher can't add shortcuts", Toast.LENGTH_SHORT).show()
             AppShortcuts.Pin.ASKED -> {}
         }
     }
