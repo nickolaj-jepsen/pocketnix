@@ -77,7 +77,11 @@ class WindowSurface internal constructor(
             main.postDelayed(push, RESIZE_DEBOUNCE_MS)
         }
 
-    /** While set, a swipe up from the view's bottom edge calls it, and that touch never reaches the app. */
+    /**
+     * While set, a finger's swipe up from the view's bottom edge calls it.
+     * The app gets the touch until then, as any other, and the input mode
+     * then cancels it.
+     */
     var onEdgeSwipe: (() -> Unit)? = null
     private var edge = Edge.NONE
     private var edgeStartY = 0f
@@ -157,9 +161,9 @@ class WindowSurface internal constructor(
     }
 
     private fun touch(e: MotionEvent): Boolean {
-        if (edgeSwipe(e)) return true
         // A mouse or touchpad reaches the app in every mode.
         if (!e.isFromSource(InputDevice.SOURCE_TOUCHSCREEN) || e.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE) return input.motion(e)
+        if (edgeSwipe(e)) return true
         // A gesture keeps the mode it started in.
         if (e.actionMasked == MotionEvent.ACTION_DOWN || gesture == null) gesture = pick()
         val g = gesture ?: return false
@@ -186,6 +190,7 @@ class WindowSurface internal constructor(
         if (zoom.reset()) place()
     }
 
+    /** Watches one finger for a swipe up from the bottom edge; true once one took the gesture from the app. */
     private fun edgeSwipe(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -194,16 +199,28 @@ class WindowSurface internal constructor(
                 edge = if (onEdgeSwipe != null && e.y >= height - zone) Edge.TRACKING else Edge.NONE
                 edgeStartY = e.y
             }
+            MotionEvent.ACTION_POINTER_DOWN -> if (edge == Edge.TRACKING) edge = Edge.NONE
             MotionEvent.ACTION_MOVE -> if (edge == Edge.TRACKING && edgeStartY - e.y > EDGE_DP * view.resources.displayMetrics.density) {
                 edge = Edge.DONE
+                // The app has had the touch so far: it ends without effect, as when a system gesture takes it.
+                gesture?.let { g ->
+                    val cancel = MotionEvent.obtain(e).apply { action = MotionEvent.ACTION_CANCEL }
+                    try {
+                        g(cancel)
+                    } finally {
+                        cancel.recycle()
+                    }
+                }
+                gesture = null
                 onEdgeSwipe?.invoke()
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (edge != Edge.NONE) {
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                val took = edge == Edge.DONE
                 edge = Edge.NONE
-                return true
+                return took
             }
         }
-        return edge != Edge.NONE
+        return edge == Edge.DONE
     }
 
     /** A key event for the window; true when it went to the guest. */
