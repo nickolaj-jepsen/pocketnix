@@ -958,8 +958,13 @@ in {
         # Its clients die with it: a switch mustn't close every window. Newer
         # switch-to-configuration restarts changed user units too.
         restartIfChanged = false;
+        # Apps' Exec and TryExec resolve through the user manager's PATH (the
+        # profiles, from pam_env), which a unit's own PATH would replace.
+        enableDefaultPath = false;
         serviceConfig = {
           ExecStart = lib.getExe' gui.package "pocketnix-compositor";
+          # Rescans the app list.
+          ExecReload = "${pkgs.coreutils}/bin/kill -HUP $MAINPID";
           Sockets = ["pocketnix-gui.socket" "pocketnix-wayland.socket"];
         };
       };
@@ -972,12 +977,16 @@ in {
       };
       # A switch turning GUI on finds the user manager running: pam_env set its
       # environment when it started, and an older switch-to-configuration starts
-      # no new user units. Every boot and switch runs this in each user's manager.
+      # no new user units. Every boot and switch runs this in each user's manager,
+      # and a running compositor rescans the apps the switch changed.
       system.userActivationScripts.pocketnix-gui = let
         systemctl = "${config.systemd.package}/bin/systemctl";
       in ''
         ${systemctl} --user set-environment WAYLAND_DISPLAY=${waylandDisplay} NIXOS_OZONE_WL=1
         ${systemctl} --user start --no-block pocketnix-gui.socket pocketnix-wayland.socket
+        if ${systemctl} --user --quiet is-active pocketnix-compositor.service; then
+          ${systemctl} --user reload --no-block pocketnix-compositor.service || true
+        fi
       '';
 
       services.pipewire = {

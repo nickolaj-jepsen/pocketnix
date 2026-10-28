@@ -1,6 +1,7 @@
 # A guest with gui.enable: socket activation brings up the compositor for a
 # Wayland client, and the agent's gui stream reaches it and gets its replay,
-# also after the agent restarts.
+# also after the agent restarts; the app list has the system profile's apps,
+# and a launch from it opens a window bound to the launch.
 {
   pkgs,
   self,
@@ -8,14 +9,15 @@
   cli = self.packages.${pkgs.stdenv.hostPlatform.system}.pocketnix-cli;
   # Speaks the app's side of docs/gui-protocol.md through the command it's
   # given (`pocketnix agent … gui`) up to `ready`, and prints what the replay
-  # held as JSON. Fails without a toplevel of --want-app.
+  # held as JSON. Fails without a toplevel of --want-app. With --launch, it
+  # then launches that entry and waits for its window and its icon.
   probe = pkgs.writers.writePython3Bin "gui-probe" {flakeIgnore = ["E501"];} ''
     import json
     import struct
     import subprocess
     import sys
 
-    JSON, COMMIT, COMMIT_DATA = 0x00, 0x01, 0x02
+    JSON, COMMIT, COMMIT_DATA, ICON = 0x00, 0x01, 0x02, 0x03
     HEADER = ">HHIIIHBBBBHiiIIIIIIIIiIIIQ"
 
 
@@ -40,14 +42,29 @@
 
 
     args = sys.argv[1:]
-    want = None
-    if args[:1] == ["--want-app"]:
-        want, args = args[1], args[2:]
+    want = launch = None
+    while args[:1] in (["--want-app"], ["--launch"]):
+        if args[0] == "--want-app":
+            want = args[1]
+        else:
+            launch = args[1]
+        args = args[2:]
     p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-    send_json(p.stdin, {"type": "hello", "version": 1, "minVersion": 1, "app": "gui-probe", "hashes": False})
+    send_json(p.stdin, {"type": "hello", "version": 2, "minVersion": 2, "app": "gui-probe", "hashes": False})
     out = {"toplevels": [], "surfaces": [], "commits": []}
     pending = None
-    while True:
+    ready = False
+
+
+    def done():
+        if not ready:
+            return False
+        if not launch:
+            return True
+        return "launched" in out and "icon" in out
+
+
+    while not done():
         typ, payload = read_frame(p.stdout)
         if pending is not None and typ != COMMIT_DATA:
             sys.exit(f"frame {typ} inside commit {pending['seq']}")
@@ -60,10 +77,25 @@
                 out["hello"] = msg
             elif t == "toplevel":
                 out["toplevels"].append(msg)
+                if launch and ready and msg.get("launch") == "vm-test":
+                    out["launched"] = msg
             elif t == "surface":
                 out["surfaces"].append(msg)
+            elif t == "apps":
+                out["apps"] = msg["apps"]
+            elif t == "launch-failed":
+                sys.exit(f"launch failed: {msg}")
             elif t == "ready":
-                break
+                ready = True
+                if launch:
+                    entry = next((a for a in out.get("apps", []) if a["id"] == launch), None)
+                    if entry is None:
+                        sys.exit(f"no {launch} in the app list: {out.get('apps')}")
+                    send_json(p.stdin, {"type": "launch", "id": "vm-test", "app": launch, "action": "", "tab": ""})
+                    send_json(p.stdin, {"type": "icon", "icon": entry["icon"], "size": 64})
+        elif typ == ICON:
+            size, key_len = struct.unpack(">HB", payload[:3])
+            out["icon"] = {"size": size, "key": payload[3:3 + key_len].decode(), "png": payload[3 + key_len:3 + key_len + 24].hex()}
         elif typ == COMMIT:
             f = struct.unpack(HEADER, payload[:88])
             header_size, flags, surface, window, seq = f[:5]
@@ -120,8 +152,8 @@ in
           return f"runuser -u nixos -- env XDG_RUNTIME_DIR=/run/user/1000 {cmd}"
 
 
-      def replay():
-          out = phone.wait_until_succeeds(f"timeout 30 ${probe}/bin/gui-probe --want-app foot {A} gui", timeout=120)
+      def replay(*flags):
+          out = phone.wait_until_succeeds(f"timeout 60 ${probe}/bin/gui-probe {' '.join(flags)} {A} gui", timeout=180)
           return json.loads(out)
 
 
@@ -167,8 +199,8 @@ in
           phone.wait_for_unit("pocketnix-compositor.service", "nixos")
 
       with subtest("the gui stream reaches the compositor and gets the replay"):
-          first = replay()
-          assert first["hello"]["version"] == 1, first["hello"]
+          first = replay("--want-app", "foot")
+          assert first["hello"]["version"] == 2, first["hello"]
           assert first["hello"]["instance"], first["hello"]
           foot = next(t for t in first["toplevels"] if t["appId"] == "foot")
           full = [c for c in first["commits"] if c["window"] == foot["id"] and c["flags"] & 0b11 == 0b11]
@@ -177,9 +209,34 @@ in
       with subtest("windows outlive the agent"):
           phone.succeed("systemctl restart pocketnix-agent.service")
           phone.wait_for_open_port(9100)
-          again = replay()
+          again = replay("--want-app", "foot")
           assert again["hello"]["instance"] == first["hello"]["instance"], again["hello"]
           assert any(t["id"] == foot["id"] and t["appId"] == "foot" for t in again["toplevels"]), again["toplevels"]
           phone.succeed(user("systemctl --user is-active foot.service"))
+
+      with subtest("the app list has the system profile's apps, and a launch from it opens one"):
+          launched = replay("--want-app", "foot", "--launch", "foot")
+          apps = {a["id"]: a for a in launched["apps"]}
+          assert apps.get("foot", {}).get("icon"), sorted(apps)
+          # The window started by hand is named after its entry too.
+          assert next(t for t in launched["toplevels"] if t["id"] == foot["id"])["app"] == "foot", launched["toplevels"]
+          win = launched["launched"]
+          assert (win["app"], win["appId"], win["tab"], win["window"]) == ("foot", "foot", "", win["id"]), win
+          assert win["id"] != foot["id"], win
+          icon = launched["icon"]
+          assert (icon["key"], icon["size"]) == (apps["foot"]["icon"], 64), icon
+          png = bytes.fromhex(icon["png"])
+          assert png[:8] == b"\x89PNG\r\n\x1a\n" and png[16:24] == (64).to_bytes(4, "big") * 2, icon
+          scopes = phone.succeed(user("systemctl --user list-units --plain --no-legend --state=running 'app-pocketnix-foot-*.scope'"))
+          assert scopes.startswith("app-pocketnix-foot-"), scopes
+          slice = phone.succeed(user(f"systemctl --user show -P Slice {scopes.split()[0]}")).strip()
+          assert slice == "app.slice", slice
+
+      with subtest("a reload rescans the app list and keeps the windows"):
+          pid = phone.succeed(user("systemctl --user show -P MainPID pocketnix-compositor.service")).strip()
+          phone.succeed(user("systemctl --user reload pocketnix-compositor.service"))
+          phone.wait_until_succeeds("journalctl _SYSTEMD_USER_UNIT=pocketnix-compositor.service --grep 'SIGHUP: rescanning'")
+          after = phone.succeed(user("systemctl --user show -P MainPID pocketnix-compositor.service")).strip()
+          assert after == pid, (pid, after)
     '';
   }
