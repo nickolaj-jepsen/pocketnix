@@ -3,6 +3,7 @@ package dev.nickolaj.pocketnix.ui
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.view.View
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -41,7 +42,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.runtime.key
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -52,8 +55,11 @@ import dev.nickolaj.pocketnix.agent.ControlChannel
 import dev.nickolaj.pocketnix.agent.ExtraKey
 import dev.nickolaj.pocketnix.engine.DiskImage
 import dev.nickolaj.pocketnix.engine.VmState
+import dev.nickolaj.pocketnix.R
 import dev.nickolaj.pocketnix.gui.LauncherActivity
+import dev.nickolaj.pocketnix.gui.TabStripItem
 import dev.nickolaj.pocketnix.gui.closingWindows
+import dev.nickolaj.pocketnix.gui.tabStrip
 import dev.nickolaj.pocketnix.terminal.Modifiers
 import dev.nickolaj.pocketnix.terminal.Tab
 import dev.nickolaj.pocketnix.terminal.TerminalTheme
@@ -80,6 +86,10 @@ fun MainScreen(vm: Vm) {
     val updates by vm.updates.collectAsState()
     val agentLate by vm.agentLate.collectAsState()
     val serviceRefused by vm.serviceRefused.collectAsState()
+    val windowTabs by vm.gui.tabWindows.collectAsState()
+    val selectedWindow by vm.tabs.selectedWindow.collectAsState()
+    // A window that just left its tab may still be selected for a moment.
+    val shownWindow = selectedWindow.takeIf { id -> windowTabs.any { it.id == id } } ?: 0
     var showSettings by remember { mutableStateOf(false) }
     var showUpdates by remember { mutableStateOf(false) }
     var showPalette by remember { mutableStateOf(false) }
@@ -103,7 +113,7 @@ fun MainScreen(vm: Vm) {
     val background = remember(themeRevision) { Color(TerminalTheme.background) }
     val foreground = remember(themeRevision) { Color(TerminalTheme.foreground) }
 
-    LaunchedEffect(selected, tabs) { controller.show(vm.tabs.current()) }
+    LaunchedEffect(selected, tabs, shownWindow) { if (shownWindow == 0) controller.show(vm.tabs.current()) }
     LaunchedEffect(typeface) { controller.setTypeface(typeface) }
     LaunchedEffect(themeRevision) { controller.redraw() }
 
@@ -153,6 +163,9 @@ fun MainScreen(vm: Vm) {
                     context.startActivity(Intent(context, LauncherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 }
             }
+            if (shownWindow != 0) {
+                MenuItem(context.getString(R.string.gui_move_out)) { dismiss(); vm.gui.move(shownWindow, "") }
+            }
             MenuItem("Commands", enabled = agentUp) { dismiss(); showPalette = true }
             MenuItem("System and updates", enabled = agentUp) { dismiss(); showUpdates = true }
             MenuItem("Settings") { dismiss(); showSettings = true }
@@ -200,8 +213,9 @@ fun MainScreen(vm: Vm) {
         // Read for its side effect: titles and finished states redraw the row.
         revision.let {}
         TabRow(
-            tabs = tabs,
+            strip = tabStrip(tabs, { it.agentId }, windowTabs),
             selected = selected,
+            selectedWindow = shownWindow,
             profiles = config?.profiles?.map { it.name }.orEmpty(),
             canOpen = link is ControlChannel.Link.Up,
             foreground = foreground,
@@ -210,21 +224,41 @@ fun MainScreen(vm: Vm) {
                 val tab = tabs.firstOrNull { it.id == id }
                 if (tab != null && tab.session.isRunning) confirm = "Close ${tab.title}? What runs in it gets a hangup." to { vm.tabs.close(id) } else vm.tabs.close(id)
             },
+            onSelectWindow = vm.tabs::selectWindow,
+            // The client decides: it may ask about unsaved work first.
+            onCloseWindow = vm.gui::requestClose,
+            onMoveWindowOut = { vm.gui.move(it, "") },
             onOpen = vm::openTab,
         )
-        AndroidView(
-            factory = { controller.create().also { controller.show(vm.tabs.current()) } },
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-        )
-        modifierRevision.let {}
-        ExtraKeysBar(
-            rows = config?.extraKeys?.takeIf { it.isNotEmpty() } ?: defaultExtraKeys,
-            modifiers = controller.modifiers,
-            revision = modifierRevision,
-            foreground = foreground,
-            onKey = controller::press,
-        )
-        if (composerOpen) Composer(controller, foreground)
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            AndroidView(
+                factory = { controller.create().also { controller.show(vm.tabs.current()) } },
+                // Hidden rather than removed: the controller keeps its one view.
+                update = { it.visibility = if (shownWindow != 0) View.INVISIBLE else View.VISIBLE },
+                modifier = Modifier.fillMaxSize(),
+            )
+            if (shownWindow != 0) {
+                key(shownWindow) {
+                    AndroidView(
+                        factory = { ctx -> vm.gui.tabView(ctx, shownWindow) },
+                        onRelease = vm.gui::release,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+        }
+        // The extra keys and the composer type into the terminal; a window's own come with step 3.
+        if (shownWindow == 0) {
+            modifierRevision.let {}
+            ExtraKeysBar(
+                rows = config?.extraKeys?.takeIf { it.isNotEmpty() } ?: defaultExtraKeys,
+                modifiers = controller.modifiers,
+                revision = modifierRevision,
+                foreground = foreground,
+                onKey = controller::press,
+            )
+            if (composerOpen) Composer(controller, foreground)
+        }
     }
 }
 
@@ -277,13 +311,17 @@ private fun StatusBar(
 
 @Composable
 private fun TabRow(
-    tabs: List<Tab>,
+    strip: List<TabStripItem<Tab>>,
     selected: Int,
+    selectedWindow: Int,
     profiles: List<String>,
     canOpen: Boolean,
     foreground: Color,
     onSelect: (Int) -> Unit,
     onClose: (Int) -> Unit,
+    onSelectWindow: (Int) -> Unit,
+    onCloseWindow: (Int) -> Unit,
+    onMoveWindowOut: (Int) -> Unit,
     onOpen: (String?) -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -292,27 +330,39 @@ private fun TabRow(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        for (tab in tabs) {
-            val isSelected = tab.id == selected
-            Row(
-                Modifier
-                    .background(if (isSelected) foreground.copy(alpha = 0.18f) else Color.Transparent, RoundedCornerShape(6.dp))
-                    .clickable { onSelect(tab.id) }
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                val ended = !tab.session.isRunning && tab.kind != Tab.Kind.Console
-                // A bell or notification arrived while nobody watched the tab.
-                if (tab.attention) Text("● ", color = foreground, fontSize = 10.sp)
-                Text(
-                    tab.title + if (ended) " (ended)" else "",
-                    color = foreground.copy(alpha = if (isSelected) 1f else 0.7f),
-                    fontSize = 13.sp,
-                    maxLines = 1,
-                )
-                if (tab.kind != Tab.Kind.Console) {
-                    // A finger-sized target, not a 13sp glyph.
-                    Text("×", color = foreground.copy(alpha = 0.7f), fontSize = 18.sp, modifier = Modifier.clickable { onClose(tab.id) }.padding(start = 10.dp, end = 4.dp))
+        for (item in strip) {
+            when (item) {
+                is TabStripItem.Terminal -> {
+                    val tab = item.tab
+                    val ended = !tab.session.isRunning && tab.kind != Tab.Kind.Console
+                    TabChip(
+                        // A bell or notification arrived while nobody watched the tab.
+                        mark = if (tab.attention) "● " else "",
+                        title = tab.title + if (ended) " (ended)" else "",
+                        selected = selectedWindow == 0 && tab.id == selected,
+                        foreground = foreground,
+                        onSelect = { onSelect(tab.id) },
+                        onClose = if (tab.kind != Tab.Kind.Console) ({ onClose(tab.id) }) else null,
+                    )
+                }
+                is TabStripItem.Window -> {
+                    val w = item.window
+                    var windowMenu by remember(w.id) { mutableStateOf(false) }
+                    Box {
+                        TabChip(
+                            mark = "▣ ",
+                            title = w.title,
+                            selected = w.id == selectedWindow,
+                            foreground = foreground,
+                            onSelect = { onSelectWindow(w.id) },
+                            onLongPress = { windowMenu = true },
+                            onClose = { onCloseWindow(w.id) },
+                        )
+                        DropdownMenu(expanded = windowMenu, onDismissRequest = { windowMenu = false }) {
+                            DropdownMenuItem(text = { Text(stringResource(R.string.gui_move_out)) }, onClick = { windowMenu = false; onMoveWindowOut(w.id) })
+                            DropdownMenuItem(text = { Text(stringResource(R.string.gui_close)) }, onClick = { windowMenu = false; onCloseWindow(w.id) })
+                        }
+                    }
                 }
             }
         }
@@ -328,6 +378,32 @@ private fun TabRow(
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                 for (p in profiles) DropdownMenuItem(text = { Text(p) }, onClick = { menu = false; onOpen(p) })
             }
+        }
+    }
+}
+
+@Composable
+private fun TabChip(
+    mark: String,
+    title: String,
+    selected: Boolean,
+    foreground: Color,
+    onSelect: () -> Unit,
+    onClose: (() -> Unit)?,
+    onLongPress: (() -> Unit)? = null,
+) {
+    Row(
+        Modifier
+            .background(if (selected) foreground.copy(alpha = 0.18f) else Color.Transparent, RoundedCornerShape(6.dp))
+            .combinedClickable(onLongClick = onLongPress, onClick = onSelect)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (mark.isNotEmpty()) Text(mark, color = foreground, fontSize = 10.sp)
+        Text(title, color = foreground.copy(alpha = if (selected) 1f else 0.7f), fontSize = 13.sp, maxLines = 1)
+        if (onClose != null) {
+            // A finger-sized target, not a 13sp glyph.
+            Text("×", color = foreground.copy(alpha = 0.7f), fontSize = 18.sp, modifier = Modifier.clickable(onClick = onClose).padding(start = 10.dp, end = 4.dp))
         }
     }
 }

@@ -12,7 +12,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
-class Tab(val id: Int, val kind: Kind, val session: TerminalSession) {
+class Tab(
+    val id: Int,
+    val kind: Kind,
+    val session: TerminalSession,
+    private val agentTab: () -> String = { "" },
+) {
     sealed interface Kind {
         /** The hvc0 console: always there, never closed, the way in when the agent isn't. */
         data object Console : Kind
@@ -25,12 +30,19 @@ class Tab(val id: Int, val kind: Kind, val session: TerminalSession) {
             is Kind.Pty -> session.title?.takeIf { it.isNotBlank() } ?: kind.profile
         }
 
+    /** The agent's id for its session (`POCKETNIX_TAB`), "" for the console and until the agent answers. */
+    val agentId: String get() = agentTab()
+
     /** Rang or notified while nobody watched it; cleared when it's shown. */
     @Volatile var attention = false
         internal set
 }
 
-/** The open terminal tabs. The console tab comes first and stays. */
+/**
+ * The open terminal tabs, and which tab the terminal screen shows: a
+ * terminal, or a guest window in a tab ([selectedWindow]). The console tab
+ * comes first and stays.
+ */
 class Tabs(private val context: Context, consoleBackend: TerminalBackend, private val terminalVersion: String) {
     /** The UI showing a session; set while one is attached. */
     interface View {
@@ -54,7 +66,7 @@ class Tabs(private val context: Context, consoleBackend: TerminalBackend, privat
     var visible = false
         set(v) {
             field = v
-            if (v) {
+            if (v && _selectedWindow.value == 0) {
                 seen(current())
                 // Output that arrived while hidden wasn't drawn.
                 view?.onTextChanged(current().session)
@@ -80,18 +92,40 @@ class Tabs(private val context: Context, consoleBackend: TerminalBackend, privat
     private val _revision = MutableStateFlow(0)
     val revision: StateFlow<Int> = _revision.asStateFlow()
 
-    fun open(profile: String, backend: TerminalBackend): Tab {
-        val tab = Tab(nextId++, Tab.Kind.Pty(profile), session(backend))
+    private val _selectedWindow = MutableStateFlow(0)
+    /** The guest window shown in place of the selected terminal, or 0. */
+    val selectedWindow: StateFlow<Int> = _selectedWindow.asStateFlow()
+
+    /** [agentTab]: the agent's id for the session once it has one. */
+    fun open(profile: String, backend: TerminalBackend, agentTab: () -> String = { "" }): Tab {
+        val tab = Tab(nextId++, Tab.Kind.Pty(profile), session(backend), agentTab)
         _tabs.update { it + tab }
-        _selected.value = tab.id
+        select(tab.id)
         return tab
     }
 
     fun select(id: Int) {
         val tab = _tabs.value.firstOrNull { it.id == id } ?: return
         _selected.value = id
+        _selectedWindow.value = 0
         if (visible) seen(tab)
     }
+
+    /** Shows guest window [id] in its tab. */
+    fun selectWindow(id: Int) {
+        _selectedWindow.value = id
+    }
+
+    /** The guest windows in tabs are now [ids]: a selected one that left gives way to its terminal. */
+    fun windowsChanged(ids: Collection<Int>) {
+        val w = _selectedWindow.value
+        if (w == 0 || w in ids) return
+        _selectedWindow.value = 0
+        if (visible) seen(current())
+    }
+
+    /** The running terminal tabs a guest window can follow: those the agent gave an id. */
+    fun windowTargets(): List<Tab> = _tabs.value.filter { it.agentId.isNotEmpty() && it.session.isRunning }
 
     fun close(id: Int) {
         val tab = _tabs.value.firstOrNull { it.id == id } ?: return
@@ -113,7 +147,7 @@ class Tabs(private val context: Context, consoleBackend: TerminalBackend, privat
 
     private fun attention(session: TerminalSession, title: String?, body: String?) {
         val tab = _tabs.value.firstOrNull { it.session === session } ?: return
-        val watched = visible && tab.id == _selected.value
+        val watched = visible && tab.id == _selected.value && _selectedWindow.value == 0
         if (!watched && !tab.attention) {
             tab.attention = true
             _revision.update { it + 1 }

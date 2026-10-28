@@ -16,6 +16,7 @@ import android.os.Looper
 import android.util.Log
 import android.view.Display
 import android.view.SurfaceControl
+import dev.nickolaj.pocketnix.MainActivity
 import dev.nickolaj.pocketnix.R
 import dev.nickolaj.pocketnix.agent.AgentDialer
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,10 +30,10 @@ import kotlin.math.roundToInt
 
 /**
  * The guest's GUI windows: the one GUI stream while the guest has GUI on,
- * the windows and surfaces it describes, the Android window
- * ([GuiWindowActivity]) showing each toplevel, the app list and the
- * launches. Owned by the app's Vm, so windows outlive their activities and
- * a reconnect.
+ * the windows and surfaces it describes, what shows each window (its own
+ * task's [GuiWindowActivity], or a terminal tab's [TabWindowView]), the app
+ * list and the launches. Owned by the app's Vm, so windows outlive their
+ * activities and a reconnect.
  */
 class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listener {
     // Guards the state and the renderers; the link's thread, the render thread and the main thread take it.
@@ -51,6 +52,16 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
     // Icons asked for on this connection, under [lock]: each is answered once.
     private val askedIcons = HashSet<Pair<String, Int>>()
 
+    private val _tabWindows = MutableStateFlow<List<WindowTab>>(emptyList())
+    /** The windows shown as terminal tabs, in the order they mapped. */
+    val tabWindows: StateFlow<List<WindowTab>> = _tabWindows.asStateFlow()
+
+    /** Selects a window's tab in the terminal screen; called on the main thread. */
+    @Volatile var selectTab: (Int) -> Unit = {}
+
+    // Windows the user moved, whose `toplevel` echo hasn't come yet: the move shows them where they went.
+    private val moving = ConcurrentHashMap.newKeySet<Int>()
+
     private val _ready = MutableStateFlow(false)
     /** The GUI stream is connected and its replay done. */
     val ready: StateFlow<Boolean> = _ready.asStateFlow()
@@ -59,7 +70,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
     private val renderThread = Executors.newSingleThreadExecutor { r -> Thread(r, "gui-render").apply { isDaemon = true } }
 
     private class View(val id: Int) {
-        @Volatile var activity: GuiWindowActivity? = null
+        @Volatile var host: WindowHost? = null
 
         /** Under [lock]. */
         var renderer: WindowRenderer? = null
@@ -75,7 +86,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         /** A launch's splash is about to show it, so it gets no activity of its own. */
         @Volatile var claimed = false
 
-        /** The task of its last activity, to bring it forward. */
+        /** The task of its last activity, to bring it forward; -1 for none. */
         @Volatile var taskId = -1
     }
 
@@ -129,6 +140,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
             synchronized(lock) {
                 state.windows.clear()
                 state.surfaces.clear()
+                publishTabs()
             }
         }
     }
@@ -140,7 +152,10 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         launches.connected(hello.instance)
         val dropped = synchronized(lock) {
             askedIcons.clear()
-            state.hello(hello).also { forgetAcks() }
+            state.hello(hello).also {
+                forgetAcks()
+                publishTabs()
+            }
         }
         for (w in dropped) closeWindow(w.id)
         link.send(output())
@@ -158,17 +173,25 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                 }
             }
             is GuiMessage.Toplevel -> {
+                var oldTab: String? = null
                 val new = synchronized(lock) {
+                    if (!msg.isDialog) oldTab = state.windows[msg.id]?.toplevel?.tab
                     val new = state.toplevel(msg).also { if (it) views[msg.id] = View(msg.id) }
                     val ended = launches.toplevel(msg)
                     // Its splash binds it once it sees the launch end; see disown for a splash that's gone.
                     if (new && ended != null && owners.containsKey(ended.id)) views[msg.id]?.claimed = true
+                    if (!msg.isDialog) publishTabs()
                     new
                 }
                 if (msg.isDialog) return
                 views[msg.id]?.title = title(msg)
+                val retabbed = new || oldTab != msg.tab
+                // Only the echo that moves it ends a move; a title change may come first.
+                val moved = retabbed && moving.remove(msg.id)
                 when {
-                    !new -> onMain("window ${msg.id.u}: title") { views[msg.id]?.activity?.toplevelChanged() }
+                    msg.tab.isNotEmpty() && retabbed -> intoTab(msg.id, new = new, moved = moved)
+                    msg.tab.isEmpty() && !oldTab.isNullOrEmpty() -> outOfTab(msg.id)
+                    !new -> onMain("window ${msg.id.u}: title") { views[msg.id]?.host?.toplevelChanged() }
                     views[msg.id]?.claimed != true -> openWindow(msg.id)
                 }
             }
@@ -182,12 +205,13 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                         for (s in gone) views[s.window]?.renderer?.remove(t, s.id)
                         t.apply()
                     }
+                    if (window) publishTabs()
                     window
                 }
                 if (window) closeWindow(msg.id)
             }
             is GuiMessage.ToplevelRequest -> if (msg.request == "minimize") {
-                onMain("window ${msg.id.u}: minimize") { views[msg.id]?.activity?.moveTaskToBack(true) }
+                onMain("window ${msg.id.u}: minimize") { views[msg.id]?.host?.minimize() }
             }
             is GuiMessage.Surface -> synchronized(lock) {
                 val moved = state.surface(msg) ?: return@synchronized
@@ -197,7 +221,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                 val s = state.surfaceRemoved(msg.id) ?: return@synchronized
                 views[s.window]?.renderer?.let { r -> SurfaceControl.Transaction().also { r.remove(it, s.id) }.apply() }
             }
-            is GuiMessage.Cursor -> onMain("window ${msg.window.u}: cursor") { views[msg.window]?.activity?.cursor(msg.name) }
+            is GuiMessage.Cursor -> onMain("window ${msg.window.u}: cursor") { views[msg.window]?.host?.cursor(msg.name) }
             GuiMessage.Ready -> {
                 val windows = synchronized(lock) {
                     val (windows, surfaces) = state.ready()
@@ -209,6 +233,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                         guard("window ${v.id.u}: render") { r.render(t, state.surfaces.values.filter { it.window == v.id }, 0) }
                     }
                     t.apply()
+                    publishTabs()
                     windows
                 }
                 for (w in windows) closeWindow(w.id)
@@ -222,7 +247,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                 shortcuts.update()
                 requestIcons()
                 // A toplevel's icon comes from its entry.
-                onMain("app list: windows") { for (v in views.values) v.activity?.toplevelChanged() }
+                onMain("app list: windows") { for (v in views.values) v.host?.toplevelChanged() }
             }
             is GuiMessage.Icon -> {
                 catalog.storeIcon(msg.key, msg.size, msg.png)
@@ -295,10 +320,15 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
 
     // --- Windows ---
 
-    /** Opens the toplevel's Android window: directly while a pocketnix window is visible, else through a notification. */
+    /**
+     * Opens the toplevel's Android window, unless it shows in a tab:
+     * directly while a pocketnix window is visible, else through a
+     * notification.
+     */
     private fun openWindow(id: Int) = onMain("window ${id.u}: open") {
         val instance = synchronized(lock) {
-            if (state.windows[id] == null || views[id]?.let { it.activity != null || it.claimed } != false) return@onMain
+            val w = state.windows[id] ?: return@onMain
+            if (w.toplevel.tab.isNotEmpty() || views[id]?.let { it.host != null || it.claimed } != false) return@onMain
             state.instance
         } ?: return@onMain
         val intent = GuiWindowActivity.intent(app, instance, id)
@@ -320,7 +350,8 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
     private fun launchPending() = onMain("launching waiting windows") {
         if (!Foreground.visible) return@onMain
         val ids = synchronized(lock) {
-            state.windows.keys.filter { id -> views[id]?.let { it.activity == null && !it.closeAsked && !it.claimed } == true }
+            state.windows.values.filter { it.toplevel.tab.isEmpty() }.map { it.id }
+                .filter { id -> views[id]?.let { it.host == null && !it.closeAsked && !it.claimed } == true }
         }
         if (ids.isEmpty()) return@onMain
         val tasks = app.getSystemService(ActivityManager::class.java).appTasks
@@ -356,19 +387,56 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         }
         onMain("window ${id.u}: close") {
             app.getSystemService(NotificationManager::class.java).cancel(NOTIFY_TAG, id)
-            val a = v?.activity
-            if (a != null) {
-                a.closeByGuest()
-            } else {
-                GuiWindowActivity.removeTasks(app) { it.windowId == id }
-                // A launch's task names its app, not the window.
-                val task = v?.taskId ?: -1
-                if (task != -1) {
-                    for (t in app.getSystemService(ActivityManager::class.java).appTasks) {
-                        runCatching { if (t.taskInfo.taskId == task) t.finishAndRemoveTask() }
-                    }
-                }
-            }
+            val h = v?.host
+            if (h != null) h.dismiss() else removeTask(id, v?.taskId ?: -1)
+        }
+    }
+
+    /** On the main thread: removes window [id]'s task, found by its URI or, for a launch's, by [taskId]. */
+    private fun removeTask(id: Int, taskId: Int) {
+        GuiWindowActivity.removeTasks(app) { it.windowId == id }
+        // A launch's task names its app, not the window.
+        if (taskId == -1) return
+        for (t in app.getSystemService(ActivityManager::class.java).appTasks) {
+            runCatching { if (t.taskInfo.taskId == taskId) t.finishAndRemoveTask() }
+        }
+    }
+
+    /** Under [lock]: the windows in tabs changed, or their titles did. */
+    private fun publishTabs() {
+        _tabWindows.value = state.windows.values.filter { it.toplevel.tab.isNotEmpty() }
+            .map { WindowTab(it.id, it.toplevel.tab, title(it.toplevel)) }
+    }
+
+    /**
+     * Window [id] now shows in a terminal tab: its own task goes, without
+     * the client hearing of it. A [new] window (a terminal just started it)
+     * gets its tab selected; one the user [moved] also brings the terminal
+     * screen forward.
+     */
+    private fun intoTab(id: Int, new: Boolean, moved: Boolean) = onMain("window ${id.u}: into a tab") {
+        app.getSystemService(NotificationManager::class.java).cancel(NOTIFY_TAG, id)
+        val v = views[id] ?: return@onMain
+        when (val h = v.host) {
+            is GuiWindowActivity -> h.dismiss()
+            null -> removeTask(id, v.taskId)
+            else -> {}
+        }
+        v.taskId = -1
+        if (moved) showTab(id) else if (new) selectTab(id)
+    }
+
+    /** Window [id] left its tab for a task of its own. */
+    private fun outOfTab(id: Int) = onMain("window ${id.u}: out of its tab") {
+        (views[id]?.host as? TabWindowView)?.release()
+        openWindow(id)
+    }
+
+    /** Selects window [id]'s tab and brings the terminal screen forward, while Android lets pocketnix. */
+    private fun showTab(id: Int) {
+        selectTab(id)
+        if (Foreground.visible) {
+            app.startActivity(Intent(app, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }
     }
 
@@ -378,27 +446,39 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
 
     // --- From GuiWindowActivity, on the main thread ---
 
-    /** Binds an activity to toplevel [id] of [instance]; false when that window is gone. */
+    /** Binds an activity to toplevel [id] of [instance]; false when that window is gone or shows in a tab. */
     internal fun bind(a: GuiWindowActivity, instance: String, id: Int): Boolean = guard("window ${id.u}: bind", false) {
-        val previous = synchronized(lock) {
-            if (instance != state.instance || state.windows[id] == null) return@guard false
-            val v = views[id] ?: return@guard false
-            v.activity.also { v.activity = a }
-        }
-        views[id]?.closeAsked = false
+        if (!bindHost(a, id) { instance == state.instance && it.toplevel.tab.isEmpty() }) return@guard false
         views[id]?.taskId = a.taskId
-        previous?.takeIf { it !== a }?.closeByGuest()
         app.getSystemService(NotificationManager::class.java).cancel(NOTIFY_TAG, id)
         true
     }
 
-    /** The activity is gone; [userClosed] (not unmapped by the guest) asks the client to close, and relaunches the window if it stays. */
-    internal fun unbind(a: GuiWindowActivity, userClosed: Boolean) = guard("window ${a.windowId.u}: unbind") {
-        val id = a.windowId
+    /** Binds a tab's view to window [id]; false when the window is gone or has left its tab. */
+    internal fun bindTab(t: TabWindowView, id: Int): Boolean = guard("window ${id.u}: bind a tab", false) {
+        bindHost(t, id) { it.toplevel.tab.isNotEmpty() }
+    }
+
+    /** Makes [h] what shows window [id], if [ok] for the window; the host it had stops showing it. */
+    private inline fun bindHost(h: WindowHost, id: Int, ok: (GuiState.Window) -> Boolean): Boolean {
+        val previous = synchronized(lock) {
+            val w = state.windows[id] ?: return false
+            if (!ok(w)) return false
+            val v = views[id] ?: return false
+            v.host.also { v.host = h }
+        }
+        views[id]?.closeAsked = false
+        previous?.takeIf { it !== h }?.dismiss()
+        return true
+    }
+
+    /** The host is gone; [userClosed] (not unmapped by the guest) asks the client to close, and relaunches the window if it stays. */
+    internal fun unbind(h: WindowHost, userClosed: Boolean) = guard("window ${h.windowId.u}: unbind") {
+        val id = h.windowId
         val v = views[id] ?: return@guard
         synchronized(lock) {
-            if (v.activity !== a) return@guard
-            v.activity = null
+            if (v.host !== h) return@guard
+            v.host = null
             v.renderer?.destroy()
             v.renderer = null
         }
@@ -410,20 +490,20 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         main.postDelayed({
             guard("window ${id.u}: relaunch") {
                 v.closeAsked = false
-                val stays = synchronized(lock) { state.windows.containsKey(id) } && views[id]?.let { it.activity == null } == true
+                val stays = synchronized(lock) { state.windows.containsKey(id) } && views[id]?.let { it.host == null } == true
                 if (stays) openWindow(id)
             }
         }, RELAUNCH_MS)
     }
 
-    // An activity finishing for an earlier window of the same id (a remap, a new
+    // A host finishing for an earlier window of the same id (a remap, a new
     // compositor instance) still gets callbacks: only the bound one speaks for the window.
 
-    /** [a]'s surface is [width] × [height] under [parent]: show the window's layers there. */
-    internal fun attach(a: GuiWindowActivity, parent: SurfaceControl, width: Int, height: Int) = guard("window ${a.windowId.u}: attach") {
-        val id = a.windowId
+    /** [h]'s surface is [width] × [height] under [parent]: show the window's layers there. */
+    internal fun attach(h: WindowHost, parent: SurfaceControl, width: Int, height: Int) = guard("window ${h.windowId.u}: attach") {
+        val id = h.windowId
         val r = synchronized(lock) {
-            val v = views[id]?.takeIf { it.activity === a } ?: return@guard
+            val v = views[id]?.takeIf { it.host === h } ?: return@guard
             val t = SurfaceControl.Transaction()
             val old = v.renderer
             if (old != null && old.parent === parent) {
@@ -442,23 +522,44 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         redraw(r, first = true)
     }
 
-    /** [a]'s surface is going away. */
-    internal fun detach(a: GuiWindowActivity) = guard("window ${a.windowId.u}: detach") {
+    /** [h]'s surface is going away. */
+    internal fun detach(h: WindowHost) = guard("window ${h.windowId.u}: detach") {
         synchronized(lock) {
-            val v = views[a.windowId]?.takeIf { it.activity === a } ?: return@guard
+            val v = views[h.windowId]?.takeIf { it.host === h } ?: return@guard
             v.renderer?.destroy()
             v.renderer = null
         }
     }
 
-    internal fun windowState(a: GuiWindowActivity, s: WindowState) {
-        val v = views[s.id]?.takeIf { it.activity === a } ?: return
+    internal fun windowState(h: WindowHost, s: WindowState) {
+        val v = views[s.id]?.takeIf { it.host === h } ?: return
         if (v.sent == s) return
         v.sent = s
         link.send(Gui.window(s))
     }
 
     internal fun send(frame: ByteArray) = link.send(frame)
+
+    /** Asks window [id]'s client to close, as its close button would; the client may ask first, or refuse. */
+    fun requestClose(id: Int) = link.send(Gui.close(id))
+
+    /**
+     * Moves window [id] into the terminal tab with agent id [tab], or ""
+     * to a task of its own. The window moves when the compositor's
+     * `toplevel` says so, as after a replay.
+     */
+    fun move(id: Int, tab: String) {
+        moving += id
+        link.send(Gui.move(id, tab))
+    }
+
+    /** A view showing tab window [id], for the terminal screen while that tab is selected; [release] it after. */
+    fun tabView(context: Context, id: Int): android.view.View = TabWindowView(context, this, id).let { t -> t.view.also { it.tag = t } }
+
+    /** Ends what [tabView] made. */
+    fun release(view: android.view.View) {
+        (view.tag as? TabWindowView)?.release()
+    }
 
     // --- Launches, from a splash on the main thread ---
 
@@ -472,7 +573,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         if (!owners.remove(id, a)) return@guard
         val opened = launches[id]?.state?.value as? LaunchState.Opened ?: return@guard
         val v = views[opened.window] ?: return@guard
-        if (v.claimed && v.activity == null) {
+        if (v.claimed && v.host == null) {
             v.claimed = false
             openWindow(opened.window)
         }
@@ -486,19 +587,24 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
     internal fun bindLaunched(a: GuiWindowActivity, window: Int): Boolean = guard("window ${window.u}: bind a launch", false) {
         val instance = synchronized(lock) {
             val v = views[window] ?: return@guard false
-            if (v.activity != null && v.activity !== a) return@guard false
+            if (v.host != null && v.host !== a) return@guard false
             state.instance
         } ?: return@guard false
         bind(a, instance, window).also { if (it) views[window]?.claimed = false }
     }
 
-    /** Brings [window]'s task forward, opening it when it has none; only while Android lets pocketnix. */
+    /** Brings [window]'s task or tab forward, opening it when it has none; only while Android lets pocketnix. */
     internal fun raise(window: Int) {
         if (!Foreground.visible) return
         val v = views[window] ?: return
+        if (synchronized(lock) { state.windows[window]?.toplevel?.tab.orEmpty() }.isNotEmpty()) {
+            v.claimed = false
+            showTab(window)
+            return
+        }
         val task = app.getSystemService(ActivityManager::class.java).appTasks
             .firstOrNull { runCatching { it.taskInfo.taskId }.getOrNull() == v.taskId }
-        if (task != null && v.activity != null) task.moveToFront() else if (!v.claimed) openWindow(window)
+        if (task != null && v.host != null) task.moveToFront() else if (!v.claimed) openWindow(window)
     }
 
     /** Starts entry [app] for a splash; it becomes a recent app. */
@@ -550,8 +656,8 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                 val v = views[w.id]
                 val surfaces = state.surfaces.values.filter { it.window == w.id }
                     .joinToString(" ") { "${it.id.u}:${it.role}:${it.content.width}x${it.content.height}" }
-                "window ${w.id.u} '${title(w.id)}' app=${w.toplevel.app} launch=${w.toplevel.launch} " +
-                    "activity=${v?.activity != null} shown=${v?.renderer != null} " +
+                "window ${w.id.u} '${title(w.id)}' app=${w.toplevel.app} launch=${w.toplevel.launch} tab=${w.toplevel.tab} " +
+                    "host=${v?.host?.javaClass?.simpleName} shown=${v?.renderer != null} " +
                     "seq=${w.lastSeq.u} sent=${v?.sent} surfaces=[$surfaces]"
             }
     }

@@ -132,6 +132,8 @@ class Vm(private val app: Context) {
 
     init {
         tabs.alerts = TabAlerts(app) { control.config.value?.hostname }
+        gui.selectTab = tabs::selectWindow
+        scope.launch { gui.tabWindows.collect { ws -> tabs.windowsChanged(ws.map { it.id }) } }
         scope.launch {
             control.events.collect { ev ->
                 runCatching { if (!transfers.onEvent(ev, tabs.visible)) bridge.onEvent(ev, tabs.visible) }
@@ -394,7 +396,8 @@ class Vm(private val app: Context) {
         val dialer = _engine.value.dialer ?: return
         val cfg = control.config.value
         val name = profile ?: cfg?.defaultProfile?.takeIf { it.isNotEmpty() } ?: "shell"
-        tabs.open(name, PtyBackend(dialer, name, appVersion))
+        val backend = PtyBackend(dialer, name, appVersion)
+        tabs.open(name, backend) { backend.agentTab }
     }
 
     val config: StateFlow<GuestConfig?> get() = control.config

@@ -11,14 +11,20 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.TextUtils
+import android.view.Gravity
 import android.view.KeyEvent
 import android.view.PointerIcon
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.View
 import android.view.WindowInsets
-import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.PopupMenu
+import android.widget.TextView
 import android.window.OnBackInvokedDispatcher
 import android.util.Log
+import dev.nickolaj.pocketnix.R
 import dev.nickolaj.pocketnix.engine.VmState
 import dev.nickolaj.pocketnix.ui.missingRequirements
 import dev.nickolaj.pocketnix.vm
@@ -41,8 +47,8 @@ import java.util.UUID
  * first shows a splash: it boots the VM if needed, launches the app and
  * becomes the window the launch opens.
  */
-class GuiWindowActivity : Activity() {
-    var windowId = 0
+class GuiWindowActivity : Activity(), WindowHost {
+    override var windowId = 0
         private set
     private var bound = false
     private var closedByGuest = false
@@ -65,6 +71,7 @@ class GuiWindowActivity : Activity() {
     private var watch: Job? = null
     private var splash: SplashView? = null
     private var stale: Runnable? = null
+    private var barTitle: TextView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -104,9 +111,11 @@ class GuiWindowActivity : Activity() {
             setOnTouchListener { _, e -> input.motion(e) }
             setOnGenericMotionListener { _, e -> input.motion(e) }
         }
-        val root = FrameLayout(this).apply {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.BLACK)
-            addView(view)
+            addView(view, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+            addView(windowBar())
             // Edge to edge is enforced: keep the guest's window out from under the bars, cutout and caption.
             setOnApplyWindowInsetsListener { v, insets ->
                 val i = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
@@ -119,6 +128,53 @@ class GuiWindowActivity : Activity() {
         // The activity started before its window existed.
         if (started) pushState()
         if (focused) input.focused()
+    }
+
+    /** The slim bar under the window: its title and its menu. */
+    private fun windowBar(): View {
+        val pad = (8 * resources.displayMetrics.density).toInt()
+        val title = TextView(this).apply {
+            setTextColor(BAR_TEXT)
+            textSize = 13f
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            setPadding(pad * 2, 0, pad, 0)
+        }
+        barTitle = title
+        val menu = TextView(this).apply {
+            text = "⋮"
+            setTextColor(BAR_TEXT)
+            textSize = 18f
+            gravity = Gravity.CENTER
+            setPadding(pad * 2, 0, pad * 2, 0)
+            contentDescription = getString(R.string.gui_window_menu)
+            setOnClickListener { v -> guard("window menu") { showMenu(v) } }
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(BAR_BACKGROUND)
+            addView(title, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(menu, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.MATCH_PARENT))
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (BAR_DP * resources.displayMetrics.density).toInt())
+        }
+    }
+
+    private fun showMenu(anchor: View) {
+        val m = PopupMenu(this, anchor)
+        val targets = vm.tabs.windowTargets()
+        if (targets.isEmpty()) {
+            // Only a running shell tab has an id the guest knows.
+            m.menu.add(R.string.gui_move_to_tab).isEnabled = false
+        } else {
+            val sub = m.menu.addSubMenu(R.string.gui_move_to_tab)
+            for (t in targets) {
+                val tab = t.agentId
+                sub.add(t.title).setOnMenuItemClickListener { guard("window ${windowId.u}: move") { vm.gui.move(windowId, tab) }; true }
+            }
+        }
+        m.menu.add(R.string.gui_close).setOnMenuItemClickListener { guard("window ${windowId.u}: close") { vm.gui.requestClose(windowId) }; true }
+        m.show()
     }
 
     // --- A launch's splash ---
@@ -325,23 +381,27 @@ class GuiWindowActivity : Activity() {
         )
     }
 
-    /** The guest unmapped the window. */
-    internal fun closeByGuest() {
+    /** The guest unmapped the window, or it moved to a tab: the task goes without the client hearing of it. */
+    override fun dismiss() {
         closedByGuest = true
         finishAndRemoveTask()
     }
 
-    /** The toplevel's title, app id or app-list entry changed. */
-    internal fun toplevelChanged() {
+    override fun minimize() {
+        moveTaskToBack(true)
+    }
+
+    override fun toplevelChanged() {
         if (!bound) return
         val t = vm.gui.title(windowId)
         title = t
+        barTitle?.text = t
         val icon = vm.gui.appOf(windowId)?.let(::iconBitmap)
         @Suppress("DEPRECATION") // The Builder takes an icon only as a resource.
         setTaskDescription(ActivityManager.TaskDescription(t, icon))
     }
 
-    internal fun cursor(name: String) {
+    override fun cursor(name: String) {
         if (bound) view.pointerIcon = PointerIcon.getSystemIcon(this, pointerType(name))
     }
 
@@ -354,6 +414,9 @@ class GuiWindowActivity : Activity() {
         private const val TAG = "GuiWindowActivity"
         private const val KEY_WINDOW = "window"
         private const val KEY_LAUNCH = "launch"
+        private const val BAR_DP = 36
+        private const val BAR_BACKGROUND = 0xff1e1e1e.toInt()
+        private const val BAR_TEXT = 0xffdddddd.toInt()
 
         /**
          * Launches entry [app] ([action] "" for none) on a splash that becomes
@@ -401,7 +464,7 @@ class GuiWindowActivity : Activity() {
             for (t in am.appTasks) runCatching { if (t.windowId != 0 && which(t)) t.finishAndRemoveTask() }
         }
 
-        private fun pointerType(name: String): Int = when (name) {
+        internal fun pointerType(name: String): Int = when (name) {
             "hidden" -> PointerIcon.TYPE_NULL
             "text" -> PointerIcon.TYPE_TEXT
             "vertical-text" -> PointerIcon.TYPE_VERTICAL_TEXT

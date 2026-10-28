@@ -90,6 +90,9 @@ object Gui {
 
     fun close(window: Int): ByteArray = json(JSONObject().put("type", "close").put("id", window.toUInt().toLong()))
 
+    /** Moves [window] into the terminal tab with agent id [tab], or "" to its own task. */
+    fun move(window: Int, tab: String): ByteArray = json(JSONObject().put("type", "move").put("id", window.toUInt().toLong()).put("tab", tab))
+
     /** Asks for icon [key] rendered at [size] × [size] pixels. */
     fun icon(key: String, size: Int): ByteArray = json(JSONObject().put("type", "icon").put("icon", key).put("size", size))
 

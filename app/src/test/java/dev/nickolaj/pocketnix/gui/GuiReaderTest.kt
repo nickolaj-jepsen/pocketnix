@@ -103,7 +103,7 @@ class GuiReaderTest {
     fun anIconKeyPastItsFrameIsAViolation() = assertViolation(CompositorFrames().raw(Gui.ICON, byteArrayOf(0, 48, 9, 'a'.code.toByte())))
 
     @Test
-    fun encodesLaunchesAndIconRequests() {
+    fun encodesLaunchesIconRequestsAndMoves() {
         fun fields(frame: ByteArray): Map<String, Any> {
             assertEquals(Gui.JSON, frame[0].toInt())
             val o = JSONObject(String(frame, 5, frame.size - 5))
@@ -115,6 +115,8 @@ class GuiReaderTest {
         )
         assertEquals(mapOf("type" to "launch-cancel", "id" to "a-1"), fields(Gui.launchCancel("a-1")))
         assertEquals(mapOf("type" to "icon", "icon" to "k1", "size" to 96), fields(Gui.icon("k1", 96)))
+        // A u32 id past Int's range stays unsigned.
+        assertEquals(mapOf("type" to "move", "id" to 4294967295L, "tab" to "0123456789abcdef"), fields(Gui.move(-1, "0123456789abcdef")))
     }
 
     @Test

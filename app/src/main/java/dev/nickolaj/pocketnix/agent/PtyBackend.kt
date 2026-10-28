@@ -21,6 +21,10 @@ class PtyBackend(
     private val sender = Executors.newSingleThreadExecutor { r -> Thread(r, "pty-resize").apply { isDaemon = true } }
     private lateinit var sink: TerminalBackend.Sink
 
+    /** The agent's id for the session (`POCKETNIX_TAB` in its environment), "" until its Hello arrives. */
+    @Volatile var agentTab = ""
+        private set
+
     override fun start(columns: Int, rows: Int, cellWidthPixels: Int, cellHeightPixels: Int, sink: TerminalBackend.Sink) {
         this.sink = sink
         Thread({ run(columns, rows) }, "pty-reader").apply { isDaemon = true }.start()
@@ -30,7 +34,7 @@ class PtyBackend(
         var status: Int? = null
         var reason: String? = null
         try {
-            val (s, _) = dialer.open(
+            val (s, hello) = dialer.open(
                 Protocol.hello("pty", appVersion) {
                     profile?.let { put("profile", it) }
                     put("rows", rows)
@@ -38,6 +42,7 @@ class PtyBackend(
                 },
             )
             stream = s
+            agentTab = hello.optString("tab")
             connected.countDown()
             // Closed while dialing: close() found no stream to close.
             if (closed.get()) {
