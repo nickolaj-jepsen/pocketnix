@@ -762,8 +762,10 @@ directory, `$XDG_RUNTIME_DIR` (`/run/user/<uid>`).
     `fonts.enableDefaultPackages`
 - The compositor's `XDG_DATA_DIRS` and `PATH` are the user manager's, which
   pam_env fills from NixOS's profile-relative session variables: both cover
-  the user's and the system's profiles. The module adds nothing there, but
-  its VM test checks that the compositor lists an app from the system profile
-  and launches it.
+  the user's and the system's profiles. The module adds nothing to them; it
+  only sets `enableDefaultPath = false` on the service, since NixOS would
+  otherwise replace that `PATH` with a minimal one of its own. Its VM test
+  checks that the compositor lists an app from the system profile and
+  launches it.
 - The session user's lingering, which the module already sets, is what
   starts the user manager and so the sockets.

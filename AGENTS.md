@@ -191,6 +191,13 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
 - Tabs have no login session, so without lingering there is no user manager
   and no `/run/user/<uid>/bus`; the module lingers the user, which brings the
   session bus up with no login (the NixOS test checks it).
+- NixOS gives every unit, user units too, a minimal default `PATH` that
+  replaces the user manager's: a unit that must find the profiles' programs
+  (the compositor's `Exec`/`TryExec`) needs `enableDefaultPath = false`.
+- `systemd-run --user` finds the user manager through `XDG_RUNTIME_DIR`
+  (`DBUS_SESSION_BUS_ADDRESS` alone isn't enough): a desktop compositor
+  started with a private runtime dir can't launch anything ("Failed to
+  connect to user scope bus via local transport").
 - NixOS leaves polkit off, and without it logind refuses every sleep
   inhibitor but root's ("Access denied"). With it, a user without a logind
   session (a tab, `runuser`, a unit's `User=`) still needs authentication
