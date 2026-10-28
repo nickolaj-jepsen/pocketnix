@@ -59,6 +59,9 @@ pub struct Meta {
     /// becomes a window.
     pub tab: String,
     pub mapped_before: bool,
+    /// State requests (fullscreen, maximize and their undoing) made before
+    /// the app knew the toplevel, sent after it is announced.
+    pub early: Vec<&'static str>,
 }
 
 #[derive(Default)]

@@ -1250,6 +1250,24 @@ fn f(v: f32) -> [u8; 4] {
 }
 
 #[test]
+fn full_screen_asked_before_mapping_follows_the_toplevel() {
+    let compositor = Compositor::start("early-fullscreen");
+    let mut app = App::connect(&compositor);
+    app.wait_json("ready");
+    app.send_json(json!({"type": "output", "width": 800, "height": 600, "scale": 1.0, "refresh": 60000}));
+    std::thread::sleep(Duration::from_millis(100));
+
+    let (w, h) = (200, 100);
+    let mut client = Pattern::connect(&compositor, w, h);
+    client.toplevel.set_fullscreen(None);
+    client.roundtrip();
+    client.draw(&pattern(w, h, 0), [0, 0, w, h], false);
+    let toplevel = app.wait_json("toplevel");
+    let request = app.wait_json("toplevel-request");
+    assert_eq!((&request["id"], &request["request"]), (&toplevel["id"], &json!("fullscreen")));
+}
+
+#[test]
 fn touch_lands_on_the_surface_under_each_point() {
     let compositor = Compositor::start("touch");
     let mut app = App::connect(&compositor);

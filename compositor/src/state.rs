@@ -449,10 +449,27 @@ impl State {
         }
     }
 
-    fn toplevel_request(&mut self, toplevel: &ToplevelSurface, request: &str) {
+    fn toplevel_request(&mut self, toplevel: &ToplevelSurface, request: &'static str) {
         let Some(id) = surface_id(toplevel.wl_surface()) else { return };
-        if self.gui.active_conn().is_some_and(|c| c.toplevels.get(&id).is_some_and(|(w, _)| *w == id)) {
-            self.send_json(serde_json::json!({"type": "toplevel-request", "id": id, "request": request}));
+        match self.gui.active_conn().and_then(|c| c.toplevels.get(&id)) {
+            Some((w, _)) => {
+                if *w == id {
+                    self.send_json(serde_json::json!({"type": "toplevel-request", "id": id, "request": request}));
+                }
+            }
+            // Asked before the app knew the window, as a client starting full screen does before its first commit.
+            None => {
+                let opposite = match request {
+                    "fullscreen" => "unfullscreen",
+                    "unfullscreen" => "fullscreen",
+                    "maximize" => "unmaximize",
+                    "unmaximize" => "maximize",
+                    _ => return,
+                };
+                let early = &mut self.meta.entry(id).or_default().early;
+                early.retain(|r| *r != request && *r != opposite);
+                early.push(request);
+            }
         }
     }
 

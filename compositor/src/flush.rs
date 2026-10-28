@@ -247,7 +247,12 @@ impl State {
         for (id, info) in infos {
             if conn.toplevels.get(&id).map(|(w, v)| (*w, v)) != Some((window, &info)) {
                 conn.send(protocol::json_frame(&info));
-                conn.toplevels.insert(id, (window, info));
+                let announced = conn.toplevels.insert(id, (window, info)).is_none();
+                if let Some(meta) = self.meta.get_mut(&id).filter(|_| announced) {
+                    for request in meta.early.drain(..).filter(|_| id == window) {
+                        conn.send(protocol::json_frame(&json!({"type": "toplevel-request", "id": id, "request": request})));
+                    }
+                }
             }
         }
         let ids: Vec<(u32, u32)> = layers.iter().map(|l| (l.id, l.toplevel)).collect();
