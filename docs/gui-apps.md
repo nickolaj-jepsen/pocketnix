@@ -26,7 +26,11 @@ Deferred: per-app stub APKs (#2) and remote machines' apps (#3).
 socket-activated user service, exports `WAYLAND_DISPLAY` to the user session,
 and turns on `services.pipewire`, `xdg.portal` (and with it the FileChooser
 integration) and a font set with `mkDefault`. It sets `NIXOS_OZONE_WL=1`, so
-Electron apps come up as Wayland clients.
+Electron apps come up as Wayland clients. It keeps the closure down: the GTK
+portal without its wallpaper
+portal (gnome-desktop, gtk4, GStreamer), xdg-desktop-portal without geoclue,
+and fonts without CJK, unifont and freefont, which
+`fonts.enableDefaultPackages` brings back.
 
 There is no list of apps in the module. The launcher shows the `.desktop`
 files the system and user profiles already have.
@@ -134,7 +138,8 @@ never writes Nix.
 ## Audio
 
 - The local VM uses AVF's own virtio-snd device, which the guest kernel already
-  supports. Read from the AOSP source only; it needs confirming on the phone.
+  supports. Confirmed on the phone: virtmgr runs `crosvm_vu_snd`, which plays
+  through AAudio. The debug build's `--ez audio true` turns it on for now.
 - The microphone is enabled at VM start only once `RECORD_AUDIO` is granted;
   a GUI setting asks for it and applies at the next boot.
 - An MPRIS to MediaSession bridge in the agent gives lock-screen and headset

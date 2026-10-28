@@ -628,8 +628,10 @@ in {
       enable = mkEnableOption ''
         the guest's Wayland apps as Android windows: the pocketnix compositor
         as a socket-activated user service with `WAYLAND_DISPLAY` set for the
-        user's session, and by default PipeWire, xdg-desktop-portal (and with
-        it the FileChooser integration) and a basic font set
+        user's session, and by default PipeWire (the user in `audio`),
+        xdg-desktop-portal (and with it the FileChooser integration) without
+        its location and wallpaper portals, SVG icons and a basic font set;
+        CJK fonts need `fonts.enableDefaultPackages` or your own
       '';
       package = mkOption {
         type = types.package;
@@ -993,12 +995,34 @@ in {
         enable = mkDefault true;
         pulse.enable = mkDefault true;
       };
+      # logind gives /dev/snd only to sessions on a seat, and the user manager
+      # PipeWire runs in, tabs and the console have none.
+      users.users.${cfg.user}.extraGroups = ["audio"];
+      security.rtkit.enable = mkDefault true;
+      # The location portal pulls in geoclue and ModemManager (~85 MiB), and a
+      # VM has no location to give it. Its location test runs without geoclue
+      # anyway, and aborts.
+      nixpkgs.overlays = [
+        (_: prev: {
+          xdg-desktop-portal = (prev.xdg-desktop-portal.override {enableGeoLocation = false;}).overrideAttrs {doCheck = false;};
+        })
+      ];
       xdg.portal = {
         enable = mkDefault true;
-        extraPortals = [pkgs.xdg-desktop-portal-gtk];
+        # Its wallpaper portal pulls in gnome-desktop, gtk4 and GStreamer's
+        # plugins (~180 MiB) for a wallpaper no window here shows.
+        extraPortals = [
+          (pkgs.xdg-desktop-portal-gtk.overrideAttrs (o: {
+            buildInputs = lib.remove pkgs.gnome-desktop o.buildInputs;
+            mesonFlags = (o.mesonFlags or []) ++ ["-Dwallpaper=disabled"];
+          }))
+        ];
         config.common.default = mkDefault "gtk";
       };
-      fonts.enableDefaultPackages = mkDefault true;
+      # GTK's own loaders can't read SVG, so most icons would draw blank.
+      programs.gdk-pixbuf.modulePackages = [pkgs.librsvg];
+      # enableDefaultPackages adds CJK, unifont and freefont (~145 MiB) to this.
+      fonts.packages = [pkgs.dejavu_fonts pkgs.liberation_ttf pkgs.noto-fonts-color-emoji];
     })
 
     (mkIf cfg.integrations.xdgOpen {

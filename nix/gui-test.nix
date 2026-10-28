@@ -134,6 +134,8 @@
 in
   pkgs.testers.runNixOSTest {
     name = "pocketnix-gui";
+    # gui.enable sets an overlay.
+    node.pkgsReadOnly = false;
 
     nodes.phone = {
       imports = [self.nixosModules.default ../example/configuration.nix];
@@ -148,6 +150,8 @@ in
       };
       environment.systemPackages = [pkgs.foot];
       virtualisation.memorySize = 2048;
+      # The phone's sound card, played nowhere.
+      virtualisation.qemu.options = ["-audiodev none,id=snd0" "-device virtio-sound-pci,audiodev=snd0"];
       # Test VMs leave it out unless asked; the switch subtest needs it.
       system.switch.enable = true;
     };
@@ -208,6 +212,17 @@ in
           # Gets WAYLAND_DISPLAY from the user manager, like any user service.
           phone.succeed(user("systemd-run --user --unit=foot foot"))
           phone.wait_for_unit("pocketnix-compositor.service", "nixos")
+
+      with subtest("the user's apps get sound, SVG images and the FileChooser portal"):
+          # The user has no seat session: PipeWire finds the card only through the audio group.
+          phone.wait_until_succeeds(user("wpctl inspect @DEFAULT_AUDIO_SINK@"), timeout=60)
+          phone.succeed("printf '<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"/>' >/tmp/dot.svg")
+          phone.succeed(user("bash -lc '${pkgs.gdk-pixbuf}/bin/gdk-pixbuf-thumbnailer -s 8 /tmp/dot.svg /tmp/dot.png'"))
+          phone.succeed("test -s /tmp/dot.png")
+          # Activates xdg-desktop-portal, which exports FileChooser only if the GTK portal implements it.
+          phone.wait_until_succeeds(user(
+              "busctl --user get-property org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop org.freedesktop.portal.FileChooser version"
+          ), timeout=60)
 
       with subtest("the gui stream reaches the compositor and gets the replay"):
           first = replay("--want-app", "foot")

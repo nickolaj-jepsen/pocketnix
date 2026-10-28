@@ -138,6 +138,12 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
 - An app can't `FIONREAD` a vsock fd, so `available()` on its stream throws,
   and a `BufferedInputStream` calls it after every short read: big PTY output
   and forwards died. `AgentLink`'s buffer hides it; TCP tests can't catch it.
+- GrapheneOS refuses perf events for app processes, from adb shell and under
+  `run-as` alike: simpleperf can't profile the app (`--app` waits forever for
+  its process). Per-thread `/proc` stat is what there is.
+- logind grants `/dev/snd` only to sessions on a seat; the console on hvc0,
+  tabs and the lingering user manager (PipeWire's) have none, so without the
+  `audio` group PipeWire sees no card and only root can play.
 
 ## Traps (verified on the desktop)
 
@@ -211,3 +217,5 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
   `pocketnix-online.target` stays active until the VPN app is stopped. The
   VM's own `avf_tap_fixed` is a validated ethernet network without INTERNET
   too.
+- `gui.enable` sets `nixpkgs.overlays`, which a NixOS test's read-only pkgs
+  refuse: such a test needs `node.pkgsReadOnly = false`.
