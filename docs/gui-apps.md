@@ -68,8 +68,9 @@ files the system and user profiles already have.
   so the splash covers a real wait.
 - A cached app that no longer exists after a switch says so on the splash, and
   its pins are disabled with `disableShortcuts`.
-- Stale Recents cards from a dead VM are removed in `Application.onCreate`.
-  No session restore.
+- Stale Recents cards from a dead VM are removed: window cards in
+  `Application.onCreate`, launch cards when the process's first activity is
+  created (until then they look like a fresh launch). No session restore.
 - Stopping the VM with GUI windows open asks first and names them.
 
 ## Scale
