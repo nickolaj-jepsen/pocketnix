@@ -52,9 +52,6 @@ internal class WindowIme(
     /** The row's modifiers changed: redraw it. */
     var onModifiers: () -> Unit = {}
 
-    /** The text input's cursor rectangle, in window pixels, whenever a state has one. */
-    var onCursorRect: (PixelRect) -> Unit = {}
-
     // This window's text input, or NONE.
     private var state = TextInputState.NONE
 
@@ -106,7 +103,6 @@ internal class WindowIme(
                 }
                 cursorAnchor()
             }
-            s.cursorRect?.let(onCursorRect)
         } else if (state.active) {
             state = TextInputState.NONE
             main.removeCallbacks(resync)
