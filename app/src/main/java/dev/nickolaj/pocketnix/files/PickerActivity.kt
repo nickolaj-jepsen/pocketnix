@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
+import dev.nickolaj.pocketnix.gui.Helper
 import dev.nickolaj.pocketnix.vm
 import org.json.JSONObject
 
@@ -15,7 +16,7 @@ import org.json.JSONObject
  * [Transfers] push) and hands the result to the guest. Invisible; reports
  * with a toast.
  */
-class PickerActivity : Activity() {
+class PickerActivity : Activity(), Helper {
     private val ref get() = intent.getStringExtra(EXTRA_REF).orEmpty()
     private val pick get() = intent.getStringExtra(EXTRA_KIND) == "pick"
     private var answered = false

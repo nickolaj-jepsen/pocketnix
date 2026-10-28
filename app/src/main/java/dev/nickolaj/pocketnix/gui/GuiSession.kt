@@ -691,7 +691,14 @@ internal inline fun <T> guard(what: String, fallback: T, block: () -> T): T = tr
 
 internal inline fun guard(what: String, block: () -> Unit) = guard(what, Unit, block)
 
-/** Whether any of the app's activities is started: Android only lets a visible app launch activities. */
+/**
+ * A translucent helper over another app (a dialog, a picker): it doesn't
+ * make pocketnix visible to [Foreground], so a window waiting to open doesn't
+ * cover it.
+ */
+interface Helper
+
+/** Whether any of the app's activities but a [Helper] is started: Android only lets a visible app launch activities. */
 object Foreground : android.app.Application.ActivityLifecycleCallbacks {
     @Volatile private var started = 0
     private var created = false
@@ -704,10 +711,12 @@ object Foreground : android.app.Application.ActivityLifecycleCallbacks {
     }
 
     override fun onActivityStarted(activity: android.app.Activity) {
+        if (activity is Helper) return
         if (started++ == 0) for (l in listeners) l()
     }
 
     override fun onActivityStopped(activity: android.app.Activity) {
+        if (activity is Helper) return
         started = (started - 1).coerceAtLeast(0)
     }
 

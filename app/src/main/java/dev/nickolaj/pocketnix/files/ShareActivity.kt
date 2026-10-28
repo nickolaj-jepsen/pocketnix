@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
+import dev.nickolaj.pocketnix.gui.Helper
 import dev.nickolaj.pocketnix.vm
 import kotlinx.coroutines.runBlocking
 import java.io.File
@@ -15,7 +16,7 @@ import java.io.File
  * `pocketnix.guest.share.directory` (the module's share command then runs on
  * each). Invisible; reports with a toast.
  */
-class ShareActivity : Activity() {
+class ShareActivity : Activity(), Helper {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // A rotation recreates the activity: the share already ran.

@@ -11,7 +11,7 @@ import dev.nickolaj.pocketnix.vm
  * Stops the VM for the Quick Settings tile and the notification's Stop
  * action, asking first while GUI windows are open, since they close with it.
  */
-class StopActivity : Activity() {
+class StopActivity : Activity(), Helper {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val windows = vm.gui.windowTitles()
