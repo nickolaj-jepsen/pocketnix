@@ -1,7 +1,8 @@
 # A guest with gui.enable: socket activation brings up the compositor for a
 # Wayland client, and the agent's gui stream reaches it and gets its replay,
 # also after the agent restarts; the app list has the system profile's apps,
-# and a launch from it opens a window bound to the launch.
+# a launch from it opens a window bound to the launch, and foot takes text
+# from the IME and as typed keys.
 {
   pkgs,
   self,
@@ -12,14 +13,18 @@
   # held as JSON. Fails without a toplevel of --want-app. With --launch, it
   # then launches that entry and waits for its window and its icon. With
   # --wait-app, it says "ready" on stderr and waits for an app list pushed
-  # after the replay that has that entry.
+  # after the replay that has that entry. With --type, it focuses that app's
+  # window, presents its commits, commits "héllo " through its text input
+  # and then types "wörld\n", waiting each time for the client to move its
+  # cursor.
   probe = pkgs.writers.writePython3Bin "gui-probe" {flakeIgnore = ["E501"];} ''
     import json
     import struct
     import subprocess
     import sys
 
-    JSON, COMMIT, COMMIT_DATA, ICON = 0x00, 0x01, 0x02, 0x03
+    JSON, COMMIT, COMMIT_DATA, ICON, PRESENTED = 0x00, 0x01, 0x02, 0x03, 0x10
+    GROUPED = 1 << 4
     HEADER = ">HHIIIHBBBBHiiIIIIIIIIiIIIQ"
 
 
@@ -44,12 +49,14 @@
 
 
     args = sys.argv[1:]
-    want = launch = wait_app = None
-    while args[:1] in (["--want-app"], ["--launch"], ["--wait-app"]):
+    want = launch = wait_app = type_app = None
+    while args[:1] in (["--want-app"], ["--launch"], ["--wait-app"], ["--type"]):
         if args[0] == "--want-app":
             want = args[1]
         elif args[0] == "--wait-app":
             wait_app = args[1]
+        elif args[0] == "--type":
+            type_app = args[1]
         else:
             launch = args[1]
         args = args[2:]
@@ -58,11 +65,35 @@
     out = {"toplevels": [], "surfaces": [], "commits": []}
     pending = None
     ready = False
+    typing = {"window": 0, "stage": 0, "rect": None}
+
+
+    def focus(window):
+        typing["window"] = window
+        send_json(p.stdin, {"type": "window", "id": window, "width": 0, "height": 0, "scale": 1.0,
+                            "focused": True, "visible": True, "maximized": False, "fullscreen": False})
+
+
+    def text_input(msg):
+        if not typing["window"] or msg["window"] != typing["window"] or msg["session"] == 0:
+            return
+        if typing["stage"] == 0:
+            out["textInput"] = msg
+            send_json(p.stdin, {"type": "ime", "session": msg["session"], "serial": 1, "commit": "héllo "})
+            typing["stage"] = 1
+        elif typing["stage"] == 1 and msg["applied"] >= 1:
+            typing["rect"] = msg["cursorRect"]
+            send_json(p.stdin, {"type": "text", "window": typing["window"], "text": "wörld\n"})
+            typing["stage"] = 2
+        elif typing["stage"] == 2 and msg["cursorRect"] != typing["rect"]:
+            out["typed"] = True
 
 
     def done():
         if not ready:
             return False
+        if type_app:
+            return "typed" in out
         if wait_app:
             return "pushed" in out
         if not launch:
@@ -85,6 +116,10 @@
                 out["toplevels"].append(msg)
                 if launch and ready and msg.get("launch") == "vm-test":
                     out["launched"] = msg
+                if type_app and ready and not typing["window"] and msg.get("appId") == type_app:
+                    focus(msg["id"])
+            elif t == "text-input":
+                text_input(msg)
             elif t == "surface":
                 out["surfaces"].append(msg)
             elif t == "apps":
@@ -95,6 +130,10 @@
                 sys.exit(f"launch failed: {msg}")
             elif t == "ready":
                 ready = True
+                if type_app:
+                    top = next((x for x in out["toplevels"] if x["appId"] == type_app), None)
+                    if top:
+                        focus(top["id"])
                 if wait_app:
                     print("ready", file=sys.stderr, flush=True)
                 if launch:
@@ -113,6 +152,10 @@
             c = {"surface": surface, "window": window, "seq": seq, "flags": flags, "dataLength": length}
             c["received"] = len(payload) - header_size - 16 * rects
             out["commits"].append(c)
+            # Typing needs the client to redraw, which waits for its frame callbacks.
+            if type_app and not flags & GROUPED:
+                p.stdin.write(struct.pack(">BIII", PRESENTED, 8, window, seq))
+                p.stdin.flush()
             if c["received"] < length:
                 pending = c
         elif typ == COMMIT_DATA:
@@ -279,5 +322,14 @@ in
           assert after == pid, (pid, after)
           assert any(t["id"] == foot["id"] for t in replay()["toplevels"])
           phone.succeed(f"umount {apps}")
+
+      with subtest("foot takes text from the IME and as typed keys"):
+          phone.succeed(user("systemd-run --user --unit=typed foot --app-id=typed sh -c 'cat >/home/nixos/typed'"))
+          typed = replay("--want-app", "typed", "--type", "typed")
+          ti = typed["textInput"]
+          assert ti["purpose"] == "terminal" and ti["session"] >= 1, ti
+          phone.wait_until_succeeds("grep -q wörld /home/nixos/typed", timeout=30)
+          content = phone.succeed("cat /home/nixos/typed")
+          assert content == "héllo wörld\n", repr(content)
     '';
   }
