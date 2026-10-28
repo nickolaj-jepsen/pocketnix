@@ -395,7 +395,8 @@ its zoom transform before sending it.
   `getRepeatCount() > 0`.
 - When keyboard focus leaves a window, the compositor releases the keys it
   holds pressed. When the pointer leaves, it releases held buttons unless a
-  drag is in progress.
+  drag is in progress. When the app's connection ends, it releases every
+  key and button the app held.
 - Keymap: the compositor's own XKB keymap interprets the codes (see
   Keyboard layout). The app sends `KeyEvent.getScanCode()` for hardware
   keyboards, which is the evdev code, and maps `keyCode` to evdev for events
@@ -430,7 +431,8 @@ gets Pointer mode instead.
   events since the last one.
 - TOUCH_CANCEL is Android's `ACTION_CANCEL` (a system gesture took the
   touch): `wl_touch.cancel` to every client with points in the window, and
-  all its points end. They end the same way when the window unmaps.
+  all its points end. They end the same way when the window unmaps, and
+  every window's when the app's connection ends.
 - `toplevel.touch` is true once the toplevel's client has a `wl_touch`; the
   compositor's seat always has the touch capability, so toolkits create one
   at startup. The compositor sends the `toplevel` again when that changes.

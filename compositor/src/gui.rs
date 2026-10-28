@@ -416,6 +416,41 @@ impl State {
             self.gui.active = None;
             self.gui.generation = 0;
             info!("app disconnected");
+            self.release_input();
+        }
+    }
+
+    /// The app's input ends with its connection: its UPs and releases may never come.
+    fn release_input(&mut self) {
+        let mut windows: Vec<u32> = self.touch.points.keys().map(|(w, _)| *w).collect();
+        windows.sort_unstable();
+        windows.dedup();
+        for window in windows {
+            self.touch_cancel(window);
+        }
+        self.drag = None;
+        self.swallowed_buttons.clear();
+        let time = self.time_ms();
+        if let Some(pointer) = self.seat.get_pointer()
+            && !self.pressed_buttons.is_empty()
+        {
+            for button in std::mem::take(&mut self.pressed_buttons) {
+                let event = ButtonEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time,
+                    button,
+                    state: ButtonState::Released,
+                };
+                pointer.button(self, &event);
+            }
+            pointer.frame(self);
+        }
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            for key in std::mem::take(&mut self.pressed_keys) {
+                keyboard.input::<(), _>(self, (key + 8).into(), KeyState::Released, SERIAL_COUNTER.next_serial(), time, |_, _, _| {
+                    FilterResult::Forward
+                });
+            }
         }
     }
 

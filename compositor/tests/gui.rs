@@ -1330,6 +1330,14 @@ fn touch_lands_on_the_surface_under_each_point() {
     app.send_json(json!({"type": "window", "id": window, "width": 700, "height": 350, "scale": 2.0,
         "focused": true, "visible": true, "maximized": false, "fullscreen": false}));
     client.dispatch_until("the popup's dismissal", |s| s.popup_done);
+
+    // A point the app never lifts ends with its connection.
+    client.state.touch.clear();
+    app.send_binary(0x40, &[&w32, &3u32.to_be_bytes(), &f(40.0), &f(60.0)]);
+    app.send_binary(0x44, &[&w32]);
+    client.dispatch_until("the point", |s| s.touch.iter().any(|e| e == "frame"));
+    drop(app);
+    client.dispatch_until("the cancel", |s| s.touch.iter().any(|e| e == "cancel"));
 }
 
 #[test]
