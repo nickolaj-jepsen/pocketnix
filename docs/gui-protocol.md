@@ -2,7 +2,7 @@
 
 The wire between the guest compositor (`pocketnix-compositor`) and the app,
 for the decisions in `gui-apps.md`. The agent only carries it. This page
-specifies what steps 1 and 2 need and reserves names for later steps, so that
+specifies what steps 1 to 3 need and reserves names for later steps, so that
 those steps only add things. The last section is the contract between the
 compositor, the agent, the NixOS module and the app.
 
@@ -45,10 +45,14 @@ compositor, the agent, the NixOS module and the app.
 | `0x21` | POINTER_BUTTON | app → compositor | 1 |
 | `0x22` | POINTER_AXIS | app → compositor | 1 |
 | `0x23` | POINTER_LEAVE | app → compositor | 1 |
-| `0x24` | POINTER_RELATIVE | app → compositor | reserved, 3 |
+| `0x24` | POINTER_RELATIVE | app → compositor | reserved |
 | `0x30` | KEY | app → compositor | 1 |
 | `0x31` | MODIFIERS | app → compositor | 1 |
-| `0x40`–`0x44` | TOUCH_DOWN, TOUCH_UP, TOUCH_MOTION, TOUCH_CANCEL, TOUCH_FRAME | app → compositor | reserved, 3 |
+| `0x40` | TOUCH_DOWN | app → compositor | 3 |
+| `0x41` | TOUCH_UP | app → compositor | 3 |
+| `0x42` | TOUCH_MOTION | app → compositor | 3 |
+| `0x43` | TOUCH_CANCEL | app → compositor | 3 |
+| `0x44` | TOUCH_FRAME | app → compositor | 3 |
 
 ## Session
 
@@ -63,8 +67,8 @@ compositor, the agent, the NixOS module and the app.
    or with `{"type":"error","message":"…"}` and closes.
    `instance` is a random string fixed for the compositor process's lifetime.
 3. The compositor starts the replay at once. The app, after reading the hello,
-   sends `output` and then a `window` for each window it still shows from the
-   same `instance`.
+   sends `output`, `settings` and `keyboard-layout`, and then a `window` for
+   each window it still shows from the same `instance`.
 
 Surface ids are `u32`, assigned by the compositor, unique within an `instance`
 and never reused in it. Ids from another instance mean nothing. When the
@@ -77,7 +81,9 @@ dialogs included, as a window of its own; version 2 draws a child toplevel
 inside its parent's window (see Dialogs), which changes what `toplevel` and a
 commit's `window` mean for it. Version 1 was never released, so neither side
 speaks it: both send `minVersion` 2. Everything else version 2 adds to
-version 1 is new messages, fields and frame types.
+version 1 is new messages, fields and frame types, and so is everything step
+3 adds: a side that lacks them behaves as in step 2 (a `toplevel` without
+`touch` has none, so the app uses Pointer mode).
 
 ### Replay
 
@@ -88,6 +94,7 @@ On every connection, after its `hello`, the compositor sends its whole state:
   (dialogs' included), then one group of FULL commits for every surface of
   the window that has a buffer
 - `cursor`
+- `text-input`
 - `apps`
 - `ready`
 
@@ -125,11 +132,39 @@ other than frame callbacks pausing while no app is connected.
   arithmetic for placement.
 - Cursor surfaces aren't sent before step 4 (see `cursor`).
 
+### Scale
+
+- A window's `scale` (from `window`) is the display's density times the
+  app's size factor for it, which the app lowers when the window's minimum
+  size doesn't fit (`gui-apps.md`, Scale). Every surface drawn in the window
+  renders at it, whichever toplevel or client it belongs to: the compositor
+  gives each the window's preferred fractional scale and `ceil` of it as
+  `wl_surface.preferred_buffer_scale`.
+- Everything a client places is in its window's logical space and becomes
+  window pixels through that one scale: subsurface offsets, popup
+  positions, dialog placement, input regions, the text input's cursor
+  rectangle and, from step 4, the cursor hotspot. Popup positioners are
+  solved against the window's logical size (`width / scale` ×
+  `height / scale`). Input goes the other way: pointer and touch positions
+  are divided by the window's scale before hit-testing.
+- Until the app's first `window` for a new window, its scale is
+  `output.scale` times its entry's size factor from `settings`, and its
+  first configure is the output's size at that scale. The entry is the one
+  the toplevel matches when that configure is sent (see Which entry a
+  toplevel is; a launch is known then by its scope, and by its token only if
+  the client activated first); none known yet means the default factor.
+- When a window's scale changes, the compositor dismisses its open popups
+  (`xdg_popup.popup_done`): they were placed for the old logical size.
+- `wl_output.scale` is per client, not per surface. A client that reads
+  only that (GTK3) and has windows at different scales renders them all at
+  the integer scale of the one whose scale changed last; each commit's
+  destination size still places them right.
+
 ### Compositor → app JSON
 
 | message | fields | meaning |
 |---|---|---|
-| `toplevel` | `id`, `window`, `parent`, `title`, `appId`, `app`, `launch`, `tab`, `width`, `height`, `minWidth`, `minHeight`, `maxWidth`, `maxHeight`, `decoration` | A toplevel mapped, or its metadata changed. Sent whole every time. `window`: the window it draws in, its own `id` for a window. `parent`: the parent toplevel's id, 0 for a window. `app`: the app-list entry it belongs to (see Which entry a toplevel is). `launch`: the launch it was bound to when it first mapped (see Binding a window to a launch), kept for the toplevel's life. `tab`: where the window goes (see Where a window goes); `""` for a dialog. `width`/`height`: the window geometry's current size. Min/max: 0 for none. `decoration`: `"client"` or `"server"` (the xdg-decoration mode in effect). Strings may be empty. |
+| `toplevel` | `id`, `window`, `parent`, `title`, `appId`, `app`, `launch`, `tab`, `width`, `height`, `minWidth`, `minHeight`, `maxWidth`, `maxHeight`, `scale`, `decoration`, `touch` | A toplevel mapped, or its metadata changed. Sent whole every time. `window`: the window it draws in, its own `id` for a window. `parent`: the parent toplevel's id, 0 for a window. `app`: the app-list entry it belongs to (see Which entry a toplevel is). `launch`: the launch it was bound to when it first mapped (see Binding a window to a launch), kept for the toplevel's life. `tab`: where the window goes (see Where a window goes); `""` for a dialog. `width`/`height`: the window geometry's current size. Min/max: 0 for none. `scale`: the scale those pixel sizes were computed with, the window's (so the app recovers the client's logical minimum as `minWidth / scale`, to within a pixel). `decoration`: `"client"` or `"server"` (the xdg-decoration mode in effect). `touch`: whether the toplevel's client has a `wl_touch` (see Touch). Strings may be empty. |
 | `toplevel-removed` | `id` | The toplevel was unmapped or destroyed. For a window, the app forgets the window and every surface and dialog in it. For a dialog, it forgets the dialog and the surfaces whose `toplevel` is `id`. If it maps again it's announced again, with the same id, followed by FULL commits. |
 | `toplevel-request` | `id`, `request` | The client asked for `minimize`, `maximize`, `unmaximize`, `fullscreen`, `unfullscreen`, `move` or `resize`. Advisory; the app may ignore any of them. Never sent for a dialog. |
 | `surface` | `id`, `window`, `toplevel`, `role`, `parent` | A surface joined a window, before its first commit. `toplevel`: the toplevel whose tree it's in (its own id for a toplevel's root surface; a popup belongs to the toplevel it was opened from). `role`: `"toplevel"`, `"subsurface"` or `"popup"`. `parent`: the parent surface's id (0 for a toplevel's root surface, a dialog's included). |
@@ -139,6 +174,7 @@ other than frame callbacks pausing while no app is connected.
 | `launch-started` | `id` | A launch's process started (see Launching). |
 | `launch-failed` | `id`, `reason`, `message` | A launch ended without a window (see Launching). |
 | `activate` | `window`, `launch` | A client asked to bring `window` forward (see Activation). |
+| `text-input` | `window`, `session`, `applied`, `text`, `cursor`, `anchor`, `cause`, `purpose`, `hints`, `cursorRect` | The focused text input's state (see Text input). |
 | `ready` | | End of the replay. |
 | `error` | `message` | Sent before the compositor closes the connection over a protocol error. |
 
@@ -146,13 +182,17 @@ other than frame callbacks pausing while no app is connected.
 
 | message | fields | meaning |
 |---|---|---|
-| `output` | `width`, `height`, `scale`, `refresh` | The display a new window opens on: the size in pixels a new window would get, the density (`densityDpi / 160`, a float) and the refresh rate in mHz. Sent after the hello and whenever it changes. The compositor's `wl_output` and the initial configure of new toplevels follow it. |
-| `window` | `id`, `width`, `height`, `scale`, `focused`, `visible`, `maximized`, `fullscreen` | The Android window's state for a window. `width`/`height` in pixels (0: let the client choose). `scale`: pixels per logical pixel for this window (density times any size preset); the compositor gives the client this as its preferred fractional scale (and `ceil` of it as the integer buffer scale) and configures it at `round(width / scale)` × `round(height / scale)`. `focused` maps to the `activated` state and keyboard focus, `visible: false` to `suspended`, and the other two to the xdg states of the same names. Debounce while a resize is in progress. Ignored for a dialog's id. |
+| `output` | `width`, `height`, `scale`, `refresh` | The display a new window opens on: the size in pixels a new window would get, the density (`densityDpi / 160`, a float) and the refresh rate in mHz. Sent after the hello and whenever it changes. The compositor's `wl_output` and the initial configure of new toplevels follow it (see Scale). |
+| `settings` | `size`, `apps` | The size factor each app's new windows open at (see Scale): `size` for any entry, and `apps`, an object keyed by entry id, `{"<id>": {"size": <factor>}}`, for those that differ. Factors are positive floats, 1 for Phone; the app sends the factors that apply on the display `output` describes. Sent after `output` on every connection and whenever a factor changes. Absent, every factor is 1. The input mode is the app's alone and isn't sent. |
+| `keyboard-layout` | `layout`, `variant` | The guest's keymap (see Keyboard layout). |
+| `window` | `id`, `width`, `height`, `scale`, `focused`, `visible`, `maximized`, `fullscreen` | The Android window's state for a window. `width`/`height` in pixels (0: let the client choose): the area the window's layers show in, without pocketnix's own controls. `scale`: pixels per logical pixel for this window (density times its size factor, lowered to fit; see Scale); the compositor gives the client this as its preferred fractional scale (and `ceil` of it as the integer buffer scale) and configures it at `round(width / scale)` × `round(height / scale)`. `focused` maps to the `activated` state and keyboard focus, `visible: false` to `suspended`, and the other two to the xdg states of the same names. Debounce while a resize is in progress. Ignored for a dialog's id. |
 | `close` | `id` | `xdg_toplevel.close`, e.g. from `onDestroy` of a window the user closed. Works for a dialog too. |
 | `move` | `id`, `tab` | Move window `id` to `tab` (see Moving a window). |
 | `icon` | `icon`, `size` | Render an icon (see Icons). |
 | `launch` | `id`, `app`, `action`, `tab` | Start an app (see Launching). |
 | `launch-cancel` | `id` | The app stopped waiting for a launch (see Launching). |
+| `text` | `window`, `text` | Type `text` as key presses (see Typing text). |
+| `ime` | `session`, `serial`, `deleteBefore`, `deleteAfter`, `commit`, `preedit`, `preeditCursorBegin`, `preeditCursorEnd` | An edit from Android's IME (see Text input). |
 
 ## Commits
 
@@ -329,7 +369,8 @@ The app reports input in window pixels, relative to the window's origin. The
 compositor divides by the window's scale, hit-tests the window's surfaces
 (input regions, popups, subsurfaces, dialogs) and sends the Wayland events.
 The app does no hit-testing. Event times come from the compositor's clock on
-receipt.
+receipt. Zoom is the app's alone: it maps a position on the view back through
+its zoom transform before sending it.
 
 | type | payload |
 |---|---|
@@ -339,6 +380,11 @@ receipt.
 | POINTER_LEAVE `0x23` | `[window u32]`. |
 | KEY `0x30` | `[window u32][key u32][state u8]`: `key` a Linux evdev `KEY_*` code (XKB keycode − 8); `state` 1 pressed, 0 released. |
 | MODIFIERS `0x31` | `[window u32][mods u8]`: bit 0 shift, 1 ctrl, 2 alt, 3 logo, 4 caps lock, 5 num lock. |
+| TOUCH_DOWN `0x40` | `[window u32][id u32][x f32][y f32]`: a touch point went down. |
+| TOUCH_UP `0x41` | `[window u32][id u32]`: it lifted. |
+| TOUCH_MOTION `0x42` | `[window u32][id u32][x f32][y f32]`: it moved. |
+| TOUCH_CANCEL `0x43` | `[window u32]`: every point in the window ended without effect. |
+| TOUCH_FRAME `0x44` | `[window u32]`: the end of one set of changes. |
 
 - KEY and MODIFIERS move keyboard focus to `window` first if it's elsewhere:
   to the window's topmost grabbing popup, or else its focused toplevel (see
@@ -350,11 +396,188 @@ receipt.
 - When keyboard focus leaves a window, the compositor releases the keys it
   holds pressed. When the pointer leaves, it releases held buttons unless a
   drag is in progress.
-- Keymap: the compositor's own XKB keymap interprets the codes, from its
-  environment (`XKB_DEFAULT_LAYOUT`, …) and `us` otherwise. The app sends
-  `KeyEvent.getScanCode()` for hardware keyboards, which is the evdev code,
-  and maps `keyCode` to evdev for events without one. Following Android's
-  keyboard layout is step 3 (`keyboard-layout`).
+- Keymap: the compositor's own XKB keymap interprets the codes (see
+  Keyboard layout). The app sends `KeyEvent.getScanCode()` for hardware
+  keyboards, which is the evdev code, and maps `keyCode` to evdev for events
+  without one. A KEY code is a position in the guest's layout, so a virtual
+  keyboard's printable keys, whose `keyCode` names a character rather than a
+  position, go as `text` or `ime` instead.
+
+### Touch
+
+The app sends TOUCH_* in Touch mode (`gui-apps.md`, Input), for a window
+whose `toplevel` has `touch: true`. A window whose client has no `wl_touch`
+gets Pointer mode instead.
+
+- `id` is Android's pointer id: unique among the window's points that are
+  down, and reused once its point is up. A DOWN for an id that's already
+  down ends that point first; an UP or MOTION for an id that isn't down is
+  ignored.
+- A DOWN is hit-tested and handled like a pointer press: a DOWN outside a
+  grabbing popup dismisses the popups and goes no further, one over a modal
+  dialog's parent goes nowhere, and one on a toplevel's surface makes it
+  its window's focused toplevel and raises a dialog. A DOWN that hits no
+  surface goes nowhere either. Such a point's later events are dropped.
+- The point stays with the surface it went down on until UP or CANCEL:
+  MOTION positions are relative to that surface, even outside it. A point
+  whose surface's client has no `wl_touch` is dropped.
+- A DOWN's serial counts as the client's input serial like a press's: for
+  xdg-activation tokens (when the client has keyboard focus), `xdg_popup.grab`
+  and `xdg_toplevel.move`, which for a dialog follows that point until it
+  ends.
+- The app sends TOUCH_FRAME after each Android `MotionEvent`'s changes, and
+  the compositor then sends `wl_touch.frame` to each client it sent touch
+  events since the last one.
+- TOUCH_CANCEL is Android's `ACTION_CANCEL` (a system gesture took the
+  touch): `wl_touch.cancel` to every client with points in the window, and
+  all its points end. They end the same way when the window unmaps.
+- `toplevel.touch` is true once the toplevel's client has a `wl_touch`; the
+  compositor's seat always has the touch capability, so toolkits create one
+  at startup. The compositor sends the `toplevel` again when that changes.
+
+### Pointer and Trackpad modes
+
+Both are made on the app side from Android gestures into the pointer frames
+above, and need nothing else on the wire.
+
+- Pointer: a tap is a `BTN_LEFT` press and release at the finger, a long
+  press a `BTN_RIGHT` click, and a two-finger drag POINTER_AXIS with source
+  finger, with the stop bits when the fingers lift. The finger marks the
+  spot, so the app draws no cursor.
+- Trackpad: the app keeps the cursor's position, moves it by the finger's
+  relative motion (clamped to the window), sends it as POINTER_MOTION and
+  clicks there. `wl_pointer` positions are absolute and the app needs the
+  position to draw the cursor, so there's no relative motion on the wire;
+  POINTER_RELATIVE stays reserved for relative-pointer (Android pointer
+  capture).
+- Android draws no pointer for a touchscreen, so in Trackpad mode the app
+  draws its own cursor at that position, picking the image by `cursor`'s
+  `name` and drawing none for `"hidden"`. A client-drawn cursor surface
+  comes as `"default"` until CURSOR_IMAGE (step 4).
+
+### Keyboard layout
+
+`keyboard-layout` (app → compositor),
+`{"type":"keyboard-layout","layout":"dk","variant":""}`: XKB layout and
+variant names for the guest's keymap, from Android's physical keyboard
+layout (that of the keyboard last typed on). `layout` `""` means the
+compositor's default: its environment's `XKB_DEFAULT_LAYOUT` and friends,
+`us` otherwise. The app sends it after `output` on every connection and
+whenever it changes.
+
+- The compositor compiles the keymap with the `evdev` rules and sends it to
+  every client. A layout or variant it can't compile is logged, and the
+  current keymap stays.
+- Processes it launches get `XKB_DEFAULT_LAYOUT` and `XKB_DEFAULT_VARIANT`
+  set to it, for nested desktops, which read their own and ignore the
+  keymap they're sent.
+
+### Typing text
+
+`text` (app → compositor), `{"type":"text","window":<id>,"text":"…"}`: type
+`text` into `window` as key presses. The app uses it for the keyboard button
+on a window with no enabled text input, and for each character typed while
+the extra keys row holds Ctrl or Alt, so it reaches the client as a key
+combination.
+
+- Keyboard focus moves to `window` first, as for KEY.
+- Per character: `\n` is Return and `\t` Tab; other control characters are
+  dropped. Any other character's keysym (`xkb_utf32_to_keysym`) is looked up
+  in the current keymap, at the lowest keycode and then the lowest level
+  that produce it. The compositor presses and releases that key with the
+  level's Shift and level-3 modifiers set and Ctrl, Alt and Logo as
+  MODIFIERS left them, then restores the modifier state.
+- A keysym the keymap lacks is typed as `wtype` does: the compositor sends
+  the focused client a keymap that is the current one plus the missing
+  keysyms on unused keycodes, types them, and sends the layout's keymap
+  again at the end of the message.
+
+## Text input
+
+The compositor implements `zwp_text_input_manager_v3` itself (Smithay's
+serves only an input-method-v2 client) and bridges the focused text input to
+Android's IME. Offsets and lengths are UTF-8 bytes, as in text-input-v3 (see
+Units).
+
+### `text-input`
+
+Compositor → app, sent whole every time:
+
+| field | meaning |
+|---|---|
+| `window` | The window whose keyboard focus has an enabled text input, or 0 for none. |
+| `session` | Which enable this is, or 0 for none (below). |
+| `applied` | The `serial` of the last `ime` the compositor had sent the client when the client committed this state; 0 for none. |
+| `text` | The surrounding text (`set_surrounding_text`), or `null` when the client sent none. |
+| `cursor`, `anchor` | The cursor and the selection's other end, in bytes of `text`. Equal without a selection. |
+| `cause` | `"input-method"` when the client says the change came from an `ime`, `"other"` otherwise (`set_text_change_cause`). |
+| `purpose` | The content purpose's name: `"normal"`, `"alpha"`, `"digits"`, `"number"`, `"phone"`, `"url"`, `"email"`, `"name"`, `"password"`, `"pin"`, `"date"`, `"time"`, `"datetime"` or `"terminal"`. |
+| `hints` | The content hints' names, a list from `"completion"`, `"spellcheck"`, `"auto-capitalization"`, `"lowercase"`, `"uppercase"`, `"titlecase"`, `"hidden-text"`, `"sensitive-data"`, `"latin"` and `"multiline"`. |
+| `cursorRect` | `{"x","y","width","height"}`, the client's cursor rectangle in window pixels, or `null` when it set none. |
+
+- There is one text input at a time: the enabled `zwp_text_input_v3` of the
+  surface with keyboard focus, whose `enter` the compositor sends as that
+  focus moves. With several on one client, the last enabled one counts.
+- The compositor sends it in the replay, after each client commit that
+  changes any field, and with `window` 0 and `session` 0 when the text
+  input goes away (disabled, focus elsewhere, destroyed).
+- **Sessions:** a new `session` begins with each `enable` the client
+  commits, and when focus moves to another enabled text input. Sessions
+  count up from 1 per connection. On a new session the app restarts its
+  IME connection with the new `purpose` and `hints`; later messages of the
+  same session update it.
+- **`applied`:** text-input-v3 never tells the compositor which of its
+  events a client commit reflects, so `applied` is the compositor's best
+  knowledge. While it is below the last `ime` the app sent, `text`, `cursor`
+  and `anchor` may not show the app's latest edits yet, and the app keeps
+  its own copy of the text until a state catches up.
+- The app shows the phone keyboard for a session and hides it when the
+  session ends, unless the user opened it with the keyboard button.
+
+### `ime`
+
+App → compositor:
+`{"type":"ime","session":<n>,"serial":<n>,"deleteBefore":0,"deleteAfter":0,"commit":"","preedit":"","preeditCursorBegin":0,"preeditCursorEnd":0}`.
+Every field but `session` and `serial` is optional, with the defaults shown,
+except that the preedit cursor defaults to the end of `preedit`.
+
+- One `ime` is one text-input-v3 `done`. The compositor sends
+  `delete_surrounding_text` when either length isn't 0, `commit_string`
+  when `commit` isn't empty, `preedit_string` when `preedit` isn't empty,
+  and `done` with the text input's commit count, which it keeps. The client
+  then removes its current preedit, deletes `deleteBefore` bytes before the
+  cursor and `deleteAfter` after it (a selection excluded), inserts `commit`
+  at the cursor, and shows `preedit` there with its cursor at
+  `preeditCursorBegin`..`preeditCursorEnd` (bytes of `preedit`, both -1 to
+  hide it).
+- So `preedit` replaces the preedit: an `ime` that keeps one repeats it.
+  Android's `setComposingText` is a `preedit`; `commitText` a `commit` with
+  no `preedit`; `finishComposingText` a `commit` of the composing text.
+- `serial`: the app's own count of `ime` messages on the connection, from 1.
+- `session`: the session the IME's edit was made in. The compositor drops
+  an `ime` whose session isn't the current one: the user moved to another
+  field or window, and the edit was meant for text that isn't there. Within
+  a session nothing is dropped: an edit is relative to the client's cursor,
+  which text-input-v3 is built for.
+- text-input-v3 can't move the cursor or select. The app turns the IME's
+  `setSelection` and its key events (Enter, Backspace, arrows) into KEY
+  presses.
+
+### Units
+
+Android counts UTF-16 code units; text-input-v3 counts UTF-8 bytes. The app
+converts both ways, against its own copy of the text, which is the text the
+IME acted on and can be ahead of the client's:
+
+- A character outside the BMP is 2 units and 4 bytes, and no offset or
+  length splits a character. The compositor passes the client's offsets
+  through, and the app clamps one that isn't on a character boundary.
+- A delete reaching past the text the app knows is clamped to it. With
+  `text` `null`, the app sends deletes as BackSpace and Delete KEY presses,
+  one per character.
+- Offsets are within `text`, which may be only part of a longer document
+  (text-input-v3 caps it at 4000 bytes); the app gives them to Android as
+  positions in `text`.
 
 ## Dialogs
 
@@ -656,21 +879,18 @@ real compositor with `hashes: true` and compare every hash.
 Names only. Each step specifies its own when it lands, and none of these
 change earlier steps' messages.
 
-- **Step 3, phone input:**
-  - TOUCH_* `0x40`–`0x44` and POINTER_RELATIVE `0x24`
-  - `text-input` (compositor → app)
-  - `ime-commit`, `ime-preedit` and `ime-delete` (app → compositor)
-  - `keyboard-layout` and `settings` (app → compositor; per-app size and
-    input mode)
-- **Step 4, docked polish:** CURSOR_IMAGE `0x04`; toplevel icons
-  (xdg-toplevel-icon) as an `icon` key in `toplevel`, rendered through
-  `icon` and ICON; a `decoration` field in `window`.
+- **Step 4, docked polish:** CURSOR_IMAGE `0x04`, the client's cursor
+  surface at its window's scale with the hotspot in window pixels; toplevel
+  icons (xdg-toplevel-icon) as an `icon` key in `toplevel`, rendered
+  through `icon` and ICON; a `decoration` field in `window`.
+- **Later:** POINTER_RELATIVE `0x24`, for relative-pointer and pointer
+  constraints with Android's pointer capture.
 
 No clipboard, ever: the data-control bridge handles it (`gui-apps.md`).
 
 ## Contract
 
-Normative for steps 1 and 2. Paths are under the session user's runtime
+Normative for steps 1 to 3. Paths are under the session user's runtime
 directory, `$XDG_RUNTIME_DIR` (`/run/user/<uid>`).
 
 ### Compositor
@@ -693,6 +913,11 @@ directory, `$XDG_RUNTIME_DIR` (`/run/user/<uid>`).
   per BUFFER commit: `hash surface=<id> seq=<seq> <width>x<height> <hash as %016x>`.
 - Logging follows `RUST_LOG`.
 - It offers xdg-activation-v1, xdg-dialog-v1 and xdg-foreign-v2 (step 2).
+- Its seat has the touch capability, and it offers `zwp_text_input_manager_v3`
+  with its own dispatch and no input-method-v2 (step 3).
+- Its keymap comes from its environment's `XKB_DEFAULT_*` (`us` without
+  them) until the app sends a `keyboard-layout`; the processes it launches
+  get that layout as `XKB_DEFAULT_LAYOUT` and `XKB_DEFAULT_VARIANT`.
 - It reads the app list and icons through its environment's `XDG_DATA_HOME`,
   `XDG_DATA_DIRS` and `HOME`, names them in its locale (`LC_ALL`,
   `LC_MESSAGES`, `LANG`), and resolves `TryExec` and `Exec` through its
@@ -723,6 +948,8 @@ directory, `$XDG_RUNTIME_DIR` (`/run/user/<uid>`).
   - `size` is `phone`, `compact` or `desktop`, and `input` is `touch`,
     `pointer` or `trackpad`. Every field is optional: an app id inherits what
     it leaves out from `defaults`.
+  - The app applies them, under the user's own changes per app id; the
+    compositor gets only the resulting size factors, through `settings`.
   - GUI is on exactly when `gui.enable` is true. The app then keeps one `gui`
     stream open, reconnecting with backoff.
   - An older app ignores the field, and an older agent never sends it.

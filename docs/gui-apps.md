@@ -81,7 +81,16 @@ files the system and user profiles already have.
 
 - Windows default to Android's density, including the user's display size.
 - Per-app size presets: Phone (Android's density), Compact (about 0.75x) and
-  Desktop (about 0.5x). The compositor gives each client its own scale.
+  Desktop (about 0.5x). The compositor gives each window its own scale, and
+  opens a new window at its app's preset.
+- Automatic fit: when a window's minimum size at its scale is larger than
+  the window, the app lowers that window's scale until the minimum fits, but
+  never below the Desktop preset's factor of the display's density, on any
+  display. It goes back up to the chosen preset as far as the minimum allows
+  whenever the window or the minimum changes. The fit measures the window
+  without the phone keyboard, so the keyboard never changes the scale. A
+  window that doesn't fit at the floor is clipped, and zoom pans it. Dialogs
+  take their window's scale and aren't fitted.
 - Pinch zoom is visual only: it magnifies and pans the window's layers without
   changing the app's layout. One transform on the root SurfaceControl moves
   every layer, at about 0.4 ms per update.
@@ -104,10 +113,11 @@ files the system and user profiles already have.
   (text-input-v3: autocorrect, swipe and voice typing, composition). Smithay
   only serves text-input to a Linux input method, so the compositor gets its
   own handler.
-- Apps without text-input get a keyboard button; committed text becomes key
-  events, with the keymap swapped for missing characters as `wtype` does.
-  Nested desktops ignore keymaps they're sent, so there it's limited to the
-  layout's own characters.
+- The keyboard button opens the phone keyboard on any window. Where no text
+  field is focused (apps without text-input included), committed text
+  becomes key events, with the keymap swapped for missing characters as
+  `wtype` does. Nested desktops ignore keymaps they're sent, so there it's
+  limited to the layout's own characters.
 - The terminal's extra keys row shows above the keyboard in GUI windows too.
 - The guest's keyboard layout follows Android's physical keyboard layout, and
   nested desktops get it as `XKB_DEFAULT_LAYOUT`.
@@ -133,7 +143,8 @@ Module defaults (`pocketnix.guest.gui.defaults`, and
 `pocketnix.guest.gui.appDefaults.<app-id>` with `size`, `input` and so on)
 reach the app with the rest of the config. Changes made on the phone override
 them per app id, marked in the window menu with a "Reset to config". The app
-never writes Nix.
+never writes Nix. The compositor gets only each app's size factor, so new
+windows open at their preset.
 
 ## Audio
 
