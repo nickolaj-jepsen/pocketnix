@@ -103,6 +103,9 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
 
         /** The task of its last activity, to bring it forward; -1 for none. */
         @Volatile var taskId = -1
+
+        /** Full screen as the client last asked or the user last set it, for a host that binds later. Main thread only. */
+        var fullscreen = false
     }
 
     // Concurrent so the main thread can read a window's fields without waiting for a commit to apply.
@@ -247,7 +250,9 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
             is GuiMessage.ToplevelRequest -> when (msg.request) {
                 "minimize" -> onMain("window ${msg.id.u}: minimize") { views[msg.id]?.host?.minimize() }
                 "fullscreen", "unfullscreen" -> onMain("window ${msg.id.u}: ${msg.request}") {
-                    views[msg.id]?.host?.fullscreen(msg.request == "fullscreen")
+                    val v = views[msg.id] ?: return@onMain
+                    v.fullscreen = msg.request == "fullscreen"
+                    v.host?.fullscreen(v.fullscreen)
                 }
             }
             is GuiMessage.Surface -> synchronized(lock) {
@@ -626,6 +631,14 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
     fun appKey(id: Int): String = appKey(synchronized(lock) { state.windows[id]?.toplevel })
 
     private fun appKey(t: GuiMessage.Toplevel?): String = t?.app?.ifEmpty { t.appId }.orEmpty()
+
+    /** Whether window [id] is to be full screen; main thread only. */
+    internal fun fullscreen(id: Int): Boolean = views[id]?.fullscreen == true
+
+    /** The user took window [id] in or out of full screen; main thread only. */
+    internal fun fullscreenChanged(id: Int, on: Boolean) {
+        views[id]?.fullscreen = on
+    }
 
     /** Whether window [id]'s client has a wl_touch, so Touch mode can reach it. */
     fun hasTouch(id: Int): Boolean = synchronized(lock) { state.windows[id]?.toplevel?.touch } == true

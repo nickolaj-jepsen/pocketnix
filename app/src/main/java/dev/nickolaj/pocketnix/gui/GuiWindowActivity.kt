@@ -161,6 +161,7 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
         // The activity started before its window existed.
         if (started) s.pushState()
         if (focused) s.input.focused()
+        if (vm.gui.fullscreen(id)) fullscreen(true)
     }
 
     /**
@@ -421,6 +422,7 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
     override fun fullscreen(on: Boolean) {
         if (!bound || fullscreen == on) return
         fullscreen = on
+        vm.gui.fullscreenChanged(windowId, on)
         barRevealed = false
         window.insetsController?.let {
             val bars = android.view.WindowInsets.Type.systemBars()
