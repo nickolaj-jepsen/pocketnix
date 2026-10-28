@@ -2,13 +2,19 @@
 //! output of its own; the pocketnix app draws its windows, over the GUI
 //! protocol (docs/gui-protocol.md), as Android windows.
 
+mod apps;
 mod damage;
 mod flush;
 mod gui;
+mod icons;
+mod launch;
+mod launcher;
 mod popup;
 mod protocol;
 mod state;
 mod surface;
+mod watch;
+mod windows;
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -27,6 +33,8 @@ use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::calloop::Interest;
 use smithay::reexports::calloop::Mode;
 use smithay::reexports::calloop::PostAction;
+use smithay::reexports::calloop::channel;
+use smithay::reexports::calloop::channel::Event;
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::ping::make_ping;
 use smithay::reexports::wayland_server::Display;
@@ -35,6 +43,7 @@ use smithay::wayland::socket::ListeningSocketSource;
 use tracing::info;
 
 use crate::gui::Gui;
+use crate::state::Channels;
 use crate::state::ClientState;
 use crate::state::State;
 
@@ -147,6 +156,8 @@ fn main() -> Result<()> {
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .init();
+    // Before any thread starts, so that every thread leaves SIGHUP to it.
+    let sighup = watch::sighup_fd().context("SIGHUP")?;
     let args = parse_args()?;
     let mut sockets = activated_sockets();
 
@@ -160,7 +171,44 @@ fn main() -> Result<()> {
         .insert_source(wake_source, |_, _, _| {})
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     let gui = Gui::new(args.log_hashes, wake);
-    let mut state = State::new(&dh, event_loop.handle(), gui)?;
+    let (icon_done, icon_rx) = channel::channel();
+    let (launch_exits, exit_rx) = channel::channel();
+    let channels = Channels {
+        icon_jobs: launcher::icon_worker(icon_done),
+        launch_exits,
+    };
+    insert(&event_loop, icon_rx, |event, _, state: &mut State| {
+        if let Event::Msg((conn, frame)) = event {
+            state.icon_done(conn, frame);
+        }
+    })?;
+    insert(&event_loop, exit_rx, |event, _, state: &mut State| {
+        if let Event::Msg((id, status)) = event {
+            state.launch_exited(id, status);
+        }
+    })?;
+    let mut state = State::new(&dh, event_loop.handle(), gui, channels)?;
+
+    insert(&event_loop, Generic::new(sighup, Interest::READ, Mode::Level), |_, fd, state: &mut State| {
+        if watch::drain(&**fd) {
+            info!("SIGHUP: rescanning the app list");
+            state.schedule_rescan();
+        }
+        Ok(PostAction::Continue)
+    })?;
+    match watch::Inotify::new() {
+        Ok(inotify) => {
+            let fd = inotify.fd().try_clone()?;
+            state.inotify = Some(inotify);
+            insert(&event_loop, Generic::new(fd, Interest::READ, Mode::Level), |_, _, state: &mut State| {
+                if state.inotify.as_ref().is_some_and(|i| i.changed()) {
+                    state.schedule_rescan();
+                }
+                Ok(PostAction::Continue)
+            })?;
+        }
+        Err(e) => tracing::warn!("inotify: {e}; the app list rescans on SIGHUP only"),
+    }
 
     let gui_listener = gui_listener(sockets.remove("gui"), args.gui_socket)?;
     event_loop
@@ -209,8 +257,9 @@ fn main() -> Result<()> {
         }
     };
     info!("Wayland socket {}", String::from_utf8_lossy(wayland_display.as_bytes()));
-    // SAFETY: no other thread reads the environment yet.
+    // SAFETY: the threads running so far never read the environment.
     unsafe { std::env::set_var("WAYLAND_DISPLAY", &wayland_display) };
+    state.scan_apps();
 
     let poll_fd = display.backend().poll_fd().try_clone_to_owned()?;
     event_loop
@@ -228,4 +277,16 @@ fn main() -> Result<()> {
         }
     })?;
     Ok(())
+}
+
+fn insert<S, F>(event_loop: &EventLoop<State>, source: S, callback: F) -> Result<()>
+where
+    S: smithay::reexports::calloop::EventSource + 'static,
+    F: FnMut(S::Event, &mut S::Metadata, &mut State) -> S::Ret + 'static,
+{
+    event_loop
+        .handle()
+        .insert_source(source, callback)
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!("{e}"))
 }

@@ -19,21 +19,22 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::Logical;
 use smithay::utils::Point;
 use smithay::utils::Rectangle;
+use smithay::utils::Size;
 use smithay::wayland::compositor;
 use smithay::wayland::shell::xdg::PositionerState;
 use smithay::wayland::shell::xdg::XdgPopupSurfaceData;
 use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 
-use crate::state::window_geometry;
-
-/// Solves a popup's positioner against its root toplevel's window geometry
-/// and returns an already-solved positioner and the geometry it gives:
-/// Android clips child layers to the window, so a popup must fit inside it.
+/// Solves a popup's positioner against the window it draws in and returns
+/// an already-solved positioner and the geometry it gives: Android clips
+/// child layers to the window, so a popup must fit inside it. `space` gives
+/// a toplevel root's origin in its window and the part of the window shown.
 pub fn solve_in_toplevel(
     parent: Option<WlSurface>,
     positioner: PositionerState,
+    space: impl Fn(&WlSurface) -> Option<(Point<i32, Logical>, Size<i32, Logical>)>,
 ) -> (PositionerState, Rectangle<i32, Logical>) {
-    // the parent's offset from the toplevel's window geometry, and that size
+    // the parent's offset from the toplevel's window geometry
     let mut offset = Point::<i32, Logical>::from((0, 0));
     let mut root = None;
     let mut next = parent;
@@ -51,22 +52,11 @@ pub fn solve_in_toplevel(
             }
         });
     }
-    // What the Android window shows: the client may have drawn smaller than
-    // its configured size (foot's cell grid) or larger (GTK's minimum size).
-    let size = root.map(|r| {
-        let drawn = window_geometry(&r).size;
-        let configured = compositor::with_states(&r, |states| {
-            let data = states.data_map.get::<XdgToplevelSurfaceData>()?;
-            data.lock().unwrap().current.size
-        });
-        match configured {
-            Some(c) if c.w > 0 && c.h > 0 => (drawn.w.min(c.w), drawn.h.min(c.h)).into(),
-            _ => drawn,
-        }
-    });
-    let Some(size) = size.filter(|s| s.w > 0 && s.h > 0) else {
+    // A dialog's popups may use its whole window.
+    let Some((origin, size)) = root.and_then(|r| space(&r)).filter(|(_, s)| s.w > 0 && s.h > 0) else {
         return (positioner, positioner.get_geometry());
     };
+    offset += origin;
     let target = Rectangle::new((-offset.x, -offset.y).into(), size);
     let mut geometry = positioner.get_unconstrained_geometry(target);
     // The client's own adjustments may not suffice (or it allowed none):

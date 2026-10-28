@@ -14,6 +14,7 @@ use std::os::fd::OwnedFd;
 use std::os::unix::fs::FileExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Child;
 use std::process::Command;
@@ -47,6 +48,9 @@ use wayland_client::protocol::wl_shm;
 use wayland_client::protocol::wl_shm::WlShm;
 use wayland_client::protocol::wl_shm_pool::WlShmPool;
 use wayland_client::protocol::wl_surface::WlSurface;
+use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1::XdgActivationV1;
+use wayland_protocols::xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1;
+use wayland_protocols::xdg::dialog::v1::client::xdg_wm_dialog_v1::XdgWmDialogV1;
 use wayland_protocols::xdg::shell::client::xdg_popup;
 use wayland_protocols::xdg::shell::client::xdg_popup::XdgPopup;
 use wayland_protocols::xdg::shell::client::xdg_positioner;
@@ -84,21 +88,33 @@ struct Compositor {
     log: Arc<Mutex<Vec<String>>>,
 }
 
+/// A fresh directory for one test's files.
+fn test_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("pnc-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    dir
+}
+
 impl Compositor {
     fn start(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("pnc-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_pocketnix-compositor"))
-            .arg("--gui-socket")
+        Self::start_with(name, |_| {})
+    }
+
+    /// Starts a compositor whose environment `env` adjusts.
+    fn start_with(name: &str, env: impl FnOnce(&mut Command)) -> Self {
+        let dir = test_dir(name);
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_pocketnix-compositor"));
+        cmd.arg("--gui-socket")
             .arg(dir.join("gui.sock"))
             .args(["--wayland-display", "wl-test", "--log-hashes"])
             .env("XDG_RUNTIME_DIR", &dir)
             .env("RUST_LOG", "info")
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+            .env_remove("POCKETNIX_TAB")
+            .stderr(Stdio::piped());
+        env(&mut cmd);
+        let mut child = cmd.spawn().unwrap();
         let log = Arc::new(Mutex::new(Vec::new()));
         let stderr = child.stderr.take().unwrap();
         let lines = log.clone();
@@ -179,6 +195,8 @@ struct Commit {
 enum Msg {
     Json(Value),
     Commit(Commit),
+    /// An ICON frame, kept in `App::icons`.
+    Icon,
 }
 
 /// A surface's reference copy, as the app keeps it.
@@ -194,6 +212,8 @@ struct App {
     layers: HashMap<u32, Layer>,
     auto_ack: bool,
     hashed: usize,
+    /// ICON frames: size, key and PNG.
+    icons: Vec<(u16, String, Vec<u8>)>,
 }
 
 fn be32(b: &[u8], at: usize) -> u32 {
@@ -209,8 +229,9 @@ impl App {
             layers: HashMap::new(),
             auto_ack: false,
             hashed: 0,
+            icons: Vec::new(),
         };
-        app.send_json(json!({"type": "hello", "version": 1, "minVersion": 1, "app": "test", "hashes": true}));
+        app.send_json(json!({"type": "hello", "version": 2, "minVersion": 2, "app": "test", "hashes": true}));
         app
     }
 
@@ -254,6 +275,13 @@ impl App {
                 0x00 => return Msg::Json(serde_json::from_slice(&p).unwrap()),
                 0x01 => return Msg::Commit(self.commit(p)),
                 0x02 => panic!("COMMIT_DATA without a COMMIT"),
+                0x03 => {
+                    let size = u16::from_be_bytes([p[0], p[1]]);
+                    let key_len = p[2] as usize;
+                    let key = String::from_utf8(p[3..3 + key_len].to_vec()).unwrap();
+                    self.icons.push((size, key, p[3 + key_len..].to_vec()));
+                    return Msg::Icon;
+                }
                 _ => {}
             }
         }
@@ -357,6 +385,27 @@ impl App {
         }
     }
 
+    /// The next JSON message of type `ty` that `f` accepts.
+    fn wait_json_where(&mut self, ty: &str, f: impl Fn(&Value) -> bool) -> Value {
+        self.wait(ty, |m| match m {
+            Msg::Json(v) if v["type"] == ty && f(v) => Some(v.clone()),
+            _ => None,
+        })
+    }
+
+    /// The PNG answering an `icon` request for `key` at `size`.
+    fn icon(&mut self, key: &str, size: u16) -> Vec<u8> {
+        self.send_json(json!({"type": "icon", "icon": key, "size": size}));
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            if let Some(i) = self.icons.iter().position(|(s, k, _)| *s == size && k == key) {
+                return self.icons.remove(i).2;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for icon {key}");
+            let _ = self.next();
+        }
+    }
+
     fn wait_json(&mut self, ty: &str) -> Value {
         self.wait(ty, |m| match m {
             Msg::Json(v) if v["type"] == ty => Some(v.clone()),
@@ -375,6 +424,12 @@ impl App {
 #[derive(Default)]
 struct Wl {
     configure: Option<u32>,
+    bounds: Option<(i32, i32)>,
+    dialog_configure: Option<u32>,
+    dialog_bounds: Option<(i32, i32)>,
+    /// The surface the pointer last entered and the one with keyboard focus.
+    pointer_surface: Option<WlSurface>,
+    keyboard_surface: Option<WlSurface>,
     popup_configure: Option<u32>,
     /// The popup's last configure: x, y, width, height.
     popup_geometry: Option<(i32, i32, i32, i32)>,
@@ -394,11 +449,13 @@ struct Pattern {
     state: Wl,
     qh: QueueHandle<Wl>,
     globals: Vec<String>,
+    registry: wayland_client::globals::GlobalList,
     compositor: WlCompositor,
     shm: WlShm,
     wm_base: XdgWmBase,
     surface: WlSurface,
     xdg_surface: XdgSurface,
+    toplevel: XdgToplevel,
     file: std::fs::File,
     buffers: Vec<WlBuffer>,
     next: usize,
@@ -434,6 +491,7 @@ impl Pattern {
         let xdg_surface = wm_base.get_xdg_surface(&surface, &qh, ());
         let toplevel = xdg_surface.get_toplevel(&qh, ());
         toplevel.set_title("pattern".into());
+        let main = toplevel.clone();
         toplevel.set_app_id("test.pattern".into());
         surface.commit();
         let mut p = Pattern {
@@ -442,11 +500,13 @@ impl Pattern {
             state: Wl::default(),
             qh,
             globals: names,
+            registry: globals,
             compositor,
             shm,
             wm_base,
             surface,
             xdg_surface,
+            toplevel: main,
             file,
             buffers,
             next: 0,
@@ -492,6 +552,12 @@ impl Pattern {
     /// `anchor`, allowing no constraint adjustment, and draws it at the size
     /// it's configured with. Returns that configure's x, y, width, height.
     fn popup(&mut self, anchor: [i32; 4], size: (i32, i32)) -> (i32, i32, i32, i32) {
+        let parent = self.xdg_surface.clone();
+        self.popup_from(&parent, anchor, size)
+    }
+
+    /// `popup`, opened from `parent`.
+    fn popup_from(&mut self, parent: &XdgSurface, anchor: [i32; 4], size: (i32, i32)) -> (i32, i32, i32, i32) {
         let surface = self.compositor.create_surface(&self.qh, ());
         let xdg_surface = self.wm_base.get_xdg_surface(&surface, &self.qh, 1u32);
         let positioner = self.wm_base.create_positioner(&self.qh, ());
@@ -499,7 +565,7 @@ impl Pattern {
         positioner.set_anchor_rect(anchor[0], anchor[1], anchor[2], anchor[3]);
         positioner.set_anchor(xdg_positioner::Anchor::BottomRight);
         positioner.set_gravity(xdg_positioner::Gravity::BottomRight);
-        xdg_surface.get_popup(Some(&self.xdg_surface), &positioner, &self.qh, ());
+        xdg_surface.get_popup(Some(parent), &positioner, &self.qh, ());
         surface.commit();
         self.dispatch_until("the popup's configure", |s| s.popup_configure.is_some());
         xdg_surface.ack_configure(self.state.popup_configure.take().unwrap());
@@ -524,6 +590,41 @@ impl Pattern {
     fn roundtrip(&mut self) {
         self.queue.roundtrip(&mut self.state).unwrap();
     }
+
+    /// A toplevel with this one as its parent, drawn `w` × `h` with
+    /// pattern `seed` once configured.
+    fn dialog(&mut self, parent: &XdgToplevel, w: i32, h: i32, seed: u32) -> Dialog {
+        let surface = self.compositor.create_surface(&self.qh, ());
+        let xdg_surface = self.wm_base.get_xdg_surface(&surface, &self.qh, Tag);
+        let toplevel = xdg_surface.get_toplevel(&self.qh, Tag);
+        toplevel.set_parent(Some(parent));
+        toplevel.set_app_id("test.pattern".into());
+        surface.commit();
+        self.dispatch_until("the dialog's configure", |s| s.dialog_configure.is_some());
+        xdg_surface.ack_configure(self.state.dialog_configure.take().unwrap());
+        // SAFETY: memfd_create with a valid C string.
+        let fd = unsafe { libc::memfd_create(c"dialog".as_ptr(), libc::MFD_CLOEXEC) };
+        assert!(fd >= 0);
+        // SAFETY: a fresh descriptor we own.
+        let file = std::fs::File::from(unsafe { OwnedFd::from_raw_fd(fd) });
+        file.write_all_at(&pattern(w, h, seed), 0).unwrap();
+        let pool = self.shm.create_pool(file.as_fd(), w * h * 4, &self.qh, ());
+        let buffer = pool.create_buffer(0, w, h, w * 4, wl_shm::Format::Argb8888, &self.qh, ());
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage_buffer(0, 0, w, h);
+        surface.commit();
+        self.conn.flush().unwrap();
+        Dialog { surface, xdg_surface, toplevel }
+    }
+}
+
+/// User data marking a dialog's objects.
+struct Tag;
+
+struct Dialog {
+    surface: WlSurface,
+    xdg_surface: XdgSurface,
+    toplevel: XdgToplevel,
 }
 
 /// The wire's RGBA for ARGB8888 rows.
@@ -547,7 +648,7 @@ fn a_client_window_reaches_the_app_with_matching_pixels() {
     let compositor = Compositor::start("pattern");
     let mut app = App::connect(&compositor);
     let hello = app.wait_json("hello");
-    assert_eq!(hello["version"], 1);
+    assert_eq!(hello["version"], 2);
     let instance = hello["instance"].as_str().unwrap().to_owned();
     assert!(!instance.is_empty());
     app.wait_json("ready");
@@ -731,6 +832,466 @@ fn foot_renders_and_its_hashes_match() {
     let _ = child.wait();
 }
 
+fn write(path: &Path, content: impl AsRef<[u8]>) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, content).unwrap();
+}
+
+fn png(width: u32, height: u32, rgba: [u8; 4]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let data: Vec<u8> = (0..width * height).flat_map(|_| rgba).collect();
+    encoder.write_header().unwrap().write_image_data(&data).unwrap();
+    out
+}
+
+/// A PNG's size and RGBA pixels.
+fn decode_png(bytes: &[u8]) -> (u32, u32, Vec<u8>) {
+    let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    let mut reader = decoder.read_info().unwrap();
+    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+    let info = reader.next_frame(&mut buf).unwrap();
+    assert_eq!(info.color_type, png::ColorType::Rgba);
+    buf.truncate(info.buffer_size());
+    (info.width, info.height, buf)
+}
+
+fn pixel(img: &(u32, u32, Vec<u8>), x: u32, y: u32) -> [u8; 4] {
+    let at = ((y * img.0 + x) * 4) as usize;
+    img.2[at..at + 4].try_into().unwrap()
+}
+
+fn square_svg(color: &str) -> String {
+    format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="{color}"/></svg>"#)
+}
+
+fn entry(name: &str, extra: &str) -> String {
+    format!("[Desktop Entry]\nType=Application\nName={name}\nExec=true\n{extra}\n")
+}
+
+fn ids(apps: &Value) -> Vec<String> {
+    apps["apps"].as_array().unwrap().iter().map(|a| a["id"].as_str().unwrap().to_owned()).collect()
+}
+
+fn app_entry<'a>(apps: &'a Value, id: &str) -> &'a Value {
+    apps["apps"].as_array().unwrap().iter().find(|a| a["id"] == id).unwrap()
+}
+
+#[test]
+fn the_app_list_follows_the_data_dirs_and_renders_icons() {
+    let dir = test_dir("apps-data");
+    let (home, data1, data2) = (dir.join("home"), dir.join("data1"), dir.join("data2"));
+    let apps1 = data1.join("applications");
+    write(&home.join("applications/shadow.desktop"), entry("Mine", ""));
+    write(&apps1.join("shadow.desktop"), entry("Theirs", ""));
+    write(&apps1.join("hidden.desktop"), entry("Hidden", "Hidden=true"));
+    write(&data2.join("applications/hidden.desktop"), entry("Shown later", ""));
+    write(&apps1.join("sub/nested.desktop"), entry("Nested", ""));
+    write(&apps1.join("term.desktop"), entry("Term", "Terminal=true"));
+    write(&apps1.join("tryexec.desktop"), entry("Missing", "TryExec=pnc-no-such-program"));
+    write(&apps1.join("tryexec-ok.desktop"), entry("Present", "TryExec=sh"));
+    write(&apps1.join("noname.desktop"), "[Desktop Entry]\nType=Application\nExec=true\n");
+    write(&apps1.join("noexec.desktop"), "[Desktop Entry]\nType=Application\nName=No exec\n");
+    write(&apps1.join("dbus.desktop"), "[Desktop Entry]\nType=Application\nName=Bus\nDBusActivatable=true\n");
+    write(&apps1.join("nodisplay.desktop"), entry("Quiet", "NoDisplay=true"));
+    write(&apps1.join("onlyshow.desktop"), entry("Elsewhere", "OnlyShowIn=GNOME;"));
+    write(&apps1.join("broken.desktop"), "[Desktop Entry]\nName=Broken\ngarbage\n");
+    write(&apps1.join("link.desktop"), "[Desktop Entry]\nType=Link\nName=Link\nURL=https://example.org\n");
+    write(&apps1.join("xpm.desktop"), entry("Old icon", "Icon=pnc-xpm"));
+    write(&data1.join("pixmaps/pnc-xpm.xpm"), "/* XPM */");
+    write(
+        &apps1.join("calc.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Calculator\nName[da]=Lommeregner\nGenericName=Calc\n\
+         Comment=Adds;\nKeywords=math;sum;\nKeywords[da]=matematik;\nCategories=Utility;Math;\nIcon=pnc-calc\n\
+         Exec=calc\nActions=new;gone;\nStartupWMClass=CalcWM\n\n\
+         [Desktop Action new]\nName=New window\nName[da_DK]=Nyt vindue\nIcon=pnc-pix\nExec=calc --new\n",
+    );
+    write(&apps1.join("same-icon.desktop"), entry("Same icon", "Icon=pnc-calc"));
+    write(&data1.join("icons/hicolor/48x48/apps/pnc-calc.png"), png(48, 48, [0, 0, 255, 255]));
+    write(&data1.join("icons/hicolor/scalable/apps/pnc-calc.svg"), square_svg("#ff0000"));
+    write(&data1.join("pixmaps/pnc-pix.png"), png(32, 16, [0, 255, 0, 255]));
+    // A profile: a symlink to one generation's tree.
+    write(&dir.join("gen1/applications/gen.desktop"), entry("One", ""));
+    std::os::unix::fs::symlink(dir.join("gen1"), dir.join("profile")).unwrap();
+
+    let compositor = Compositor::start_with("apps", |cmd| {
+        cmd.env("XDG_DATA_HOME", &home)
+            .env("XDG_DATA_DIRS", format!("{}:{}:{}", data1.display(), data2.display(), dir.join("profile").display()))
+            .env("HOME", &dir)
+            .env("LANG", "da_DK.UTF-8")
+            .env_remove("LC_ALL")
+            .env_remove("LC_MESSAGES");
+    });
+    let mut app = App::connect(&compositor);
+    let apps = app.wait_json("apps");
+    app.wait_json("ready");
+    // A hidden entry takes later directories' copies with it.
+    assert_eq!(
+        ids(&apps),
+        ["calc", "dbus", "gen", "nodisplay", "onlyshow", "same-icon", "shadow", "sub-nested", "tryexec-ok", "xpm"],
+        "{apps}"
+    );
+    let calc = app_entry(&apps, "calc");
+    assert_eq!(calc["name"], "Lommeregner");
+    assert_eq!(calc["genericName"], "Calc");
+    assert_eq!(calc["comment"], "Adds;");
+    assert_eq!(calc["keywords"], json!(["matematik"]));
+    assert_eq!(calc["categories"], json!(["Utility", "Math"]));
+    assert_eq!(calc["noDisplay"], false);
+    let calc_key = calc["icon"].as_str().unwrap().to_owned();
+    assert!(!calc_key.is_empty() && calc_key.bytes().all(|b| b.is_ascii_digit() || b.is_ascii_lowercase()));
+    assert_eq!(app_entry(&apps, "same-icon")["icon"], calc_key.as_str());
+    let actions = calc["actions"].as_array().unwrap();
+    assert_eq!(actions.len(), 1, "{actions:?}");
+    assert_eq!((&actions[0]["id"], &actions[0]["name"]), (&json!("new"), &json!("Nyt vindue")));
+    let pix_key = actions[0]["icon"].as_str().unwrap().to_owned();
+    assert!(!pix_key.is_empty() && pix_key != calc_key);
+    assert_eq!(app_entry(&apps, "shadow")["name"], "Mine");
+    assert_eq!(app_entry(&apps, "nodisplay")["noDisplay"], true);
+    assert_eq!(app_entry(&apps, "onlyshow")["noDisplay"], true);
+    assert_eq!(app_entry(&apps, "xpm")["icon"], "");
+
+    // The SVG wins over the PNG and fills the square.
+    let calc_icon = decode_png(&app.icon(&calc_key, 64));
+    assert_eq!((calc_icon.0, calc_icon.1), (64, 64));
+    assert_eq!(pixel(&calc_icon, 32, 32), [255, 0, 0, 255]);
+    // A 2:1 pixmap is centred on transparency.
+    let pix = decode_png(&app.icon(&pix_key, 32));
+    assert_eq!((pix.0, pix.1), (32, 32));
+    assert_eq!(pixel(&pix, 16, 2)[3], 0);
+    assert_eq!(pixel(&pix, 16, 16), [0, 255, 0, 255]);
+    assert!(app.icon("0123456789abcdef", 48).is_empty(), "an unknown key renders as no icon");
+
+    // A new file in an applications directory shows up by itself.
+    write(&home.join("applications/fresh.desktop"), entry("Fresh", ""));
+    let apps = app.wait_json_where("apps", |v| ids(v).contains(&"fresh".to_owned()));
+    assert_eq!(app_entry(&apps, "calc")["icon"], calc_key.as_str());
+
+    // A switch replaces the profile's symlink, as nix-env and switch-to-configuration do.
+    write(&dir.join("gen2/applications/gen.desktop"), entry("Two", ""));
+    std::os::unix::fs::symlink(dir.join("gen2"), dir.join("profile.new")).unwrap();
+    std::fs::rename(dir.join("profile.new"), dir.join("profile")).unwrap();
+    app.wait_json_where("apps", |v| v["apps"].as_array().unwrap().iter().any(|a| a["id"] == "gen" && a["name"] == "Two"));
+
+    // Icon directories aren't watched: SIGHUP rescans, and new content gets a new key.
+    write(&data1.join("icons/hicolor/scalable/apps/pnc-calc.svg"), square_svg("#0000ff"));
+    // SAFETY: signalling the child we started.
+    unsafe { libc::kill(compositor.child.id() as i32, libc::SIGHUP) };
+    let apps = app.wait_json_where("apps", |v| app_entry(v, "calc")["icon"] != calc_key.as_str());
+    let new_key = app_entry(&apps, "calc")["icon"].as_str().unwrap().to_owned();
+    assert_eq!(pixel(&decode_png(&app.icon(&new_key, 64)), 32, 32), [0, 0, 255, 255]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Stand-ins for systemd-cat and systemd-run that log their arguments and
+/// run the command; the build sandbox has no user manager.
+fn fake_systemd(dir: &Path) -> (PathBuf, PathBuf) {
+    let bin = dir.join("bin");
+    let log = dir.join("run.log");
+    write(&bin.join("systemd-cat"), "#!/bin/sh\nwhile case \"$1\" in -*) true;; *) false;; esac; do shift; done\nexec \"$@\"\n");
+    write(
+        &bin.join("systemd-run"),
+        format!("#!/bin/sh\necho \"$@\" >> '{}'\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n", log.display()),
+    );
+    for f in ["systemd-cat", "systemd-run"] {
+        std::fs::set_permissions(bin.join(f), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    (bin, log)
+}
+
+/// The Exec line that runs `wayland_child` with this app id.
+fn child_exec(app_id: &str, extra_env: &str) -> String {
+    let exe = std::env::current_exe().unwrap();
+    format!("env PNC_CHILD={app_id} {extra_env} {} wayland_child --exact", exe.display())
+}
+
+fn start_launcher(name: &str, apps: &[(&str, String)]) -> (Compositor, PathBuf, PathBuf) {
+    let dir = test_dir(&format!("{name}-data"));
+    for (id, content) in apps {
+        write(&dir.join(format!("data/applications/{id}.desktop")), content);
+    }
+    let (bin, log) = fake_systemd(&dir);
+    let data = dir.join("data");
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+    let compositor = Compositor::start_with(name, |cmd| {
+        cmd.env("XDG_DATA_HOME", dir.join("home"))
+            .env("XDG_DATA_DIRS", &data)
+            .env("HOME", &dir)
+            .env("PATH", path);
+    });
+    (compositor, dir, log)
+}
+
+fn connect_ready(compositor: &Compositor) -> App {
+    let mut app = App::connect(compositor);
+    app.auto_ack = true;
+    app.wait_json("ready");
+    app.send_json(json!({"type": "output", "width": 800, "height": 600, "scale": 1.0, "refresh": 60000}));
+    app
+}
+
+#[test]
+fn launches_bind_their_window_and_end_once() {
+    let (compositor, dir, log) = start_launcher(
+        "launch",
+        &[
+            // Its app id isn't the entry's: only the token can bind it.
+            ("test.child", format!("[Desktop Entry]\nType=Application\nName=Child\nExec={}\n", child_exec("other.id", ""))),
+            (
+                "test.notoken",
+                format!("[Desktop Entry]\nType=Application\nName=No token\nExec={}\n", child_exec("test.notoken", "PNC_CHILD_NO_TOKEN=1")),
+            ),
+            ("test.false", "[Desktop Entry]\nType=Application\nName=Fails\nExec=false\n".into()),
+        ],
+    );
+    let mut app = connect_ready(&compositor);
+
+    let launch = |app: &mut App, id: &str, entry: &str, action: &str, tab: &str| {
+        app.send_json(json!({"type": "launch", "id": id, "app": entry, "action": action, "tab": tab}));
+    };
+    launch(&mut app, "l1", "test.child", "", "0123456789abcdef");
+    app.wait_json_where("launch-started", |v| v["id"] == "l1");
+    let t1 = app.wait_json_where("toplevel", |v| v["launch"] == "l1");
+    assert_eq!(t1["appId"], "other.id");
+    assert_eq!(t1["app"], "test.child");
+    assert_eq!(t1["tab"], "0123456789abcdef");
+    assert_eq!(t1["window"], t1["id"]);
+    assert_eq!(t1["title"], "tab=0123456789abcdef token=true");
+    let run = std::fs::read_to_string(&log).unwrap();
+    assert!(run.contains("--user --scope --slice=app.slice"), "{run}");
+    assert!(run.contains("--unit=app-pocketnix-test.child-"), "{run}");
+
+    // A launch sent again gets its state again.
+    launch(&mut app, "l1", "test.child", "", "");
+    let again = app.wait_json("activate");
+    assert_eq!((&again["window"], &again["launch"]), (&t1["id"], &json!("l1")));
+
+    launch(&mut app, "l2", "test.notoken", "", "");
+    let t2 = app.wait_json_where("toplevel", |v| v["appId"] == "test.notoken");
+    assert_eq!((&t2["launch"], &t2["app"], &t2["tab"]), (&json!("l2"), &json!("test.notoken"), &json!("")));
+    assert_eq!(t2["title"], "tab= token=true");
+
+    launch(&mut app, "l3", "test.false", "", "");
+    let failed = app.wait_json_where("launch-failed", |v| v["id"] == "l3");
+    assert_eq!((&failed["reason"], &failed["message"]), (&json!("exec"), &json!("exited with status 1")));
+    launch(&mut app, "l4", "nope", "", "");
+    assert_eq!(app.wait_json_where("launch-failed", |v| v["id"] == "l4")["reason"], "unknown");
+    launch(&mut app, "l4", "nope", "", "");
+    assert_eq!(app.wait_json_where("launch-failed", |v| v["id"] == "l4")["reason"], "unknown");
+    launch(&mut app, "l5", "test.child", "nope", "");
+    assert_eq!(app.wait_json_where("launch-failed", |v| v["id"] == "l5")["reason"], "unknown");
+
+    // Its window closed: the launch says so when sent again.
+    app.send_json(json!({"type": "close", "id": t1["id"]}));
+    app.wait_json_where("toplevel-removed", |v| v["id"] == t1["id"]);
+    launch(&mut app, "l1", "test.child", "", "");
+    assert_eq!(app.wait_json_where("launch-failed", |v| v["id"] == "l1")["reason"], "closed");
+
+    launch(&mut app, "not an id", "test.child", "", "");
+    app.wait_json("error");
+    let deadline = Instant::now() + TIMEOUT;
+    while app.read_frame().is_some() {
+        assert!(Instant::now() < deadline, "the connection stayed open");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_client_from_a_tab_lands_in_it_and_moves() {
+    let (compositor, dir, _) = start_launcher("tab", &[]);
+    let mut app = connect_ready(&compositor);
+    let spawn = |app_id: &str, tab: &str| {
+        Command::new(std::env::current_exe().unwrap())
+            .args(["wayland_child", "--exact"])
+            .env("PNC_CHILD", app_id)
+            .env("POCKETNIX_TAB", tab)
+            .env("WAYLAND_DISPLAY", "wl-test")
+            .env("XDG_RUNTIME_DIR", &compositor.dir)
+            .env_remove("XDG_ACTIVATION_TOKEN")
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap()
+    };
+    let mut good = spawn("tab.good", "fedcba9876543210");
+    let t = app.wait_json_where("toplevel", |v| v["appId"] == "tab.good");
+    assert_eq!((&t["tab"], &t["launch"]), (&json!("fedcba9876543210"), &json!("")));
+    let mut bad = spawn("tab.bad", "not a tab!");
+    assert_eq!(app.wait_json_where("toplevel", |v| v["appId"] == "tab.bad")["tab"], "");
+
+    app.send_json(json!({"type": "move", "id": t["id"], "tab": "0011223344556677"}));
+    let moved = app.wait_json_where("toplevel", |v| v["id"] == t["id"]);
+    assert_eq!(moved["tab"], "0011223344556677");
+    app.send_json(json!({"type": "move", "id": t["id"], "tab": ""}));
+    assert_eq!(app.wait_json_where("toplevel", |v| v["id"] == t["id"])["tab"], "");
+    for child in [&mut good, &mut bad] {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_dialog_draws_inside_its_parents_window() {
+    let compositor = Compositor::start("dialog");
+    let mut app = connect_ready(&compositor);
+    std::thread::sleep(Duration::from_millis(100));
+    let (w, h) = (200, 100);
+    let mut client = Pattern::connect(&compositor, w, h);
+    client.draw(&pattern(w, h, 0), [0, 0, w, h], false);
+    let window = app.wait_json("toplevel")["id"].as_u64().unwrap() as u32;
+    app.send_json(json!({"type": "window", "id": window, "width": 400, "height": 300, "scale": 1.0,
+        "focused": true, "visible": true, "maximized": false, "fullscreen": false}));
+    client.dispatch_until("keyboard focus", |s| s.keyboard_focus);
+
+    let parent = client.toplevel.clone();
+    let dialog = client.dialog(&parent, 60, 40, 3);
+    // Bounded by what the window shows: drawn 200x100 of its configured 400x300.
+    assert_eq!(client.state.dialog_bounds, Some((200, 100)));
+    let d = app.wait_json_where("toplevel", |v| v["parent"] == window);
+    let id = d["id"].as_u64().unwrap() as u32;
+    assert_eq!((&d["window"], &d["tab"], &d["appId"]), (&json!(window), &json!(""), &json!("test.pattern")));
+    let surface = app.wait_json_where("surface", |v| v["toplevel"] == id);
+    assert_eq!((&surface["window"], &surface["role"], &surface["parent"]), (&json!(window), &json!("toplevel"), &json!(0)));
+    let commit = app.wait_commit("the dialog's commit", |c| c.surface == id && c.flags & FLAG_BUFFER != 0);
+    assert_eq!(commit.window, window);
+    assert_eq!((commit.x, commit.y, commit.dst_width, commit.dst_height), (70, 30, 60, 40), "centred on its parent");
+    let dialog_surface = dialog.surface.clone();
+    client.dispatch_until("the dialog's keyboard focus", |s| s.keyboard_surface.as_ref() == Some(&dialog_surface));
+
+    // Its popups may use the whole window: anchored at its corner, this one slides into the window's.
+    assert_eq!(client.popup_from(&dialog.xdg_surface, [50, 30, 10, 10], (120, 80)), (10, -10, 120, 80));
+
+    let press = |app: &mut App, x: f32, y: f32| {
+        for state in [1u8, 0] {
+            app.send_binary(
+                0x21,
+                &[&window.to_be_bytes(), &x.to_be_bytes(), &y.to_be_bytes(), &BTN_LEFT.to_be_bytes(), &[state]],
+            );
+        }
+    };
+    let main = client.surface.clone();
+    press(&mut app, 10.0, 10.0);
+    client.dispatch_until("the parent's keyboard focus", |s| s.keyboard_surface.as_ref() == Some(&main));
+    // Left of the popup, which covers the dialog's right part.
+    press(&mut app, 75.0, 60.0);
+    client.dispatch_until("the dialog's keyboard focus again", |s| {
+        s.keyboard_surface.as_ref() == Some(&dialog_surface) && s.pointer_surface.as_ref() == Some(&dialog_surface)
+    });
+
+    // Modal: the parent takes no presses and no focus.
+    let wm_dialog: XdgWmDialogV1 = client.registry.bind(&client.qh, 1..=1, ()).unwrap();
+    wm_dialog.get_xdg_dialog(&dialog.toplevel, &client.qh, ()).set_modal();
+    client.roundtrip();
+    let buttons = |s: &Wl| s.pointer.iter().filter(|e| e.starts_with("button")).count();
+    let before = buttons(&client.state);
+    press(&mut app, 10.0, 10.0);
+    app.send_binary(0x20, &[&window.to_be_bytes(), &11f32.to_be_bytes(), &11f32.to_be_bytes()]);
+    client.dispatch_until("the pointer over the parent", |s| s.pointer_surface.as_ref() == Some(&main));
+    client.roundtrip();
+    assert_eq!(buttons(&client.state), before, "a press reached a modal dialog's parent");
+    assert_eq!(client.state.keyboard_surface.as_ref(), Some(&dialog_surface));
+
+    // Gone: the app forgets it, and focus returns to the parent.
+    dialog.toplevel.destroy();
+    dialog.xdg_surface.destroy();
+    dialog.surface.destroy();
+    client.roundtrip();
+    app.wait_json_where("toplevel-removed", |v| v["id"] == id);
+    client.dispatch_until("the parent's keyboard focus back", |s| s.keyboard_surface.as_ref() == Some(&main));
+}
+
+/// Not a test on its own: the Wayland client the launch and tab tests
+/// start, when `PNC_CHILD` names its app id. It activates with
+/// `XDG_ACTIVATION_TOKEN` between its first commit and its first buffer, as
+/// the apps tried do, and exits when closed.
+#[test]
+fn wayland_child() {
+    let Ok(app_id) = std::env::var("PNC_CHILD") else { return };
+    let token = std::env::var("XDG_ACTIVATION_TOKEN").unwrap_or_default();
+    let same = !token.is_empty() && std::env::var("DESKTOP_STARTUP_ID").is_ok_and(|d| d == token);
+    let tab = std::env::var("POCKETNIX_TAB").unwrap_or_default();
+    let conn = Connection::connect_to_env().unwrap();
+    let (globals, mut queue) = registry_queue_init::<ChildWl>(&conn).unwrap();
+    let qh = queue.handle();
+    let compositor: WlCompositor = globals.bind(&qh, 4..=6, ()).unwrap();
+    let shm: WlShm = globals.bind(&qh, 1..=1, ()).unwrap();
+    let wm_base: XdgWmBase = globals.bind(&qh, 1..=6, ()).unwrap();
+    let activation: XdgActivationV1 = globals.bind(&qh, 1..=1, ()).unwrap();
+    let surface = compositor.create_surface(&qh, ());
+    let xdg_surface = wm_base.get_xdg_surface(&surface, &qh, ());
+    let toplevel = xdg_surface.get_toplevel(&qh, ());
+    toplevel.set_app_id(app_id);
+    toplevel.set_title(format!("tab={tab} token={same}"));
+    surface.commit();
+    let mut state = ChildWl::default();
+    while state.configure.is_none() {
+        queue.blocking_dispatch(&mut state).unwrap();
+    }
+    xdg_surface.ack_configure(state.configure.take().unwrap());
+    if !token.is_empty() && std::env::var_os("PNC_CHILD_NO_TOKEN").is_none() {
+        activation.activate(token, &surface);
+    }
+    let (w, h) = (100, 50);
+    // SAFETY: memfd_create with a valid C string.
+    let fd = unsafe { libc::memfd_create(c"child".as_ptr(), libc::MFD_CLOEXEC) };
+    // SAFETY: a fresh descriptor we own.
+    let file = std::fs::File::from(unsafe { OwnedFd::from_raw_fd(fd) });
+    file.write_all_at(&pattern(w, h, 5), 0).unwrap();
+    let pool = shm.create_pool(file.as_fd(), w * h * 4, &qh, ());
+    let buffer = pool.create_buffer(0, w, h, w * 4, wl_shm::Format::Argb8888, &qh, ());
+    surface.attach(Some(&buffer), 0, 0);
+    surface.damage_buffer(0, 0, w, h);
+    surface.commit();
+    while !state.closed {
+        if queue.blocking_dispatch(&mut state).is_err() {
+            break;
+        }
+    }
+}
+
+#[derive(Default)]
+struct ChildWl {
+    configure: Option<u32>,
+    closed: bool,
+}
+
+impl Dispatch<WlRegistry, GlobalListContents> for ChildWl {
+    fn event(_: &mut Self, _: &WlRegistry, _: <WlRegistry as wayland_client::Proxy>::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+}
+
+wayland_client::delegate_noop!(ChildWl: ignore WlCompositor);
+wayland_client::delegate_noop!(ChildWl: ignore WlShm);
+wayland_client::delegate_noop!(ChildWl: ignore WlShmPool);
+wayland_client::delegate_noop!(ChildWl: ignore WlBuffer);
+wayland_client::delegate_noop!(ChildWl: ignore WlSurface);
+wayland_client::delegate_noop!(ChildWl: ignore XdgActivationV1);
+
+impl Dispatch<XdgWmBase, ()> for ChildWl {
+    fn event(_: &mut Self, base: &XdgWmBase, event: xdg_wm_base::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        if let xdg_wm_base::Event::Ping { serial } = event {
+            base.pong(serial);
+        }
+    }
+}
+
+impl Dispatch<XdgSurface, ()> for ChildWl {
+    fn event(state: &mut Self, _: &XdgSurface, event: xdg_surface::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        if let xdg_surface::Event::Configure { serial } = event {
+            state.configure = Some(serial);
+        }
+    }
+}
+
+impl Dispatch<XdgToplevel, ()> for ChildWl {
+    fn event(state: &mut Self, _: &XdgToplevel, event: xdg_toplevel::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        if let xdg_toplevel::Event::Close = event {
+            state.closed = true;
+        }
+    }
+}
+
 impl Dispatch<WlRegistry, GlobalListContents> for Wl {
     fn event(_: &mut Self, _: &WlRegistry, _: <WlRegistry as wayland_client::Proxy>::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
 }
@@ -777,12 +1338,35 @@ wayland_client::delegate_noop!(Wl: ignore XdgPositioner);
 
 impl Dispatch<XdgToplevel, ()> for Wl {
     fn event(state: &mut Self, _: &XdgToplevel, event: xdg_toplevel::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
-        if let xdg_toplevel::Event::Configure { width, height, states } = event {
-            state.size = (width, height);
-            state.states = states.chunks(4).map(|c| u32::from_ne_bytes(c.try_into().unwrap())).collect();
+        match event {
+            xdg_toplevel::Event::Configure { width, height, states } => {
+                state.size = (width, height);
+                state.states = states.chunks(4).map(|c| u32::from_ne_bytes(c.try_into().unwrap())).collect();
+            }
+            xdg_toplevel::Event::ConfigureBounds { width, height } => state.bounds = Some((width, height)),
+            _ => {}
         }
     }
 }
+
+impl Dispatch<XdgSurface, Tag> for Wl {
+    fn event(state: &mut Self, _: &XdgSurface, event: xdg_surface::Event, _: &Tag, _: &Connection, _: &QueueHandle<Self>) {
+        if let xdg_surface::Event::Configure { serial } = event {
+            state.dialog_configure = Some(serial);
+        }
+    }
+}
+
+impl Dispatch<XdgToplevel, Tag> for Wl {
+    fn event(state: &mut Self, _: &XdgToplevel, event: xdg_toplevel::Event, _: &Tag, _: &Connection, _: &QueueHandle<Self>) {
+        if let xdg_toplevel::Event::ConfigureBounds { width, height } = event {
+            state.dialog_bounds = Some((width, height));
+        }
+    }
+}
+
+wayland_client::delegate_noop!(Wl: ignore XdgWmDialogV1);
+wayland_client::delegate_noop!(Wl: ignore XdgDialogV1);
 
 impl Dispatch<WlCallback, ()> for Wl {
     fn event(state: &mut Self, _: &WlCallback, event: wl_callback::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
@@ -808,8 +1392,9 @@ impl Dispatch<WlSeat, ()> for Wl {
 impl Dispatch<WlPointer, ()> for Wl {
     fn event(state: &mut Self, _: &WlPointer, event: wl_pointer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         match event {
-            wl_pointer::Event::Enter { surface_x, surface_y, .. } => {
-                state.pointer.push(format!("enter {surface_x} {surface_y}"))
+            wl_pointer::Event::Enter { surface, surface_x, surface_y, .. } => {
+                state.pointer.push(format!("enter {surface_x} {surface_y}"));
+                state.pointer_surface = Some(surface);
             }
             wl_pointer::Event::Button { button, state: WEnum::Value(s), .. } => {
                 state.pointer.push(format!("button {button} {}", s as u32))
@@ -822,8 +1407,14 @@ impl Dispatch<WlPointer, ()> for Wl {
 impl Dispatch<WlKeyboard, ()> for Wl {
     fn event(state: &mut Self, _: &WlKeyboard, event: wl_keyboard::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         match event {
-            wl_keyboard::Event::Enter { .. } => state.keyboard_focus = true,
-            wl_keyboard::Event::Leave { .. } => state.keyboard_focus = false,
+            wl_keyboard::Event::Enter { surface, .. } => {
+                state.keyboard_focus = true;
+                state.keyboard_surface = Some(surface);
+            }
+            wl_keyboard::Event::Leave { .. } => {
+                state.keyboard_focus = false;
+                state.keyboard_surface = None;
+            }
             wl_keyboard::Event::Key { key, state: WEnum::Value(s), .. } => state.keys.push((key, s as u32)),
             wl_keyboard::Event::Modifiers { mods_depressed, .. } => state.mods_depressed = mods_depressed,
             _ => {}

@@ -3,13 +3,14 @@
 
 use anyhow::{Result, bail};
 
-pub const VERSION: u32 = 1;
-pub const MIN_VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
+pub const MIN_VERSION: u32 = 2;
 pub const MAX_FRAME_PAYLOAD: usize = 1 << 20;
 
 pub const JSON: u8 = 0x00;
 pub const COMMIT: u8 = 0x01;
 pub const COMMIT_DATA: u8 = 0x02;
+pub const ICON: u8 = 0x03;
 pub const PRESENTED: u8 = 0x10;
 pub const POINTER_MOTION: u8 = 0x20;
 pub const POINTER_BUTTON: u8 = 0x21;
@@ -370,9 +371,10 @@ mod tests {
 
     #[test]
     fn negotiates_like_the_agent() {
-        assert_eq!(negotiate(1, 1), Some(1));
+        assert_eq!(negotiate(1, 1), None);
+        assert_eq!(negotiate(2, 2), Some(2));
         assert_eq!(negotiate(0, 3), None);
-        assert_eq!(negotiate(1, 3), Some(1));
-        assert_eq!(negotiate(2, 3), None);
+        assert_eq!(negotiate(1, 3), Some(2));
+        assert_eq!(negotiate(3, 3), None);
     }
 }

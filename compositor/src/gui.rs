@@ -53,8 +53,6 @@ use crate::state::OutputCfg;
 use crate::state::State;
 use crate::state::WindowCfg;
 use crate::state::apply_window_cfg;
-use crate::state::surface_id;
-use crate::state::window_root;
 
 /// Above this many queued bytes the compositor stops sending content until
 /// the writer catches up; below half of it, it resumes.
@@ -83,10 +81,12 @@ pub struct Conn {
     ready: bool,
     pub hashes: bool,
     seq: u32,
-    /// The last `toplevel` message sent per window id.
-    pub windows: HashMap<u32, Value>,
-    /// The surfaces announced per window id.
-    pub surfaces: HashMap<u32, Vec<u32>>,
+    /// The last `toplevel` message sent per toplevel id, with its window.
+    pub toplevels: HashMap<u32, (u32, Value)>,
+    /// The surfaces announced per window id, with their toplevel's id.
+    pub surfaces: HashMap<u32, Vec<(u32, u32)>>,
+    /// The last `apps` message sent.
+    pub apps: Option<Value>,
 }
 
 impl Conn {
@@ -314,8 +314,9 @@ impl State {
                 ready: false,
                 hashes: false,
                 seq: 0,
-                windows: HashMap::new(),
+                toplevels: HashMap::new(),
                 surfaces: HashMap::new(),
+                apps: None,
             },
         );
         debug!("GUI connection {id}");
@@ -408,7 +409,7 @@ impl State {
         match ty {
             protocol::JSON => {
                 let msg: Value = serde_json::from_slice(payload).context("malformed JSON")?;
-                self.on_json(msg)?;
+                self.on_json(id, msg)?;
             }
             protocol::PRESENTED => {
                 let (window, seq) = (f.u32()?, f.u32()?);
@@ -492,14 +493,17 @@ impl State {
             }
         }
 
+        // The replay names each toplevel's entry, so the list comes first.
+        self.scan_apps();
         self.flush();
         let (window, name) = self.cursor.clone();
         self.send_json(json!({"type": "cursor", "window": window, "name": name}));
+        self.send_apps();
         self.send_json(json!({"type": "ready"}));
         Ok(())
     }
 
-    fn on_json(&mut self, msg: Value) -> Result<()> {
+    fn on_json(&mut self, conn: u64, msg: Value) -> Result<()> {
         let ty = msg.get("type").and_then(Value::as_str).unwrap_or_default().to_owned();
         match ty.as_str() {
             "output" => {
@@ -524,6 +528,10 @@ impl State {
                     toplevel.send_close();
                 }
             }
+            "move" => self.on_move(serde_json::from_value(msg).context("malformed move")?),
+            "icon" => self.on_icon(conn, serde_json::from_value(msg).context("malformed icon")?),
+            "launch" => self.on_launch(serde_json::from_value(msg).context("malformed launch")?)?,
+            "launch-cancel" => self.on_launch_cancel(serde_json::from_value(msg).context("malformed launch-cancel")?),
             _ => {}
         }
         Ok(())
@@ -531,6 +539,9 @@ impl State {
 
     fn window_msg(&mut self, m: WindowMsg) {
         let Some(toplevel) = self.toplevel_by_id(m.id) else { return };
+        if self.is_dialog(m.id) {
+            return;
+        }
         let scale = if m.scale > 0.0 { m.scale } else { self.window_scale(m.id) };
         let cfg = WindowCfg {
             width: m.width,
@@ -542,7 +553,8 @@ impl State {
             fullscreen: m.fullscreen,
         };
         self.windows.insert(m.id, cfg);
-        toplevel.with_pending_state(|s| apply_window_cfg(s, &cfg));
+        let has_focus = self.focus.get(&m.id).is_none_or(|f| *f == m.id);
+        toplevel.with_pending_state(|s| apply_window_cfg(s, &cfg, has_focus));
         if toplevel.is_initial_configure_sent() {
             toplevel.send_pending_configure();
         }
@@ -569,17 +581,14 @@ impl State {
         }
     }
 
-    fn keyboard_window(&self) -> Option<u32> {
-        self.seat
-            .get_keyboard()
-            .and_then(|k| k.current_focus())
-            .and_then(|f| window_root(&f))
-            .and_then(|r| surface_id(&r))
-    }
-
     /// The topmost surface of `window` that takes input at `p` (window
     /// logical coordinates), with its origin.
     fn hit_test(&self, window: u32, p: Point<f64, Logical>) -> Option<(WlSurface, Point<f64, Logical>)> {
+        self.hit_layer(window, p).map(|(s, o, _)| (s, o))
+    }
+
+    /// `hit_test`'s surface and origin, and the toplevel it belongs to.
+    fn hit_layer(&self, window: u32, p: Point<f64, Logical>) -> Option<(WlSurface, Point<f64, Logical>, u32)> {
         let layers = self.layouts.get(&window)?;
         layers.iter().rev().find_map(|l| {
             if !l.mapped || !l.surface.is_alive() {
@@ -594,13 +603,19 @@ impl State {
             {
                 return None;
             }
-            Some((l.surface.clone(), l.loc.to_f64()))
+            Some((l.surface.clone(), l.loc.to_f64(), l.toplevel))
         })
     }
 
     fn pointer_motion(&mut self, window: u32, x: f32, y: f32) {
         let scale = self.window_scale(window);
         let p: Point<f64, Logical> = (x as f64 / scale, y as f64 / scale).into();
+        if let Some(drag) = &self.drag
+            && drag.window == window
+        {
+            let offset = drag.start_offset + (p - drag.start).to_i32_round();
+            self.dialogs.entry(drag.dialog).or_default().offset = Some(offset);
+        }
         let focus = self.hit_test(window, p);
         self.pointer_window = Some(window);
         let Some(pointer) = self.seat.get_pointer() else { return };
@@ -630,6 +645,17 @@ impl State {
     fn pointer_button(&mut self, window: u32, x: f32, y: f32, button: u32, pressed: bool) {
         self.pointer_motion(window, x, y);
         let Some(pointer) = self.seat.get_pointer() else { return };
+        let scale = self.window_scale(window);
+        let hit = self.hit_layer(window, (x as f64 / scale, y as f64 / scale).into()).map(|(_, _, t)| t);
+        if pressed && hit.is_some_and(|t| self.blocked_by_modal(t)) {
+            // A modal dialog's parent takes no presses.
+            self.swallowed_buttons.insert(button);
+            pointer.frame(self);
+            return;
+        }
+        if !pressed {
+            self.drag = None;
+        }
         if pressed {
             self.grabs.retain(|p| p.alive());
             let target = pointer.current_focus();
@@ -647,6 +673,9 @@ impl State {
                 return;
             }
             self.pressed_buttons.insert(button);
+            if let Some(toplevel) = hit {
+                self.pressed_on(window, toplevel);
+            }
         } else {
             if self.swallowed_buttons.remove(&button) {
                 pointer.frame(self);
@@ -654,14 +683,24 @@ impl State {
             }
             self.pressed_buttons.remove(&button);
         }
+        let serial = SERIAL_COUNTER.next_serial();
         let event = ButtonEvent {
-            serial: SERIAL_COUNTER.next_serial(),
+            serial,
             time: self.time_ms(),
             button,
             state: if pressed { ButtonState::Pressed } else { ButtonState::Released },
         };
         pointer.button(self, &event);
         pointer.frame(self);
+        // A press is an input event a client may mint a token with, if it has the keyboard too.
+        let keyboard = self.seat.get_keyboard().and_then(|k| k.current_focus());
+        let client = pointer.current_focus().and_then(|s| s.client());
+        if pressed
+            && let Some(client) = client
+            && keyboard.and_then(|k| k.client()).is_some_and(|k| k.id() == client.id())
+        {
+            self.input_serials.push(serial, client.id());
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -669,6 +708,11 @@ impl State {
         self.pointer_motion(window, x, y);
         let Some(pointer) = self.seat.get_pointer() else { return };
         let scale = self.window_scale(window);
+        let hit = self.hit_layer(window, (x as f64 / scale, y as f64 / scale).into()).map(|(_, _, t)| t);
+        if hit.is_some_and(|t| self.blocked_by_modal(t)) {
+            pointer.frame(self);
+            return;
+        }
         let source = match source {
             1 => AxisSource::Finger,
             2 => AxisSource::Continuous,
@@ -739,9 +783,11 @@ impl State {
         }
         let state = if pressed { KeyState::Pressed } else { KeyState::Released };
         let time = self.time_ms();
-        keyboard.input::<(), _>(self, (key + 8).into(), state, SERIAL_COUNTER.next_serial(), time, |_, _, _| {
-            FilterResult::Forward
-        });
+        let serial = SERIAL_COUNTER.next_serial();
+        keyboard.input::<(), _>(self, (key + 8).into(), state, serial, time, |_, _, _| FilterResult::Forward);
+        if let Some(client) = keyboard.current_focus().and_then(|f| f.client()) {
+            self.input_serials.push(serial, client.id());
+        }
     }
 
     /// Android's metaState as is: locks are toggled with their keys, held

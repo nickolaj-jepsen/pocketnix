@@ -25,7 +25,6 @@ use smithay::wayland::compositor::SubsurfaceCachedState;
 use smithay::wayland::compositor::SurfaceAttributes;
 use smithay::wayland::compositor::TraversalAction;
 use smithay::wayland::shell::xdg::SurfaceCachedState;
-use smithay::wayland::shell::xdg::ToplevelSurface;
 use smithay::wayland::shell::xdg::XdgPopupSurfaceData;
 use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 
@@ -33,18 +32,20 @@ use crate::protocol;
 use crate::protocol::Commit;
 use crate::protocol::Rect;
 use crate::state::State;
-use crate::state::surface_id;
+use crate::state::toplevel_root;
 use crate::state::window_geometry;
-use crate::state::window_root;
 use crate::surface::Placement;
 use crate::surface::Sent;
 use crate::surface::Surf;
 use crate::surface::with_surf;
+use crate::windows::Member;
 
 /// A surface as one layer of a window, bottom to top.
 pub struct Layer {
     pub surface: WlSurface,
     pub id: u32,
+    /// The toplevel whose tree it's in.
+    pub toplevel: u32,
     pub role: &'static str,
     pub parent: u32,
     /// Origin in the window's logical coordinates (origin at the toplevel's
@@ -62,10 +63,15 @@ fn to_px(v: i32, scale: f64) -> i32 {
 impl State {
     pub fn flush(&mut self) {
         self.grabs.retain(|p| p.alive());
-        let toplevels = self.mapped_toplevels();
+        self.update_tree();
+        let windows: Vec<(u32, Vec<Member>)> = self.tree.windows.iter().map(|w| (w.id, w.members.clone())).collect();
         let mut layouts = std::collections::HashMap::new();
-        for (window, toplevel) in &toplevels {
-            let layers = self.collect_layers(toplevel);
+        for (window, members) in &windows {
+            let mut layers = Vec::new();
+            for m in members {
+                let origin = self.tree.origin.get(&m.id).copied().unwrap_or_default();
+                self.collect_layers(m, origin, &mut layers);
+            }
             let scale = self.window_scale(*window);
             for layer in &layers {
                 self.apply_scale(&layer.surface, scale, layer.role == "toplevel");
@@ -75,67 +81,62 @@ impl State {
         self.layouts = layouts;
 
         if self.gui.active_conn().is_some() && !self.gui.backlogged() {
-            for (window, toplevel) in &toplevels {
-                self.emit_window(*window, toplevel);
-            }
-            let current: HashSet<u32> = toplevels.iter().map(|(w, _)| *w).collect();
-            let gone: Vec<u32> = self
-                .gui
-                .active_conn()
-                .map(|c| c.windows.keys().filter(|w| !current.contains(w)).copied().collect())
-                .unwrap_or_default();
-            for window in gone {
-                if let Some(conn) = self.gui.active_conn_mut() {
-                    conn.windows.remove(&window);
-                    conn.surfaces.remove(&window);
-                    conn.send(protocol::json_frame(&json!({"type": "toplevel-removed", "id": window})));
-                }
-                // Nothing will present an unmapped window.
-                let time = self.time_ms();
-                for (_, cb) in self.held.remove(&window).unwrap_or_default() {
-                    cb.done(time);
-                }
+            self.emit_removals();
+            for (window, members) in &windows {
+                self.emit_window(*window, members);
             }
         }
         self.windowless_callbacks();
     }
 
-    /// Mapped toplevels by window id, parents before children.
-    fn mapped_toplevels(&self) -> Vec<(u32, ToplevelSurface)> {
-        let mut out: Vec<(u32, ToplevelSurface, usize)> = self
-            .xdg_shell_state
-            .toplevel_surfaces()
-            .iter()
-            .filter(|t| t.alive() && t.is_initial_configure_sent())
-            .filter_map(|t| {
-                let root = t.wl_surface();
-                let (id, mapped) =
-                    compositor::with_states(root, |d| with_surf(d, |s| (s.id, s.mirror.is_some())))?;
-                let mut depth = 0;
-                let mut parent = t.parent();
-                while let Some(p) = parent.filter(|_| depth < 32) {
-                    depth += 1;
-                    parent = self.toplevel(&p).and_then(|t| t.parent());
+    /// Tells the app about toplevels it knows that went away or now draw
+    /// in another window. A window's removal takes its dialogs with it.
+    fn emit_removals(&mut self) {
+        let current: std::collections::HashMap<u32, u32> = self.tree.of.iter().map(|(id, (w, _))| (*id, *w)).collect();
+        let Some(conn) = self.gui.active_conn_mut() else { return };
+        let mut gone_windows = Vec::new();
+        let windows: Vec<u32> = conn.toplevels.iter().filter(|(id, (w, _))| *id == w).map(|(id, _)| *id).collect();
+        for window in windows {
+            if current.get(&window) != Some(&window) {
+                conn.toplevels.retain(|_, (w, _)| *w != window);
+                conn.surfaces.remove(&window);
+                conn.send(protocol::json_frame(&json!({"type": "toplevel-removed", "id": window})));
+                gone_windows.push(window);
+            }
+        }
+        let dialogs: Vec<(u32, u32)> = conn.toplevels.iter().map(|(id, (w, _))| (*id, *w)).filter(|(id, w)| id != w).collect();
+        for (dialog, window) in dialogs {
+            if current.get(&dialog) != Some(&window) {
+                conn.toplevels.remove(&dialog);
+                if let Some(surfaces) = conn.surfaces.get_mut(&window) {
+                    surfaces.retain(|(_, t)| *t != dialog);
                 }
-                mapped.then(|| (id, t.clone(), depth))
-            })
-            .collect();
-        out.sort_by_key(|(_, _, depth)| *depth);
-        out.into_iter().map(|(id, t, _)| (id, t)).collect()
+                conn.send(protocol::json_frame(&json!({"type": "toplevel-removed", "id": dialog})));
+            }
+        }
+        // Nothing will present an unmapped window.
+        let time = self.time_ms();
+        for window in gone_windows {
+            for (_, cb) in self.held.remove(&window).unwrap_or_default() {
+                cb.done(time);
+            }
+        }
     }
 
-    fn collect_layers(&self, toplevel: &ToplevelSurface) -> Vec<Layer> {
-        let root = toplevel.wl_surface();
+    /// A toplevel's layers: its own surface tree, then the popups it opened.
+    fn collect_layers(&self, member: &Member, origin: Point<i32, Logical>, layers: &mut Vec<Layer>) {
+        let root = member.toplevel.wl_surface();
         let geometry = window_geometry(root);
-        let mut layers = Vec::new();
-        push_tree(root, Point::from((-geometry.loc.x, -geometry.loc.y)), "toplevel", 0, &mut layers);
+        let first = layers.len();
+        push_tree(root, origin - geometry.loc, "toplevel", 0, member.id, layers);
         for popup in self.xdg_shell_state.popup_surfaces() {
             let surface = popup.wl_surface();
-            if !popup.alive() || window_root(surface).as_ref() != Some(root) {
+            if !popup.alive() || toplevel_root(surface).as_ref() != Some(root) {
                 continue;
             }
             let Some(parent) = popup.get_parent_surface() else { continue };
-            let Some((parent_loc, parent_id)) = layers.iter().find(|l| l.surface == parent).map(|l| (l.loc, l.id))
+            let Some((parent_loc, parent_id)) =
+                layers[first..].iter().find(|l| l.surface == parent).map(|l| (l.loc, l.id))
             else {
                 continue;
             };
@@ -148,9 +149,8 @@ impl State {
             });
             let own = window_geometry(surface);
             let origin = parent_loc + parent_geometry.loc + popup_geometry - own.loc;
-            push_tree(surface, origin, "popup", parent_id, &mut layers);
+            push_tree(surface, origin, "popup", parent_id, member.id, layers);
         }
-        layers
     }
 
     /// Tells a surface the scale its window renders at, and the client its
@@ -186,35 +186,41 @@ impl State {
         }
     }
 
-    fn toplevel_json(&self, window: u32, toplevel: &ToplevelSurface) -> Value {
-        let root = toplevel.wl_surface();
+    fn toplevel_json(&self, window: u32, member: &Member) -> Value {
+        let root = member.toplevel.wl_surface();
         let scale = self.window_scale(window);
-        let (title, app_id, parent) = compositor::with_states(root, |d| {
+        let (title, app_id) = compositor::with_states(root, |d| {
             d.data_map
                 .get::<XdgToplevelSurfaceData>()
                 .map(|t| {
                     let t = t.lock().unwrap();
-                    (t.title.clone(), t.app_id.clone(), t.parent.clone())
+                    (t.title.clone(), t.app_id.clone())
                 })
                 .unwrap_or_default()
         });
-        let parent = parent.as_ref().and_then(surface_id).unwrap_or(0);
+        let app_id = app_id.unwrap_or_default();
         let geometry = window_geometry(root);
         let (min, max) = compositor::with_states(root, |d| {
             let mut guard = d.cached_state.get::<SurfaceCachedState>();
             let c = guard.current();
             (c.min_size, c.max_size)
         });
-        let decoration = match toplevel.current_state().decoration_mode {
+        let decoration = match member.toplevel.current_state().decoration_mode {
             Some(DecorationMode::ServerSide) => "server",
             _ => "client",
         };
+        let meta = self.meta.get(&member.id);
+        let tab = if member.parent == 0 { meta.map(|m| m.tab.as_str()).unwrap_or_default() } else { "" };
         json!({
             "type": "toplevel",
-            "id": window,
-            "parent": parent,
+            "id": member.id,
+            "window": window,
+            "parent": member.parent,
             "title": title.unwrap_or_default(),
-            "appId": app_id.unwrap_or_default(),
+            "appId": app_id,
+            "app": self.app_of(member.id, &app_id),
+            "launch": meta.map(|m| m.launch.as_str()).unwrap_or_default(),
+            "tab": tab,
             "width": to_px(geometry.size.w, scale),
             "height": to_px(geometry.size.h, scale),
             "minWidth": to_px(min.w, scale),
@@ -225,8 +231,8 @@ impl State {
         })
     }
 
-    fn emit_window(&mut self, window: u32, toplevel: &ToplevelSurface) {
-        let info = self.toplevel_json(window, toplevel);
+    fn emit_window(&mut self, window: u32, members: &[Member]) {
+        let infos: Vec<(u32, Value)> = members.iter().map(|m| (m.id, self.toplevel_json(window, m))).collect();
         let scale = self.window_scale(window);
         let generation = self.gui.generation;
         let log_hashes = self.gui.log_hashes;
@@ -234,22 +240,25 @@ impl State {
         let Some(conn) = self.gui.active.and_then(|id| self.gui.conns.get_mut(&id)) else { return };
         let want_hash = conn.hashes;
 
-        if conn.windows.get(&window) != Some(&info) {
-            conn.send(protocol::json_frame(&info));
-            conn.windows.insert(window, info);
+        for (id, info) in infos {
+            if conn.toplevels.get(&id).map(|(w, v)| (*w, v)) != Some((window, &info)) {
+                conn.send(protocol::json_frame(&info));
+                conn.toplevels.insert(id, (window, info));
+            }
         }
-        let ids: Vec<u32> = layers.iter().map(|l| l.id).collect();
+        let ids: Vec<(u32, u32)> = layers.iter().map(|l| (l.id, l.toplevel)).collect();
         let announced = conn.surfaces.remove(&window).unwrap_or_default();
-        for id in announced.iter().filter(|id| !ids.contains(id)) {
+        for (id, _) in announced.iter().filter(|(id, _)| !ids.iter().any(|(i, _)| i == id)) {
             conn.send(protocol::json_frame(&json!({"type": "surface-removed", "id": id})));
         }
         let mut fresh = HashSet::new();
-        for layer in layers.iter().filter(|l| !announced.contains(&l.id)) {
+        for layer in layers.iter().filter(|l| !announced.iter().any(|(id, _)| *id == l.id)) {
             fresh.insert(layer.id);
             conn.send(protocol::json_frame(&json!({
                 "type": "surface",
                 "id": layer.id,
                 "window": window,
+                "toplevel": layer.toplevel,
                 "role": layer.role,
                 "parent": layer.parent,
             })));
@@ -340,7 +349,14 @@ impl State {
     }
 }
 
-fn push_tree(surface: &WlSurface, origin: Point<i32, Logical>, role: &'static str, parent: u32, out: &mut Vec<Layer>) {
+fn push_tree(
+    surface: &WlSurface,
+    origin: Point<i32, Logical>,
+    role: &'static str,
+    parent: u32,
+    toplevel: u32,
+    out: &mut Vec<Layer>,
+) {
     fn offset(d: &compositor::SurfaceData) -> Point<i32, Logical> {
         if d.role == Some("subsurface") {
             d.cached_state.get::<SubsurfaceCachedState>().current().location
@@ -363,6 +379,7 @@ fn push_tree(surface: &WlSurface, origin: Point<i32, Logical>, role: &'static st
             out.push(Layer {
                 surface: s.clone(),
                 id,
+                toplevel,
                 role: if s == surface { role } else { "subsurface" },
                 parent: *parent,
                 loc: *loc + offset(d),
