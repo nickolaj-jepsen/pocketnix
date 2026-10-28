@@ -18,15 +18,13 @@
         pocketnix = pkgs.callPackage ./nix/go.nix {};
         pocketnix-cli = pkgs.callPackage ./nix/cli.nix {inherit (own) pocketnix;};
         default = own.pocketnix-cli;
+        # On aarch64 it's the guest's gui.package; from x86_64 it builds under binfmt (slow).
+        pocketnix-compositor = pkgs.callPackage ./nix/compositor.nix {};
         # The example guest's disk image, assembled by this system's tools.
         example-image = self.nixosConfigurations.example.config.system.build.pocketnixImage.${pkgs.stdenv.hostPlatform.system};
       }
       // nixpkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "aarch64-linux") {
         avf-kernel = pkgs.callPackage ./nix/avf-kernel/package.nix {};
-      }
-      # x86_64 only for now: Rust under binfmt is too slow to build routinely.
-      // nixpkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
-        pocketnix-compositor = pkgs.callPackage ./nix/compositor.nix {};
       });
 
     apps = forAll (pkgs: let
