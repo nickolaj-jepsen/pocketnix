@@ -183,9 +183,10 @@ class GuiWindowActivity : Activity(), WindowHost {
         val savedLaunch = saved?.getString(KEY_LAUNCH)?.let { vm.gui.launches[it] }
         showSplash()
         when {
-            savedWindow != 0 -> if (vm.gui.bindLaunched(this, savedWindow)) showWindow(savedWindow) else finishAndRemoveTask()
+            savedWindow != 0 && vm.gui.bindLaunched(this, savedWindow) -> showWindow(savedWindow)
             savedLaunch != null -> follow(savedLaunch)
-            // Recents restoring a card whose VM died with the app; a tap on its pin follows as a new intent.
+            // A card whose VM (and so its window or launch) died with the app: Recents restoring it, or a tap
+            // on its pin reusing it, which follows as a new intent.
             saved != null || intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0 -> {
                 Log.i(TAG, "a stale launch card for ${target?.app}; removing it")
                 stale = Runnable { finishAndRemoveTask() }.also { handler.post(it) }
