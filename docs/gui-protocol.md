@@ -376,7 +376,7 @@ its zoom transform before sending it.
 |---|---|
 | POINTER_MOTION `0x20` | `[window u32][x f32][y f32]`. Implies pointer enter. |
 | POINTER_BUTTON `0x21` | `[window u32][x f32][y f32][button u32][state u8]`: `button` a Linux `BTN_*` code (`BTN_LEFT` 0x110, `BTN_RIGHT` 0x111, `BTN_MIDDLE` 0x112, `BTN_SIDE` 0x113, `BTN_EXTRA` 0x114); `state` 1 pressed, 0 released. |
-| POINTER_AXIS `0x22` | `[window u32][x f32][y f32][source u8][stop u8][dx f32][dy f32][v120x i32][v120y i32]`: `source` 0 wheel, 1 finger, 2 continuous, 3 wheel tilt; `stop` bit 0 horizontal, bit 1 vertical (finger lifted); `dx`/`dy` in window pixels; `v120x`/`v120y` in 1/120 notches, 0 when not a wheel. Positive is right and down, Wayland's direction, so Android's `AXIS_VSCROLL` is negated. |
+| POINTER_AXIS `0x22` | `[window u32][x f32][y f32][source u8][stop u8][dx f32][dy f32][v120x i32][v120y i32]`: `source` 0 wheel, 1 finger, 2 continuous, 3 wheel tilt; `stop` bit 0 horizontal, bit 1 vertical (finger lifted); `dx`/`dy` in window pixels; `v120x`/`v120y` in 1/120 notches, 0 when not a wheel. Positive is right and down, Wayland's direction, so Android's `AXIS_VSCROLL` is negated. The compositor moves the pointer to `x`,`y` in a `wl_pointer.frame` of its own before the axis events' frame: GTK keeps a frame's axis events back when the frame also has a motion, and never scrolls. |
 | POINTER_LEAVE `0x23` | `[window u32]`. |
 | KEY `0x30` | `[window u32][key u32][state u8]`: `key` a Linux evdev `KEY_*` code (XKB keycode − 8); `state` 1 pressed, 0 released. |
 | MODIFIERS `0x31` | `[window u32][mods u8]`: bit 0 shift, 1 ctrl, 2 alt, 3 logo, 4 caps lock, 5 num lock. |
@@ -488,9 +488,9 @@ combination.
   level's Shift and level-3 modifiers set and Ctrl, Alt and Logo as
   MODIFIERS left them, then restores the modifier state.
 - A keysym the keymap lacks is typed as `wtype` does: the compositor sends
-  the focused client a keymap that is the current one plus the missing
-  keysyms on unused keycodes, types them, and sends the layout's keymap
-  again at the end of the message.
+  every client a keymap that is the current one plus the missing keysyms on
+  unused keycodes (Smithay has one keymap per seat), types them, and sends
+  the layout's keymap again at the end of the message.
 
 ## Text input
 
@@ -561,7 +561,13 @@ except that the preedit cursor defaults to the end of `preedit`.
   which text-input-v3 is built for.
 - text-input-v3 can't move the cursor or select. The app turns the IME's
   `setSelection` and its key events (Enter, Backspace, arrows) into KEY
-  presses.
+  presses. A `"\n"` the IME commits, and its editor action, are a Return
+  press too.
+- With `text` `null` the app can't see what the client did with an edit,
+  and a client that commits on its own (foot commits a cursor rectangle
+  after every redraw) ignores a `done` whose serial is behind its own count.
+  So for such a text input the app sends committed text as `text` and only
+  the preedit as `ime`.
 
 ### Units
 
