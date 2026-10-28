@@ -64,6 +64,10 @@ internal class WindowIme(
 
     // The keyboard was opened with the button, so a session's end leaves it up.
     private var userOpened = false
+
+    // Whether the keyboard was up when the window lost focus mid-session: the session that
+    // follows focus coming back gets that, not a fresh keyboard, as Android's own fields do.
+    private var restore: Boolean? = null
     private var extractToken = -1
     private var monitorCursor = false
     private var reported = IntArray(4) { -2 }
@@ -80,7 +84,8 @@ internal class WindowIme(
                 model.reset(if (s.text != null) TextInputModel.Target.CLIENT else TextInputModel.Target.BLIND, s)
                 restart()
                 if (!view.isFocused) view.requestFocus()
-                imm.showSoftInput(view, 0)
+                if (restore != false) imm.showSoftInput(view, 0)
+                restore = null
             } else {
                 state = s
                 when (model.client(s)) {
@@ -127,6 +132,7 @@ internal class WindowIme(
             return
         }
         userOpened = true
+        restore = null
         if (!view.isFocused) view.requestFocus()
         imm.showSoftInput(view, 0)
     }
@@ -134,6 +140,16 @@ internal class WindowIme(
     /** The keyboard went away, by any means: a session's end hides it again. */
     fun keyboardHidden() {
         userOpened = false
+    }
+
+    /** The window gained or lost Android's window focus. */
+    fun windowFocus(focused: Boolean) {
+        if (!focused && state.active) restore = view.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) == true
+    }
+
+    /** A touch went down on the window: a text field it focuses brings the keyboard up. */
+    fun touched() {
+        restore = null
     }
 
     // --- Keys ---

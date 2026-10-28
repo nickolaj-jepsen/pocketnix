@@ -28,6 +28,7 @@ internal class TabWindowView(context: Context, private val session: GuiSession, 
 
     private val focusListener = ViewTreeObserver.OnWindowFocusChangeListener { focused ->
         guard("tab window ${windowId.u}: focus") {
+            surface.ime.windowFocus(focused)
             surface.pushState()
             if (focused && bound) surface.input.focused()
         }

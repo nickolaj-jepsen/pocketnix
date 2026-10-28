@@ -148,6 +148,7 @@ class WindowSurface internal constructor(
             setOnTouchListener { v, e ->
                 // The listener consumes the touch, so the view never takes focus itself.
                 if (!v.isFocused) v.requestFocus()
+                if (e.actionMasked == MotionEvent.ACTION_DOWN) ime.touched()
                 guard("window ${id.u}: touch", false) { bound() && touch(e) }
             }
             setOnGenericMotionListener { _, e -> guard("window ${id.u}: motion", false) { bound() && input.motion(e) } }

@@ -377,6 +377,7 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
         // Kept on a splash too: the window it becomes has the focus it had.
         focused = hasFocus
         val s = surface ?: return
+        s.ime.windowFocus(hasFocus)
         s.pushState()
         if (hasFocus) s.input.focused()
     }
