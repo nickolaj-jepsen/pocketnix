@@ -157,7 +157,9 @@ impl State {
         missing.sort_by_key(|s| s.raw());
         missing.dedup();
 
-        // Missing characters go on spare keycodes, and the keymap comes back after.
+        // Missing characters go on spare keycodes, and the keymap comes back after. A new keymap
+        // starts from the keys held alone: the locks and MODIFIERS' held modifiers are set again.
+        let modifiers = keyboard.modifier_state();
         let mut original = None;
         if !missing.is_empty() {
             let (current, extended) = keyboard.with_xkb_state(self, |ctx| {
@@ -169,6 +171,7 @@ impl State {
             match extended.map(|k| keyboard.set_keymap_from_string(self, k)) {
                 Some(Ok(())) => {
                     original = Some(current);
+                    self.set_modifiers(&keyboard, modifiers);
                     found = self.find_keys(&keyboard, &syms);
                 }
                 Some(Err(e)) => warn!("typing: the keymap with extra symbols didn't compile: {e}"),
@@ -186,10 +189,11 @@ impl State {
                 self.press(&keyboard, stroke);
             }
         }
-        if let Some(original) = original
-            && let Err(e) = keyboard.set_keymap_from_string(self, original)
-        {
-            warn!("typing: restoring the keymap: {e}");
+        if let Some(original) = original {
+            match keyboard.set_keymap_from_string(self, original) {
+                Ok(()) => self.set_modifiers(&keyboard, modifiers),
+                Err(e) => warn!("typing: restoring the keymap: {e}"),
+            }
         }
     }
 

@@ -1480,17 +1480,35 @@ fn text_becomes_key_presses_in_the_guests_layout() {
     assert!(!keymap_has(last, cjk), "the layout's keymap wasn't restored");
     assert_eq!(client.state.mods_depressed, 0, "a typed character's modifiers stayed");
 
+    // Caps Lock and a held Ctrl from MODIFIERS outlast the keymap swaps: Ctrl types with the character.
+    let w32 = window.to_be_bytes();
+    app.send_binary(0x31, &[&w32, &[1 << 1 | 1 << 4]]);
+    client.dispatch_until("caps lock and ctrl", |s| s.mods_locked != 0 && s.mods_depressed != 0);
+    client.roundtrip();
+    let (held, locked) = (client.state.mods_depressed, client.state.mods_locked);
+    let n = client.state.presses.len();
+    app.send_json(json!({"type": "text", "window": window, "text": "語"}));
+    client.dispatch_until("a key press", |s| s.presses.len() == n + 1);
+    client.roundtrip();
+    assert_eq!(client.state.presses[n].2 & held, held, "Ctrl was let go for the press");
+    assert_eq!(client.state.presses[n].3, locked, "Caps Lock was let go for the press");
+    assert_eq!((client.state.mods_depressed, client.state.mods_locked), (held, locked));
+    app.send_binary(0x31, &[&w32, &[0]]);
+    client.dispatch_until("no modifiers", |s| s.mods_locked == 0 && s.mods_depressed == 0);
+    client.roundtrip();
+
     // The guest's layout: "z" is on the Y key in German.
     const KEY_Y: u32 = 21;
     app.send_json(json!({"type": "keyboard-layout", "layout": "de", "variant": ""}));
+    let n = client.state.presses.len();
     app.send_json(json!({"type": "text", "window": window, "text": "z"}));
-    client.dispatch_until("a key press", |s| s.presses.len() == 7);
-    assert_eq!(client.state.presses[6].0, KEY_Y);
+    client.dispatch_until("a key press", |s| s.presses.len() == n + 1);
+    assert_eq!(client.state.presses[n].0, KEY_Y);
     // One that doesn't compile keeps it.
     app.send_json(json!({"type": "keyboard-layout", "layout": "no-such-layout", "variant": ""}));
     app.send_json(json!({"type": "text", "window": window, "text": "z"}));
-    client.dispatch_until("a key press", |s| s.presses.len() == 8);
-    assert_eq!(client.state.presses[7].0, KEY_Y);
+    client.dispatch_until("a key press", |s| s.presses.len() == n + 2);
+    assert_eq!(client.state.presses[n + 1].0, KEY_Y);
 }
 
 /// Not a test on its own: the Wayland client the launch and tab tests

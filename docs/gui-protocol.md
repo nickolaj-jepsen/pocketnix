@@ -490,7 +490,8 @@ combination.
 - A keysym the keymap lacks is typed as `wtype` does: the compositor sends
   every client a keymap that is the current one plus the missing keysyms on
   unused keycodes (Smithay has one keymap per seat), types them, and sends
-  the layout's keymap again at the end of the message.
+  the layout's keymap again at the end of the message. Each keymap change
+  keeps the modifiers and locks as they were.
 
 ## Text input
 
