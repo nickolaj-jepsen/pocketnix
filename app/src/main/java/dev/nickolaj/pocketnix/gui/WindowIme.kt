@@ -90,6 +90,11 @@ internal class WindowIme(
                 state = s
                 when (model.client(s)) {
                     TextInputModel.Agreement.AGREES -> main.removeCallbacks(resync)
+                    TextInputModel.Agreement.CAUGHT_UP -> {
+                        main.removeCallbacks(resync)
+                        // An open batch flushes as it ends.
+                        if (batch == 0) flush()
+                    }
                     TextInputModel.Agreement.AHEAD -> {}
                     TextInputModel.Agreement.DISAGREES -> {
                         main.removeCallbacks(resync)
@@ -110,7 +115,13 @@ internal class WindowIme(
 
     /** The client's text differs from the copy's for longer than a commit's round trip: the client's wins. */
     private fun resync() {
-        val (ops, textChanged) = model.resync() ?: return
+        val fixed = model.resync()
+        if (fixed == null) {
+            // No state showed the keys a held edit waits for, but they've landed by now.
+            if (model.held) flush(hold = false)
+            return
+        }
+        val (ops, textChanged) = fixed
         send(ops)
         if (textChanged) restart() else report()
     }
@@ -258,7 +269,8 @@ internal class WindowIme(
     /** Commits the composing text and sends whatever is pending, before keys that act where it stands. */
     private fun settle() {
         model.finishComposingText()
-        flush()
+        // The key that follows can't wait with a held edit, and mustn't overtake it.
+        flush(hold = false)
     }
 
     // --- The InputConnection ---
@@ -282,8 +294,13 @@ internal class WindowIme(
         return Connection(generation)
     }
 
-    private fun flush() {
-        send(model.flush())
+    private fun flush(hold: Boolean = true) {
+        val was = model.held
+        send(model.flush(hold))
+        if (model.held && !was) {
+            main.removeCallbacks(resync)
+            main.postDelayed(resync, RESYNC_MS)
+        }
         report()
     }
 

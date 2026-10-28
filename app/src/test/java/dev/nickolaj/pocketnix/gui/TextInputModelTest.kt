@@ -18,7 +18,11 @@ class TextInputModelTest {
         var preedit = ""
         var serial = 0
 
-        fun apply(ops: List<Op>) = ops.forEach(::apply)
+        /** As GTK and Qt take a batch: edits as they arrive, keys queued until after. */
+        fun apply(ops: List<Op>) {
+            ops.filterIsInstance<Op.Edit>().forEach(::apply)
+            ops.filter { it !is Op.Edit }.forEach(::apply)
+        }
 
         fun apply(op: Op) {
             when (op) {
@@ -97,11 +101,19 @@ class TextInputModelTest {
 
     private fun session(client: Client, target: Target = Target.CLIENT) = TextInputModel().apply { reset(target, client.state()) }
 
-    /** Flushes [m] into [c] and checks the client ended up with the copy's text. */
+    /**
+     * Flushes [m] into [c], with the client's state releasing a held edit,
+     * and checks the client ended up with the copy's text.
+     */
     private fun flush(m: TextInputModel, c: Client): List<Op> {
-        val ops = m.flush()
-        c.apply(ops)
-        m.lastSerial = c.serial
+        val ops = ArrayList<Op>()
+        do {
+            val batch = m.flush()
+            c.apply(batch)
+            ops += batch
+            m.lastSerial = c.serial
+        } while (m.held && m.client(c.state()) == TextInputModel.Agreement.CAUGHT_UP)
+        assertTrue("nothing left held", !m.held)
         val committed = if (m.composing) m.text.removeRange(m.composeStart, m.composeEnd) else m.text
         if (m.target != Target.KEYS) {
             assertEquals("the client's text", committed, c.text)
@@ -205,6 +217,54 @@ class TextInputModelTest {
         m.commitText("x", 1)
         flush(m, c)
         assertEquals("x", c.text)
+    }
+
+    @Test
+    fun typingOverTheClientsSelectionIsOneCommit() {
+        val c = Client("foo bar", cursor = 3, anchor = 0)
+        val m = session(c)
+        m.commitText("x", 1)
+        assertEquals(listOf(Op.Edit(ImeEdit(commit = "x"))), flush(m, c))
+        assertEquals("x bar", c.text)
+        // A replacement that keeps the selection's first letter still replaces all of it.
+        val c2 = Client("foo bar", cursor = 0, anchor = 3)
+        val m2 = session(c2)
+        m2.commitText("f", 1)
+        flush(m2, c2)
+        assertEquals("f bar", c2.text)
+    }
+
+    @Test
+    fun anEditWaitsForTheKeysBeforeIt() {
+        // Gboard recomposing the word before the space just typed.
+        val c = Client("helo ")
+        val m = session(c)
+        m.setComposingRegion(0, 4)
+        m.setComposingText("hello", 1)
+        val first = m.flush()
+        assertTrue("keys first", first.isNotEmpty() && first.all { it is Op.Key })
+        assertTrue(m.held)
+        assertTrue("nothing more while held", m.flush().isEmpty())
+        c.apply(first)
+        assertEquals(TextInputModel.Agreement.CAUGHT_UP, m.client(c.state()))
+        c.apply(m.flush())
+        assertEquals(" ", c.text)
+        assertEquals("hello", c.preedit)
+        assertEquals(0, c.cursor)
+    }
+
+    @Test
+    fun aHeldEditGoesUnheldWhenTheClientSaysNothing() {
+        val c = Client("helo ")
+        val m = session(c)
+        m.setComposingRegion(0, 4)
+        m.setComposingText("hello", 1)
+        c.apply(m.flush())
+        assertTrue(m.held)
+        c.apply(m.flush(hold = false))
+        assertTrue(!m.held)
+        assertEquals(" ", c.text)
+        assertEquals("hello", c.preedit)
     }
 
     @Test

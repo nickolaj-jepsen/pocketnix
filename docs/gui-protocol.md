@@ -563,6 +563,12 @@ except that the preedit cursor defaults to the end of `preedit`.
   `setSelection` and its key events (Enter, Backspace, arrows) into KEY
   presses. A `"\n"` the IME commits, and its editor action, are a Return
   press too.
+- GTK and Qt queue key events but apply a `done` as it arrives, so an
+  `ime` sent right after KEY presses it depends on would act first. The
+  app holds such an `ime` until a `text-input` state shows the keys
+  applied, and sends it anyway if no state comes within a commit's round
+  trip. Typing over a selection needs no key: a `commit` replaces the
+  selection in GTK, Qt and Chromium.
 - With `text` `null` the app can't see what the client did with an edit,
   and a client that commits on its own (foot commits a cursor rectangle
   after every redraw) ignores a `done` whose serial is behind its own count.

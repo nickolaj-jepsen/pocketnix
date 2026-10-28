@@ -107,6 +107,15 @@ internal class TextInputModel {
     /** The serial of the last edit sent in this session. */
     var lastSerial = 0
 
+    /**
+     * Whether an edit waits for the client to apply the keys [flush] sent
+     * before it: GTK and Qt queue key events but apply a text-input `done`
+     * as it arrives, so an edit sent with the keys overtakes them. A
+     * [client] state that shows the keys applied releases it.
+     */
+    var held = false
+        private set
+
     // The client's last caught-up state that disagrees, until resync or a state that agrees.
     private var disagreeing: TextInputState? = null
 
@@ -126,6 +135,7 @@ internal class TextInputModel {
         shownBegin = 0
         shownEnd = 0
         lastSerial = 0
+        held = false
         disagreeing = null
     }
 
@@ -260,9 +270,17 @@ internal class TextInputModel {
 
     // --- To the client ---
 
-    /** What the client must be sent so that it has the copy's text, selection and composing text. */
-    fun flush(): List<Op> {
+    /**
+     * What the client must be sent so that it has the copy's text, selection
+     * and composing text. With [hold], a text input with surrounding text
+     * gets keys and the edits that follow them in separate flushes (see
+     * [held]), and nothing while an edit is held.
+     */
+    fun flush(hold: Boolean = true): List<Op> {
         val out = ArrayList<Op>()
+        if (held && hold) return out
+        held = false
+        val waits = hold && target == Target.CLIENT
         val newText: String
         val preedit: String
         val newCursor: Int
@@ -281,30 +299,38 @@ internal class TextInputModel {
         val sentPreedit = if (target == Target.KEYS) "" else preedit
         val (pb, pe) = preeditCursor(preedit)
 
+        // A change within the client's selection that leaves text in its place: a commit replaces the selection.
+        var replacing: Pair<Int, Int>? = null
         if (newText != base && baseAnchor != baseCursor) {
             val lo = min(baseAnchor, baseCursor)
             val hi = max(baseAnchor, baseCursor)
             val (p, e) = region(newText, newCursor)
-            clearShown(out)
-            if (p <= lo && hi <= e) {
-                // A commit can only replace a selection; deleting one takes a key.
-                out += Op.Key(KEY_BACKSPACE)
-                base = base.removeRange(lo, hi)
+            if (target == Target.CLIENT && lo <= p && e <= hi && newText.length - (base.length - hi) > lo) {
+                replacing = lo to hi
             } else {
-                // Left collapses a selection to its start.
-                out += Op.Key(KEY_LEFT)
+                clearShown(out)
+                if (p <= lo && hi <= e) {
+                    // Deleting a selection takes a key.
+                    out += Op.Key(KEY_BACKSPACE)
+                    base = base.removeRange(lo, hi)
+                } else {
+                    // Left collapses a selection to its start.
+                    out += Op.Key(KEY_LEFT)
+                }
+                baseAnchor = lo
+                baseCursor = lo
+                if (waits) return held(out)
             }
-            baseAnchor = lo
-            baseCursor = lo
         }
 
         var afterEdit = baseCursor
         if (newText != base) {
-            val (p, e) = region(newText, newCursor)
+            val (p, e) = replacing ?: region(newText, newCursor)
             val r = newText.substring(p, newText.length - (base.length - e))
             if (baseCursor < p || baseCursor > e) {
                 clearShown(out)
                 moveTo(out, if (baseCursor < p) p else e)
+                if (waits) return held(out)
             }
             afterEdit = p + r.length
             val moveAfter = afterEdit != newCursor || newAnchor != newCursor
@@ -325,8 +351,14 @@ internal class TextInputModel {
             }
         }
         if (sentPreedit != shown || (sentPreedit.isNotEmpty() && (pb != shownBegin || pe != shownEnd))) {
+            if (waits && out.any { it is Op.Key }) return held(out)
             show(out, sentPreedit, pb, pe)
         }
+        return out
+    }
+
+    private fun held(out: List<Op>): List<Op> {
+        held = true
         return out
     }
 
@@ -334,7 +366,10 @@ internal class TextInputModel {
     private fun edit(out: MutableList<Op>, from: Int, to: Int, r: String, preedit: String, pb: Int, pe: Int) {
         when (target) {
             Target.CLIENT -> {
-                out += Op.Edit(ImeEdit(Utf8.length(base, from, baseCursor), Utf8.length(base, baseCursor, to), r, preedit, pb, pe))
+                // The deletes exclude a selection, which the commit replaces.
+                val lo = min(baseAnchor, baseCursor)
+                val hi = max(baseAnchor, baseCursor)
+                out += Op.Edit(ImeEdit(Utf8.length(base, from, lo), Utf8.length(base, hi, to), r, preedit, pb, pe))
                 shown = preedit
                 shownBegin = pb
                 shownEnd = pe
@@ -433,20 +468,24 @@ internal class TextInputModel {
 
     // --- From the client ---
 
-    enum class Agreement { AGREES, AHEAD, DISAGREES }
+    enum class Agreement { AGREES, CAUGHT_UP, AHEAD, DISAGREES }
 
     /**
-     * A `text-input` of this session. AHEAD: it doesn't reflect every edit
-     * sent yet. DISAGREES: it does, but its text or selection isn't the
-     * copy's, which [resync] fixes; a client often commits just before an
-     * edit arrives, so wait for another state before calling it.
+     * A `text-input` of this session. CAUGHT_UP: it agrees, which releases
+     * the [held] edit: flush. AHEAD: it doesn't reflect every edit sent yet.
+     * DISAGREES: it does, but its text or selection isn't the copy's, which
+     * [resync] fixes; a client often commits just before an edit arrives,
+     * or between the keys it was sent, so wait for another state before
+     * calling it.
      */
     fun client(s: TextInputState): Agreement {
         if (target != Target.CLIENT || s.text == null) return Agreement.AGREES
         if (s.applied < lastSerial) return Agreement.AHEAD
         if (s.text == base && s.cursor == baseCursor && s.anchor == baseAnchor) {
             disagreeing = null
-            return Agreement.AGREES
+            if (!held) return Agreement.AGREES
+            held = false
+            return Agreement.CAUGHT_UP
         }
         disagreeing = s
         return Agreement.DISAGREES
@@ -456,11 +495,12 @@ internal class TextInputModel {
      * Takes the client's last disagreeing state as the text, dropping the
      * composing text (its preedit too: the client moved on). Null when
      * there's nothing to fix; else the ops to send and whether the text
-     * itself changed, which the IME must hear of.
+     * itself changed, which the IME must hear of. A [held] edit is dropped.
      */
     fun resync(): Pair<List<Op>, Boolean>? {
         val s = disagreeing ?: return null
         disagreeing = null
+        held = false
         val out = ArrayList<Op>()
         clearShown(out)
         val t = s.text.orEmpty()
