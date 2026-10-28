@@ -173,18 +173,13 @@ class WindowSurface internal constructor(
     }
 
     private fun pick(): (MotionEvent) -> Boolean {
-        val mode = session.inputMode(id)
-        if (zooming && mode == InputMode.TOUCH) return gestures::onTouch
-        val m: TouchMode = when (mode) {
-            InputMode.TOUCH -> touchPoints
+        val m: TouchMode = when (session.inputMode(id)) {
+            InputMode.TOUCH -> if (zooming) gestures else touchPoints
             InputMode.POINTER -> pointer
             InputMode.TRACKPAD -> trackpad
         }
         return { e -> m.on(Touches.of(e)).let { true } }
     }
-
-    /** Pinch and pan on the view, for input modes where those are pocketnix's; consumes [e]. */
-    internal fun zoomGesture(e: MotionEvent): Boolean = gestures.onTouch(e)
 
     fun resetZoom() {
         if (zoom.reset()) place()

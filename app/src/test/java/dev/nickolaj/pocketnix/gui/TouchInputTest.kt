@@ -193,6 +193,22 @@ class TouchInputTest {
     }
 
     @Test
+    fun theZoomTogglePinchesAndPansWithNoJumpWhenAFingerLifts() {
+        val g = ZoomGestures(zoom) {}
+        g.on(ev(MotionEvent.ACTION_DOWN, p(0, 400, 1000)))
+        g.on(ev(MotionEvent.ACTION_POINTER_DOWN, p(0, 400, 1000), p(1, 600, 1000), index = 1))
+        g.on(ev(MotionEvent.ACTION_MOVE, p(0, 300, 1000), p(1, 700, 1000)))
+        assertEquals(2f, zoom.scale, 0.001f)
+        val x = zoom.x
+        g.on(ev(MotionEvent.ACTION_POINTER_UP, p(0, 300, 1000), p(1, 700, 1000), index = 1))
+        g.on(ev(MotionEvent.ACTION_MOVE, p(0, 300, 1000)))
+        assertEquals(x, zoom.x, 0f)
+        g.on(ev(MotionEvent.ACTION_MOVE, p(0, 250, 1000)))
+        assertEquals(x - 50, zoom.x, 0.001f)
+        assertEquals(emptyList<String>(), frames)
+    }
+
+    @Test
     fun aTwoFingerTapIsARightClick() {
         val g = pointer()
         g.on(ev(MotionEvent.ACTION_DOWN, p(0, 100, 200)))

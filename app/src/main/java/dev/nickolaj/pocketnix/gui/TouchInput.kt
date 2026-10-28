@@ -104,12 +104,8 @@ internal class TwoFingers(
     private enum class Kind { UNDECIDED, SCROLL, PINCH }
 
     private var kind = Kind.UNDECIDED
-    private var startX = 0f
-    private var startY = 0f
-    private var startSpan = 0f
-    private var lastX = 0f
-    private var lastY = 0f
-    private var lastSpan = 0f
+    private var start = Spread.NONE
+    private var last = Spread.NONE
     private var at = 0f to 0f
 
     /** Whether the fingers did anything yet: a two-finger tap didn't. */
@@ -120,51 +116,34 @@ internal class TwoFingers(
         kind = Kind.UNDECIDED
         at = scrollAt
         track(t, -1)
-        startX = lastX
-        startY = lastY
-        startSpan = lastSpan
     }
 
     /** A finger came or went ([skip]: the one lifting): carry on from where the rest are. */
     fun track(t: Touches, skip: Int) {
-        lastX = average(t, skip, t.xs)
-        lastY = average(t, skip, t.ys)
-        lastSpan = span(t, lastX, lastY, skip)
-        if (kind == Kind.UNDECIDED) {
-            startX = lastX
-            startY = lastY
-            startSpan = lastSpan
-        }
+        last = Spread.of(t, skip)
+        if (kind == Kind.UNDECIDED) start = last
     }
 
     fun move(t: Touches) {
-        val fx = average(t, -1, t.xs)
-        val fy = average(t, -1, t.ys)
-        val span = span(t, fx, fy, -1)
+        val now = Spread.of(t)
         if (kind == Kind.UNDECIDED) {
             kind = when {
-                abs(span - startSpan) > slop -> Kind.PINCH
-                hypot(fx - startX, fy - startY) > slop -> Kind.SCROLL
+                abs(now.span - start.span) > slop -> Kind.PINCH
+                hypot(now.x - start.x, now.y - start.y) > slop -> Kind.SCROLL
                 else -> return
             }
         }
         when (kind) {
             Kind.SCROLL -> {
                 // The content follows the fingers: up scrolls down.
-                val dx = (lastX - fx) / zoom.scale
-                val dy = (lastY - fy) / zoom.scale
+                val dx = (last.x - now.x) / zoom.scale
+                val dy = (last.y - now.y) / zoom.scale
                 if (dx != 0f || dy != 0f) send(Gui.pointerAxis(window, at.first, at.second, Gui.AXIS_FINGER, 0, dx, dy, 0, 0))
             }
-            Kind.PINCH -> {
-                var changed = zoom.panBy(fx - lastX, fy - lastY)
-                if (lastSpan > 0f && span > 0f) changed = zoom.zoomBy(span / lastSpan, fx, fy) || changed
-                if (changed) zoomed()
-            }
+            Kind.PINCH -> if (last.pinch(zoom, now)) zoomed()
             Kind.UNDECIDED -> {}
         }
-        lastX = fx
-        lastY = fy
-        lastSpan = span
+        last = now
     }
 
     /** The fingers lifted, or a system gesture took them. */
@@ -172,29 +151,39 @@ internal class TwoFingers(
         if (kind == Kind.SCROLL) send(Gui.pointerAxis(window, at.first, at.second, Gui.AXIS_FINGER, 3, 0f, 0f, 0, 0))
         kind = Kind.UNDECIDED
     }
+}
 
-    private fun average(t: Touches, skip: Int, v: FloatArray): Float {
-        var sum = 0f
-        var n = 0
-        for (i in 0 until t.count) {
-            if (i == skip) continue
-            sum += v[i]
-            n++
-        }
-        return if (n == 0) 0f else sum / n
+/** The fingers' centre, in view pixels, and their mean distance from it: 0 for one finger. */
+internal data class Spread(val x: Float, val y: Float, val span: Float) {
+    /** Pans and zooms [zoom] as the fingers went from here to [to]: the content follows them; whether it moved. */
+    fun pinch(zoom: Zoom, to: Spread): Boolean {
+        var changed = zoom.panBy(to.x - x, to.y - y)
+        if (span > 0f && to.span > 0f) changed = zoom.zoomBy(to.span / span, to.x, to.y) || changed
+        return changed
     }
 
-    /** The fingers' mean distance from their centre; 0 for one finger. */
-    private fun span(t: Touches, fx: Float, fy: Float, skip: Int): Float {
-        if (t.count - (if (skip >= 0) 1 else 0) < 2) return 0f
-        var sum = 0f
-        var n = 0
-        for (i in 0 until t.count) {
-            if (i == skip) continue
-            sum += hypot(t.xs[i] - fx, t.ys[i] - fy)
-            n++
+    companion object {
+        val NONE = Spread(0f, 0f, 0f)
+
+        /** [t]'s fingers but the one at [skip]: one lifting is still in its event, and counting it makes the content jump. */
+        fun of(t: Touches, skip: Int = -1): Spread {
+            var n = 0
+            var sx = 0f
+            var sy = 0f
+            for (i in 0 until t.count) {
+                if (i == skip) continue
+                sx += t.xs[i]
+                sy += t.ys[i]
+                n++
+            }
+            if (n == 0) return NONE
+            val x = sx / n
+            val y = sy / n
+            if (n < 2) return Spread(x, y, 0f)
+            var d = 0f
+            for (i in 0 until t.count) if (i != skip) d += hypot(t.xs[i] - x, t.ys[i] - y)
+            return Spread(x, y, d / n)
         }
-        return sum / n
     }
 }
 

@@ -1,7 +1,6 @@
 package dev.nickolaj.pocketnix.gui
 
 import android.view.MotionEvent
-import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 
@@ -96,59 +95,21 @@ class Zoom {
 }
 
 /**
- * Pinch and pan for a [Zoom]: two fingers zoom around their midpoint, and
- * any number of fingers drag the content. Consumes every event it's given.
+ * Touch mode's zoom toggle: two fingers zoom around their midpoint, and
+ * any number of fingers drag the content.
  */
-internal class ZoomGestures(private val zoom: Zoom, private val changed: () -> Unit) {
-    private var lastX = 0f
-    private var lastY = 0f
-    private var lastSpan = 0f
+internal class ZoomGestures(private val zoom: Zoom, private val changed: () -> Unit) : TouchMode {
+    private var last = Spread.NONE
 
-    fun onTouch(e: MotionEvent): Boolean {
-        when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> track(e, skip = -1)
-            // The lifting finger is still in this event; leave it out, or the content jumps.
-            MotionEvent.ACTION_POINTER_UP -> track(e, skip = e.actionIndex)
+    override fun on(t: Touches) {
+        when (t.action) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> last = Spread.of(t)
+            MotionEvent.ACTION_POINTER_UP -> last = Spread.of(t, t.index)
             MotionEvent.ACTION_MOVE -> {
-                val fx = focusX(e, -1)
-                val fy = focusY(e, -1)
-                val span = span(e, fx, fy, -1)
-                var moved = zoom.panBy(fx - lastX, fy - lastY)
-                if (lastSpan > 0f && span > 0f) moved = zoom.zoomBy(span / lastSpan, fx, fy) || moved
-                lastX = fx
-                lastY = fy
-                lastSpan = span
-                if (moved) changed()
+                val now = Spread.of(t)
+                if (last.pinch(zoom, now)) changed()
+                last = now
             }
         }
-        return true
-    }
-
-    private fun track(e: MotionEvent, skip: Int) {
-        lastX = focusX(e, skip)
-        lastY = focusY(e, skip)
-        lastSpan = span(e, lastX, lastY, skip)
-    }
-
-    private fun focusX(e: MotionEvent, skip: Int): Float = average(e, skip) { e.getX(it) }
-
-    private fun focusY(e: MotionEvent, skip: Int): Float = average(e, skip) { e.getY(it) }
-
-    /** The fingers' mean distance from their centre; 0 for one finger. */
-    private fun span(e: MotionEvent, fx: Float, fy: Float, skip: Int): Float {
-        val n = e.pointerCount - if (skip >= 0) 1 else 0
-        if (n < 2) return 0f
-        return average(e, skip) { hypot(e.getX(it) - fx, e.getY(it) - fy) }
-    }
-
-    private inline fun average(e: MotionEvent, skip: Int, value: (Int) -> Float): Float {
-        var sum = 0f
-        var n = 0
-        for (i in 0 until e.pointerCount) {
-            if (i == skip) continue
-            sum += value(i)
-            n++
-        }
-        return if (n == 0) 0f else sum / n
     }
 }
