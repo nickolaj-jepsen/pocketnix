@@ -129,8 +129,9 @@ pub fn spawn(
 
 /// Stops a launch's scope and its process.
 pub fn stop(launch: &Launch) {
+    // Also reaches a process that systemd-run hasn't put in its scope yet.
     if let Some(pid) = launch.pid {
-        // SAFETY: kill with a pid we started and a valid signal.
+        // SAFETY: kill with a pid we started whose exit we haven't seen, and a valid signal.
         unsafe { libc::kill(pid as i32, libc::SIGTERM) };
     }
     let _ = Command::new("systemctl")

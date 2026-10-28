@@ -256,7 +256,11 @@ impl State {
     }
 
     pub fn launch_exited(&mut self, id: String, status: ExitStatus) {
-        let pending = self.launches.get(&id).is_some_and(|l| l.outcome == Outcome::Pending);
+        let Some(l) = self.launches.get_mut(&id) else { return };
+        // Reaped, so the pid may be another process's by now; a 0 exit stays pending
+        // (a single-instance hand-off, busctl), and a cancel still stops its scope.
+        l.pid = None;
+        let pending = l.outcome == Outcome::Pending;
         if pending && let Some(message) = launch::exit_message(status) {
             self.fail_launch(&id, "exec", message);
         }
