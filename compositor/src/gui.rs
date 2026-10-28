@@ -793,6 +793,8 @@ impl State {
     #[allow(clippy::too_many_arguments)]
     fn pointer_axis(&mut self, window: u32, x: f32, y: f32, source: u8, stop: u8, d: (f32, f32), v120: (i32, i32)) {
         self.pointer_motion(window, x, y);
+        // GDK drops a frame's axis events when the frame also carries a motion.
+        self.pointer_frame();
         let Some(pointer) = self.seat.get_pointer() else { return };
         let scale = self.window_scale(window);
         let hit = self.hit_layer(window, (x as f64 / scale, y as f64 / scale).into()).map(|(_, _, t)| t);

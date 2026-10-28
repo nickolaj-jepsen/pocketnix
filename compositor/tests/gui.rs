@@ -755,6 +755,17 @@ fn a_client_window_reaches_the_app_with_matching_pixels() {
     client.dispatch_until("pointer events", |s| s.pointer.iter().any(|e| e.starts_with("button")));
     assert_eq!(client.state.pointer[0], "enter 50 25");
     assert!(client.state.pointer.contains(&format!("button {BTN_LEFT} 1")));
+    // A scroll's axis events come in a frame without a motion, or GTK never scrolls.
+    app.send_binary(
+        0x22,
+        &[&window.to_be_bytes(), &f(100.0), &f(50.0), &[0, 0], &f(0.0), &f(30.0), &0i32.to_be_bytes(), &120i32.to_be_bytes()],
+    );
+    client.dispatch_until("a scroll", |s| s.pointer.iter().skip_while(|e| !e.starts_with("axis")).any(|e| e == "frame"));
+    let p = &client.state.pointer;
+    let axis = p.iter().position(|e| e.starts_with("axis")).unwrap();
+    let frame_start = p[..axis].iter().rposition(|e| e == "frame").map_or(0, |i| i + 1);
+    assert!(!p[frame_start..axis].iter().any(|e| e.starts_with("motion")), "{p:?}");
+    assert_eq!(p[axis], "axis 0 15");
     app.send_binary(0x31, &[&window.to_be_bytes(), &[0b10]]);
     client.dispatch_until("ctrl", |s| s.mods_depressed != 0);
     app.send_binary(0x30, &[&window.to_be_bytes(), &KEY_A.to_be_bytes(), &[1]]);
@@ -1703,6 +1714,11 @@ impl Dispatch<WlPointer, ()> for Wl {
             wl_pointer::Event::Button { button, state: WEnum::Value(s), .. } => {
                 state.pointer.push(format!("button {button} {}", s as u32))
             }
+            wl_pointer::Event::Motion { .. } => state.pointer.push("motion".into()),
+            wl_pointer::Event::Axis { axis: WEnum::Value(a), value, .. } => {
+                state.pointer.push(format!("axis {} {value}", a as u32))
+            }
+            wl_pointer::Event::Frame => state.pointer.push("frame".into()),
             _ => {}
         }
     }
