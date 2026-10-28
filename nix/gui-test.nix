@@ -10,7 +10,9 @@
   # Speaks the app's side of docs/gui-protocol.md through the command it's
   # given (`pocketnix agent … gui`) up to `ready`, and prints what the replay
   # held as JSON. Fails without a toplevel of --want-app. With --launch, it
-  # then launches that entry and waits for its window and its icon.
+  # then launches that entry and waits for its window and its icon. With
+  # --wait-app, it says "ready" on stderr and waits for an app list pushed
+  # after the replay that has that entry.
   probe = pkgs.writers.writePython3Bin "gui-probe" {flakeIgnore = ["E501"];} ''
     import json
     import struct
@@ -42,10 +44,12 @@
 
 
     args = sys.argv[1:]
-    want = launch = None
-    while args[:1] in (["--want-app"], ["--launch"]):
+    want = launch = wait_app = None
+    while args[:1] in (["--want-app"], ["--launch"], ["--wait-app"]):
         if args[0] == "--want-app":
             want = args[1]
+        elif args[0] == "--wait-app":
+            wait_app = args[1]
         else:
             launch = args[1]
         args = args[2:]
@@ -59,6 +63,8 @@
     def done():
         if not ready:
             return False
+        if wait_app:
+            return "pushed" in out
         if not launch:
             return True
         return "launched" in out and "icon" in out
@@ -83,10 +89,14 @@
                 out["surfaces"].append(msg)
             elif t == "apps":
                 out["apps"] = msg["apps"]
+                if ready and any(a["id"] == wait_app for a in msg["apps"]):
+                    out["pushed"] = True
             elif t == "launch-failed":
                 sys.exit(f"launch failed: {msg}")
             elif t == "ready":
                 ready = True
+                if wait_app:
+                    print("ready", file=sys.stderr, flush=True)
                 if launch:
                     entry = next((a for a in out.get("apps", []) if a["id"] == launch), None)
                     if entry is None:
@@ -144,6 +154,7 @@ in
 
     testScript = ''
       import json
+      import time
 
       A = "${cli}/bin/pocketnix agent --connect tcp:127.0.0.1:9100"
 
@@ -233,10 +244,25 @@ in
           assert slice == "app.slice", slice
 
       with subtest("a reload rescans the app list and keeps the windows"):
+          apps = "/home/nixos/.local/share/applications"
+          phone.succeed(user(f"mkdir -p {apps}"))
+          # Lets the rescan the mkdir scheduled run first: each waits out a 1 s debounce.
+          time.sleep(3)
+          # Every replay rescans, so the probe stays connected through the mount and the reload.
+          phone.succeed(f"${probe}/bin/gui-probe --wait-app pocketnix-mounted {A} gui >/tmp/pushed.json 2>/tmp/probe.err &")
+          phone.wait_until_succeeds("grep -q ready /tmp/probe.err")
+          # A mount makes no inotify event: only a rescan finds what it brings.
+          phone.succeed("mkdir /tmp/apps")
+          phone.succeed("printf '[Desktop Entry]\\nType=Application\\nName=Mounted\\nExec=foot\\n' >/tmp/apps/pocketnix-mounted.desktop")
+          phone.succeed(f"chmod -R a+rX /tmp/apps && mount --bind /tmp/apps {apps}")
+          time.sleep(3)
+          phone.fail("test -s /tmp/pushed.json")
           pid = phone.succeed(user("systemctl --user show -P MainPID pocketnix-compositor.service")).strip()
           phone.succeed(user("systemctl --user reload pocketnix-compositor.service"))
-          phone.wait_until_succeeds("journalctl _SYSTEMD_USER_UNIT=pocketnix-compositor.service --grep 'SIGHUP: rescanning'")
+          phone.wait_until_succeeds("test -s /tmp/pushed.json", timeout=30)
           after = phone.succeed(user("systemctl --user show -P MainPID pocketnix-compositor.service")).strip()
           assert after == pid, (pid, after)
+          assert any(t["id"] == foot["id"] for t in replay()["toplevels"])
+          phone.succeed(f"umount {apps}")
     '';
   }
