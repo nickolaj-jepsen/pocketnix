@@ -630,7 +630,8 @@ in {
         as a socket-activated user service with `WAYLAND_DISPLAY` set for the
         user's session, and by default PipeWire (the user in `audio`),
         xdg-desktop-portal (and with it the FileChooser integration) without
-        its location and wallpaper portals, SVG icons and a basic font set;
+        its location and wallpaper portals, an icon theme read by librsvg and
+        a basic font set;
         CJK fonts need `fonts.enableDefaultPackages` or your own
       '';
       package = mkOption {
@@ -1021,6 +1022,10 @@ in {
       };
       # GTK's own loaders can't read SVG, so most icons would draw blank.
       programs.gdk-pixbuf.modulePackages = [pkgs.librsvg];
+      # GTK's stock icons, image-missing too, come from a theme, which NixOS
+      # installs (with its cache) only for a desktop.
+      environment.systemPackages = [pkgs.adwaita-icon-theme];
+      gtk.iconCache.enable = mkDefault true;
       # enableDefaultPackages adds CJK, unifont and freefont (~145 MiB) to this.
       fonts.packages = [pkgs.dejavu_fonts pkgs.liberation_ttf pkgs.noto-fonts-color-emoji];
     })
