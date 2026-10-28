@@ -979,7 +979,7 @@ directory, `$XDG_RUNTIME_DIR` (`/run/user/<uid>`).
 - `pocketnix.guest.gui.enable` (default false) and `pocketnix.guest.gui.package`
   (default: this flake's `pocketnix-compositor`).
 - `pocketnix.guest.gui.defaults` (`size`, `input`) and
-  `pocketnix.guest.gui.appDefaults.<app-id>` (the same options, null to
+  `pocketnix.guest.gui.appDefaults.<desktop-id>` (the same options, null to
   inherit) go into the agent config's `gui`. They may reach the app before
   anything uses them.
 - With `gui.enable`, the module installs:

@@ -142,7 +142,7 @@ files the system and user profiles already have.
 ## Per-app settings
 
 Module defaults (`pocketnix.guest.gui.defaults`, and
-`pocketnix.guest.gui.appDefaults.<app-id>` with `size`, `input` and so on)
+`pocketnix.guest.gui.appDefaults.<desktop-id>` with `size`, `input` and so on)
 reach the app with the rest of the config. Changes made on the phone override
 them per app id, marked in the window menu with a "Reset to config". The app
 never writes Nix. The compositor gets only each app's size factor, so new

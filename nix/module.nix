@@ -649,7 +649,7 @@ in {
       appDefaults = mkOption {
         default = {};
         example = {"org.gnome.Calculator".size = "compact";};
-        description = "Window settings by Wayland app id (usually the desktop file's name), over `gui.defaults`. Changes made in the app override both.";
+        description = "Window settings by desktop file id without `.desktop` (the app list's entry id; a window with no entry goes by its Wayland app id), over `gui.defaults`. Changes made in the app override both.";
         type = types.attrsOf (types.submodule {options = appSettings true;});
       };
     };
