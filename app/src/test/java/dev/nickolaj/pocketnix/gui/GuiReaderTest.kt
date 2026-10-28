@@ -1,5 +1,6 @@
 package dev.nickolaj.pocketnix.gui
 
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -27,10 +28,10 @@ class GuiReaderTest {
             .json(JSONObject().put("type", "toplevel-removed").put("id", 7))
             .ready()
         val m = read(f)
-        assertEquals(GuiMessage.Hello(1, "test", "abc"), m[0])
+        assertEquals(GuiMessage.Hello(2, "test", "abc"), m[0])
         assertEquals("Calc", (m[1] as GuiMessage.Toplevel).title)
-        assertEquals(GuiMessage.Surface(7, 7, "toplevel", 0), m[2])
-        assertEquals(GuiMessage.Surface(9, 7, "popup", 7), m[3])
+        assertEquals(GuiMessage.Surface(7, 7, "toplevel", 0, toplevel = 7), m[2])
+        assertEquals(GuiMessage.Surface(9, 7, "popup", 7, toplevel = 7), m[3])
         assertEquals(GuiMessage.Cursor(7, "text"), m[4])
         assertEquals(GuiMessage.ToplevelRequest(7, "maximize"), m[5])
         assertEquals(GuiMessage.SurfaceRemoved(9), m[6])
@@ -42,8 +43,8 @@ class GuiReaderTest {
     @Test
     fun skipsWhatALaterVersionAdds() {
         val f = CompositorFrames()
-            .json(JSONObject().put("type", "apps").put("apps", "later"))
-            .raw(0x03, byteArrayOf(1, 2, 3))
+            .json(JSONObject().put("type", "keyboard-layout").put("layout", "later"))
+            .raw(0x04, byteArrayOf(1, 2, 3))
             .json(JSONObject().put("type", "surface").put("id", 2).put("window", 2).put("role", "toplevel").put("parent", 0).put("future", true))
             // A longer header: the rects start at headerSize.
             .commit(2, 2, 2, 1, listOf(intArrayOf(0, 0, 2, 1)), pixels(8), Gui.FLAG_BUFFER or Gui.FLAG_FULL, headerSize = 96)
@@ -53,6 +54,67 @@ class GuiReaderTest {
         assertArrayEquals(intArrayOf(0, 0, 2, 1), c.rects)
         assertArrayEquals(pixels(8), c.data)
         assertEquals(2, m.size)
+    }
+
+    @Test
+    fun readsTheWindowModel() {
+        val app = JSONObject().put("id", "org.gnome.Calculator").put("name", "Calculator").put("genericName", "Calculator")
+            .put("keywords", JSONArray(listOf("math", "sum"))).put("categories", JSONArray(listOf("Utility"))).put("icon", "k1")
+            .put("noDisplay", false).put("future", 1)
+            .put("actions", JSONArray(listOf(JSONObject().put("id", "new-window").put("name", "New Window").put("icon", ""))))
+        val f = CompositorFrames()
+            .toplevel(5, "Calc", app = "org.gnome.Calculator", launch = "l-1")
+            .toplevel(6, "Open", window = 5, parent = 5)
+            .surface(6, 5, toplevel = 6)
+            .json(JSONObject().put("type", "apps").put("apps", JSONArray(listOf(app, JSONObject().put("id", "").put("name", "nameless")))))
+            .raw(Gui.ICON, byteArrayOf(0, 48, 2, 'k'.code.toByte(), '1'.code.toByte(), 0x89.toByte(), 'P'.code.toByte()))
+            .json(JSONObject().put("type", "launch-started").put("id", "l-2"))
+            .json(JSONObject().put("type", "launch-failed").put("id", "l-3").put("reason", "unknown").put("message", "no such app"))
+            .json(JSONObject().put("type", "activate").put("window", 5).put("launch", "l-4"))
+        val m = read(f)
+        val window = m[0] as GuiMessage.Toplevel
+        assertEquals(listOf(5, "org.gnome.Calculator", "l-1", false), listOf(window.window, window.app, window.launch, window.isDialog))
+        val dialog = m[1] as GuiMessage.Toplevel
+        assertEquals(listOf(5, 5, true), listOf(dialog.window, dialog.parent, dialog.isDialog))
+        assertEquals(GuiMessage.Surface(6, 5, "toplevel", 0, toplevel = 6), m[2])
+        assertEquals(
+            listOf(
+                AppEntry(
+                    "org.gnome.Calculator", "Calculator", genericName = "Calculator", keywords = listOf("math", "sum"),
+                    categories = listOf("Utility"), icon = "k1", actions = listOf(AppAction("new-window", "New Window", "")),
+                ),
+            ),
+            (m[3] as GuiMessage.Apps).apps,
+        )
+        val icon = m[4] as GuiMessage.Icon
+        assertEquals("k1" to 48, icon.key to icon.size)
+        assertArrayEquals(byteArrayOf(0x89.toByte(), 'P'.code.toByte()), icon.png)
+        assertEquals(GuiMessage.LaunchStarted("l-2"), m[5])
+        assertEquals(GuiMessage.LaunchFailed("l-3", "unknown", "no such app"), m[6])
+        assertEquals(GuiMessage.Activate(5, "l-4"), m[7])
+    }
+
+    @Test
+    fun anIconKeyNeverNamesAPath() = assertViolation(
+        CompositorFrames().raw(Gui.ICON, byteArrayOf(0, 48, 5) + "../ab".toByteArray()),
+    )
+
+    @Test
+    fun anIconKeyPastItsFrameIsAViolation() = assertViolation(CompositorFrames().raw(Gui.ICON, byteArrayOf(0, 48, 9, 'a'.code.toByte())))
+
+    @Test
+    fun encodesLaunchesAndIconRequests() {
+        fun fields(frame: ByteArray): Map<String, Any> {
+            assertEquals(Gui.JSON, frame[0].toInt())
+            val o = JSONObject(String(frame, 5, frame.size - 5))
+            return o.keys().asSequence().associateWith { o.get(it) }
+        }
+        assertEquals(
+            mapOf("type" to "launch", "id" to "a-1", "app" to "foot", "action" to "new-window", "tab" to ""),
+            fields(Gui.launch("a-1", "foot", "new-window", "")),
+        )
+        assertEquals(mapOf("type" to "launch-cancel", "id" to "a-1"), fields(Gui.launchCancel("a-1")))
+        assertEquals(mapOf("type" to "icon", "icon" to "k1", "size" to 96), fields(Gui.icon("k1", 96)))
     }
 
     @Test

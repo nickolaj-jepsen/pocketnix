@@ -55,6 +55,38 @@
             android:resizeableActivity="true"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density" />
 
+        <!-- The guest's apps (gui/LauncherActivity), in a task of its own beside the terminal's. -->
+        <activity
+            android:name=".gui.LauncherActivity"
+            android:exported="false"
+            android:label="@string/gui_launcher"
+            android:icon="@drawable/ic_apps_launcher"
+            android:taskAffinity=":apps"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- Its drawer icon, enabled while the guest has GUI on (gui/AppShortcuts). -->
+        <activity-alias
+            android:name=".AppsLauncher"
+            android:targetActivity=".gui.LauncherActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:label="@string/gui_launcher"
+            android:icon="@drawable/ic_apps_launcher">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Asks before the tile or the notification stops the VM under open GUI windows. -->
+        <activity
+            android:name=".gui.StopActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/Translucent" />
+
         <!-- Scripted control over adb (`pocketnix provision`); invisible, and never replayed.
              DUMP: the adb shell holds it, other apps can't; this app's own starts (the tile) skip the check. -->
         <activity

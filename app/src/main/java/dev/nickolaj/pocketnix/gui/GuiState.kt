@@ -15,7 +15,14 @@ class GuiState(private val unpacker: Unpacker) {
             internal set
     }
 
-    class Surface(val id: Int, var window: Int, var role: String, var parent: Int) {
+    /** A toplevel with a parent: layers in its [window], never an Android window of its own. */
+    class Dialog(var toplevel: GuiMessage.Toplevel) {
+        val id: Int get() = toplevel.id
+        val window: Int get() = toplevel.window
+        internal var replayed = true
+    }
+
+    class Surface(val id: Int, var window: Int, var role: String, var parent: Int, var toplevel: Int = 0) {
         val content = SurfaceContent()
         val damage = DamageHistory()
         internal var replayed = true
@@ -50,6 +57,7 @@ class GuiState(private val unpacker: Unpacker) {
     var instance: String? = null
         private set
     val windows = LinkedHashMap<Int, Window>()
+    val dialogs = HashMap<Int, Dialog>()
     val surfaces = HashMap<Int, Surface>()
 
     /** Called for every commit carrying a hash: the compositor's and the app's. */
@@ -64,6 +72,7 @@ class GuiState(private val unpacker: Unpacker) {
         val dropped = if (instance != null && instance != hello.instance) {
             windows.values.toList().also {
                 windows.clear()
+                dialogs.clear()
                 surfaces.clear()
             }
         } else {
@@ -74,6 +83,7 @@ class GuiState(private val unpacker: Unpacker) {
             w.replayed = false
             w.lastSeq = 0
         }
+        for (d in dialogs.values) d.replayed = false
         // Replay brings FULL commits; content from the last connection is only shown until then.
         for (s in surfaces.values) {
             s.replayed = false
@@ -82,8 +92,20 @@ class GuiState(private val unpacker: Unpacker) {
         return dropped
     }
 
-    /** Returns true for a window that's new. */
+    /** Returns true for a window that's new; a dialog is never one. */
     fun toplevel(t: GuiMessage.Toplevel): Boolean {
+        // The compositor removes a toplevel before announcing it elsewhere; only a replay may find it changed.
+        if (t.isDialog) {
+            if (windows[t.id]?.replayed == true) throw GuiProtocolException("window ${t.id.u} announced as a dialog in ${t.window.u}")
+            val d = dialogs[t.id]
+            if (d == null) dialogs[t.id] = Dialog(t) else d.toplevel = t.also { d.replayed = true }
+            return false
+        }
+        val d = dialogs[t.id]
+        if (d != null) {
+            if (d.replayed) throw GuiProtocolException("dialog ${t.id.u} announced as a window")
+            dialogs.remove(t.id)
+        }
         val w = windows[t.id]
         if (w != null) {
             w.toplevel = t
@@ -94,10 +116,19 @@ class GuiState(private val unpacker: Unpacker) {
         return true
     }
 
-    /** Forgets the window and its surfaces; returns the surfaces dropped. */
+    /**
+     * Forgets a window with its dialogs and surfaces, or a dialog with the
+     * surfaces of its tree; returns the surfaces dropped.
+     */
     fun toplevelRemoved(id: Int): List<Surface> {
-        windows.remove(id) ?: return emptyList()
-        val gone = surfaces.values.filter { it.window == id }
+        val gone = when {
+            windows.remove(id) != null -> {
+                dialogs.values.removeAll { it.window == id }
+                surfaces.values.filter { it.window == id }
+            }
+            dialogs.remove(id) != null -> surfaces.values.filter { it.toplevel == id }
+            else -> return emptyList()
+        }
         for (s in gone) surfaces.remove(s.id)
         return gone
     }
@@ -107,13 +138,14 @@ class GuiState(private val unpacker: Unpacker) {
         if (m.window !in windows) throw GuiProtocolException("surface ${m.id.u} joins unknown window ${m.window.u}")
         val s = surfaces[m.id]
         if (s == null) {
-            surfaces[m.id] = Surface(m.id, m.window, m.role, m.parent)
+            surfaces[m.id] = Surface(m.id, m.window, m.role, m.parent, m.toplevel)
             return null
         }
         val old = s.window
         s.window = m.window
         s.role = m.role
         s.parent = m.parent
+        s.toplevel = m.toplevel
         s.replayed = true
         return old.takeIf { it != m.window }
     }
@@ -124,6 +156,7 @@ class GuiState(private val unpacker: Unpacker) {
     fun ready(): Pair<List<Window>, List<Surface>> {
         val gone = windows.values.filter { !it.replayed }
         for (w in gone) windows.remove(w.id)
+        dialogs.values.removeAll { !it.replayed || it.window !in windows }
         val goneSurfaces = surfaces.values.filter { !it.replayed || it.window !in windows }
         for (s in goneSurfaces) surfaces.remove(s.id)
         return gone to goneSurfaces

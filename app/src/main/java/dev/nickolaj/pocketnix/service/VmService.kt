@@ -15,6 +15,7 @@ import dev.nickolaj.pocketnix.MainActivity
 import dev.nickolaj.pocketnix.R
 import dev.nickolaj.pocketnix.agent.WakeHolder
 import dev.nickolaj.pocketnix.engine.VmState
+import dev.nickolaj.pocketnix.gui.StopActivity
 import dev.nickolaj.pocketnix.vm
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -49,7 +50,6 @@ class VmService : Service() {
         startForeground(NOTIFICATION, notification("Starting"), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         lastStartId = startId
         vm.serviceStarted()
-        if (intent?.action == ACTION_STOP) vm.stop()
         if (watch == null) {
             watch = scope.launch {
                 combine(vm.state, vm.control.link, vm.stopping) { s, link, stopping -> Triple(s, link, stopping) }
@@ -111,10 +111,8 @@ class VmService : Service() {
         lastText = text
         val line = wakeLine?.let { "$text · $it" } ?: text
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-        val stop = PendingIntent.getService(
-            this, 1, Intent(this, VmService::class.java).setAction(ACTION_STOP),
-            PendingIntent.FLAG_IMMUTABLE,
-        )
+        // An activity, so it can ask first while GUI windows are open.
+        val stop = PendingIntent.getActivity(this, 1, StopActivity.intent(this), PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_menu_manage)
             .setContentTitle(getString(R.string.app_name))
@@ -127,7 +125,6 @@ class VmService : Service() {
     }
 
     companion object {
-        const val ACTION_STOP = "dev.nickolaj.pocketnix.action.STOP"
         private const val CHANNEL = "vm"
         private const val NOTIFICATION = 1
         private const val TAG = "VmService"

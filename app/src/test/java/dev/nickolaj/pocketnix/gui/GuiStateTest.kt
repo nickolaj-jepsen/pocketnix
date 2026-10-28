@@ -174,6 +174,51 @@ class GuiStateTest {
         assertTrue(state.windows.isEmpty() && state.surfaces.isEmpty())
     }
 
+    /** Window 1 with dialog 2 (and its popup 3) drawn in it. */
+    private fun withDialog() = window().toplevel(2, window = 1, parent = 1).surface(2, 1, toplevel = 2)
+        .surface(3, 1, "popup", parent = 2, toplevel = 2).full(2, 1, 1, 1, ByteArray(4))
+
+    @Test
+    fun aDialogIsLayersInItsParentsWindow() {
+        feed(withDialog().ready())
+        assertEquals(setOf(1), state.windows.keys)
+        assertEquals(setOf(2), state.dialogs.keys)
+        assertEquals(setOf(1), state.surfaces.values.map { it.window }.toSet())
+        assertTrue(state.surfaces.getValue(2).mapped)
+    }
+
+    @Test
+    fun removingADialogDropsOnlyItsTree() {
+        feed(withDialog().json(org.json.JSONObject().put("type", "toplevel-removed").put("id", 2)))
+        assertEquals(setOf(1), state.windows.keys)
+        assertTrue(state.dialogs.isEmpty())
+        assertEquals(setOf(1), state.surfaces.keys)
+    }
+
+    @Test
+    fun removingAWindowDropsItsDialogs() {
+        feed(withDialog().json(org.json.JSONObject().put("type", "toplevel-removed").put("id", 1)))
+        assertTrue(state.windows.isEmpty() && state.dialogs.isEmpty() && state.surfaces.isEmpty())
+    }
+
+    @Test
+    fun aReplayMayFindADialogBecomeAWindow() {
+        feed(withDialog().ready())
+        state.hello(GuiMessage.Hello(2, "test", "inst-1"))
+        // Its parent closed while the app was away.
+        feed(CompositorFrames().toplevel(2).surface(2, 2))
+        val (windows, _) = state.ready()
+        assertEquals(listOf(1), windows.map { it.id })
+        assertEquals(setOf(2), state.windows.keys)
+        assertTrue(state.dialogs.isEmpty())
+        assertEquals(2, state.surfaces.getValue(2).window)
+    }
+
+    @Test
+    fun aLiveWindowAnnouncedAsADialogIsAViolation() {
+        assertThrows(GuiProtocolException::class.java) { feed(window().toplevel(1, window = 3, parent = 3)) }
+    }
+
     @Test
     fun damageHistoryCoversEveryVersionABufferMissed() {
         val h = DamageHistory(capacity = 4)

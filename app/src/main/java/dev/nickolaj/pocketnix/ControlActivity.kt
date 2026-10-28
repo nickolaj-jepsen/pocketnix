@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import dev.nickolaj.pocketnix.engine.DiskImage
+import dev.nickolaj.pocketnix.gui.GuiWindowActivity
+import dev.nickolaj.pocketnix.gui.validAppId
 
 /**
  * Scripted control over adb (`am start -n <pkg>/dev.nickolaj.pocketnix.ControlActivity -a …`):
@@ -26,6 +28,13 @@ class ControlActivity : Activity() {
             // Debug builds: drive tabs from adb while the phone stays locked.
             ACTION_TAB -> if (BuildConfig.DEBUG) vm.debugOpenTab(intent.getStringExtra(EXTRA_PROFILE), intent.getStringExtra(EXTRA_INPUT))
             ACTION_DUMP -> if (BuildConfig.DEBUG) vm.debugDumpTabs()
+            // Debug builds: what a launcher tap or pin does, for an app-list entry id.
+            ACTION_LAUNCH -> if (BuildConfig.DEBUG) {
+                val app = intent.getStringExtra(EXTRA_APP).orEmpty()
+                if (validAppId(app)) {
+                    startActivity(GuiWindowActivity.appIntent(this, app, intent.getStringExtra(EXTRA_ACTION).orEmpty(), intent.getBooleanExtra(EXTRA_NEW, false)))
+                }
+            }
         }
         finish()
     }
@@ -60,6 +69,10 @@ class ControlActivity : Activity() {
         const val ACTION_STOP = "dev.nickolaj.pocketnix.action.STOP"
         const val ACTION_TAB = "dev.nickolaj.pocketnix.action.DEBUG_TAB"
         const val ACTION_DUMP = "dev.nickolaj.pocketnix.action.DEBUG_DUMP"
+        const val ACTION_LAUNCH = "dev.nickolaj.pocketnix.action.DEBUG_LAUNCH"
+        const val EXTRA_APP = "app"
+        const val EXTRA_ACTION = "action"
+        const val EXTRA_NEW = "newWindow"
         /** START opens the app afterwards unless false (the Quick Settings tile). */
         const val EXTRA_OPEN = "open"
         const val EXTRA_NETWORK = "network"

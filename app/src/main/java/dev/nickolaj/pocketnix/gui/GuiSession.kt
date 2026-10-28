@@ -18,6 +18,10 @@ import android.view.Display
 import android.view.SurfaceControl
 import dev.nickolaj.pocketnix.R
 import dev.nickolaj.pocketnix.agent.AgentDialer
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
@@ -25,15 +29,31 @@ import kotlin.math.roundToInt
 
 /**
  * The guest's GUI windows: the one GUI stream while the guest has GUI on,
- * the windows and surfaces it describes, and the Android window
- * ([GuiWindowActivity]) showing each toplevel. Owned by the app's Vm, so
- * windows outlive their activities and a reconnect.
+ * the windows and surfaces it describes, the Android window
+ * ([GuiWindowActivity]) showing each toplevel, the app list and the
+ * launches. Owned by the app's Vm, so windows outlive their activities and
+ * a reconnect.
  */
 class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listener {
     // Guards the state and the renderers; the link's thread, the render thread and the main thread take it.
     private val lock = Any()
     private val state = GuiState(GuiNative)
     private val link = GuiLink(appVersion, this)
+
+    /** The guest's app list and icons, kept for when the VM is off. */
+    val catalog = AppCatalog(File(app.filesDir, "gui"))
+    val launches = Launches(link::send)
+    val shortcuts = AppShortcuts(app, catalog) { iconSize(large = true) }
+
+    // The splash waiting on each launch, by launch id.
+    private val owners = ConcurrentHashMap<String, GuiWindowActivity>()
+
+    // Icons asked for on this connection, under [lock]: each is answered once.
+    private val askedIcons = HashSet<Pair<String, Int>>()
+
+    private val _ready = MutableStateFlow(false)
+    /** The GUI stream is connected and its replay done. */
+    val ready: StateFlow<Boolean> = _ready.asStateFlow()
     private val main = Handler(Looper.getMainLooper())
     // Draws outside the link's thread: a window's first frame, and frames that waited for a buffer.
     private val renderThread = Executors.newSingleThreadExecutor { r -> Thread(r, "gui-render").apply { isDaemon = true } }
@@ -51,6 +71,12 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
 
         /** The user closed its activity and the client was asked to close; written on the main thread only. */
         var closeAsked = false
+
+        /** A launch's splash is about to show it, so it gets no activity of its own. */
+        @Volatile var claimed = false
+
+        /** The task of its last activity, to bring it forward. */
+        @Volatile var taskId = -1
     }
 
     // Concurrent so the main thread can read a window's fields without waiting for a commit to apply.
@@ -94,6 +120,8 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         if (!started && !closeWindows) return
         started = false
         link.stop()
+        _ready.value = false
+        launches.disconnected()
         synchronized(lock) { forgetAcks() }
         if (closeWindows) {
             val ids = synchronized(lock) { state.windows.keys.toList() }
@@ -108,7 +136,12 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
     // --- The link's thread ---
 
     override fun connected(hello: GuiMessage.Hello) {
-        val dropped = synchronized(lock) { state.hello(hello).also { forgetAcks() } }
+        _ready.value = false
+        launches.connected(hello.instance)
+        val dropped = synchronized(lock) {
+            askedIcons.clear()
+            state.hello(hello).also { forgetAcks() }
+        }
         for (w in dropped) closeWindow(w.id)
         link.send(output())
         for (v in views.values) v.sent?.let { link.send(Gui.window(it)) }
@@ -126,16 +159,32 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
             }
             is GuiMessage.Toplevel -> {
                 val new = synchronized(lock) {
-                    state.toplevel(msg).also { if (it) views[msg.id] = View(msg.id) }
+                    val new = state.toplevel(msg).also { if (it) views[msg.id] = View(msg.id) }
+                    val ended = launches.toplevel(msg)
+                    // Its splash binds it once it sees the launch end; see disown for a splash that's gone.
+                    if (new && ended != null && owners.containsKey(ended.id)) views[msg.id]?.claimed = true
+                    new
                 }
+                if (msg.isDialog) return
                 views[msg.id]?.title = title(msg)
-                if (new) launch(msg.id) else onMain("window ${msg.id.u}: title") { views[msg.id]?.activity?.toplevelChanged() }
+                when {
+                    !new -> onMain("window ${msg.id.u}: title") { views[msg.id]?.activity?.toplevelChanged() }
+                    views[msg.id]?.claimed != true -> openWindow(msg.id)
+                }
             }
             is GuiMessage.ToplevelRemoved -> {
-                synchronized(lock) {
-                    state.toplevelRemoved(msg.id)
+                val window = synchronized(lock) {
+                    val window = msg.id in state.windows
+                    val gone = state.toplevelRemoved(msg.id)
+                    if (!window && gone.isNotEmpty()) {
+                        // A dialog: its layers leave its window, which stays.
+                        val t = SurfaceControl.Transaction()
+                        for (s in gone) views[s.window]?.renderer?.remove(t, s.id)
+                        t.apply()
+                    }
+                    window
                 }
-                closeWindow(msg.id)
+                if (window) closeWindow(msg.id)
             }
             is GuiMessage.ToplevelRequest -> if (msg.request == "minimize") {
                 onMain("window ${msg.id.u}: minimize") { views[msg.id]?.activity?.moveTaskToBack(true) }
@@ -163,7 +212,32 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                     windows
                 }
                 for (w in windows) closeWindow(w.id)
+                _ready.value = true
+                launches.ready()
                 launchPending()
+            }
+            is GuiMessage.Apps -> {
+                val change = catalog.update(msg.apps)
+                if (change.changed) Log.i(TAG, "app list: ${msg.apps.size} entries, ${change.added.size} new, ${change.gone.size} gone")
+                shortcuts.update()
+                requestIcons()
+                // A toplevel's icon comes from its entry.
+                onMain("app list: windows") { for (v in views.values) v.activity?.toplevelChanged() }
+            }
+            is GuiMessage.Icon -> {
+                catalog.storeIcon(msg.key, msg.size, msg.png)
+                shortcuts.update()
+            }
+            is GuiMessage.LaunchStarted -> launches.started(msg.id)
+            is GuiMessage.LaunchFailed -> {
+                val l = launches.failed(msg) ?: return
+                Log.i(TAG, "launch ${l.id} of ${l.app} failed: ${msg.reason} ${msg.message}")
+                if (msg.reason == LaunchState.UNKNOWN) shortcuts.disable(l.app)
+            }
+            is GuiMessage.Activate -> {
+                val l = launches.activate(msg)
+                // A launch's splash handles its own activation.
+                if (l == null || !owners.containsKey(l.id)) onMain("window ${msg.window.u}: activate") { raise(msg.window) }
             }
             is GuiMessage.Error -> Log.w(TAG, "compositor error: ${msg.message}")
             is GuiMessage.Hello -> throw GuiProtocolException("a second hello")
@@ -172,6 +246,8 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
 
     override fun disconnected(error: Throwable?) {
         Log.i(TAG, "disconnected${error?.let { ": ${it.message}" } ?: ""}")
+        _ready.value = false
+        launches.disconnected()
         // Null is a stop, which forgot them already, and may come after the next link's hello.
         if (error != null) synchronized(lock) { forgetAcks() }
     }
@@ -220,9 +296,9 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
     // --- Windows ---
 
     /** Opens the toplevel's Android window: directly while a pocketnix window is visible, else through a notification. */
-    private fun launch(id: Int) = onMain("window ${id.u}: launch") {
+    private fun openWindow(id: Int) = onMain("window ${id.u}: open") {
         val instance = synchronized(lock) {
-            if (state.windows[id] == null || views[id]?.activity != null) return@onMain
+            if (state.windows[id] == null || views[id]?.let { it.activity != null || it.claimed } != false) return@onMain
             state.instance
         } ?: return@onMain
         val intent = GuiWindowActivity.intent(app, instance, id)
@@ -244,11 +320,14 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
     private fun launchPending() = onMain("launching waiting windows") {
         if (!Foreground.visible) return@onMain
         val ids = synchronized(lock) {
-            state.windows.keys.filter { id -> views[id]?.let { it.activity == null && !it.closeAsked } == true }
+            state.windows.keys.filter { id -> views[id]?.let { it.activity == null && !it.closeAsked && !it.claimed } == true }
         }
         if (ids.isEmpty()) return@onMain
-        val tasks = app.getSystemService(ActivityManager::class.java).appTasks.mapNotNull { runCatching { it.windowId }.getOrNull() }
-        for (id in ids) if (id !in tasks) launch(id)
+        val tasks = app.getSystemService(ActivityManager::class.java).appTasks
+        val windows = tasks.mapNotNull { runCatching { it.windowId }.getOrNull() }
+        // A launch's task shows its window under the launch's URI.
+        val taskIds = tasks.mapNotNull { runCatching { it.taskInfo.taskId }.getOrNull() }
+        for (id in ids) if (id !in windows && views[id]?.taskId !in taskIds) openWindow(id)
     }
 
     private fun notifyWindow(id: Int, title: String, intent: Intent) {
@@ -278,7 +357,18 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         onMain("window ${id.u}: close") {
             app.getSystemService(NotificationManager::class.java).cancel(NOTIFY_TAG, id)
             val a = v?.activity
-            if (a != null) a.closeByGuest() else GuiWindowActivity.removeTasks(app) { it.windowId == id }
+            if (a != null) {
+                a.closeByGuest()
+            } else {
+                GuiWindowActivity.removeTasks(app) { it.windowId == id }
+                // A launch's task names its app, not the window.
+                val task = v?.taskId ?: -1
+                if (task != -1) {
+                    for (t in app.getSystemService(ActivityManager::class.java).appTasks) {
+                        runCatching { if (t.taskInfo.taskId == task) t.finishAndRemoveTask() }
+                    }
+                }
+            }
         }
     }
 
@@ -296,6 +386,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
             v.activity.also { v.activity = a }
         }
         views[id]?.closeAsked = false
+        views[id]?.taskId = a.taskId
         previous?.takeIf { it !== a }?.closeByGuest()
         app.getSystemService(NotificationManager::class.java).cancel(NOTIFY_TAG, id)
         true
@@ -320,7 +411,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
             guard("window ${id.u}: relaunch") {
                 v.closeAsked = false
                 val stays = synchronized(lock) { state.windows.containsKey(id) } && views[id]?.let { it.activity == null } == true
-                if (stays) launch(id)
+                if (stays) openWindow(id)
             }
         }, RELAUNCH_MS)
     }
@@ -369,6 +460,73 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
 
     internal fun send(frame: ByteArray) = link.send(frame)
 
+    // --- Launches, from a splash on the main thread ---
+
+    /** [a] shows launch [id]'s splash and binds the window it opens. */
+    internal fun own(id: String, a: GuiWindowActivity) {
+        owners[id] = a
+    }
+
+    /** [a] no longer waits on launch [id]; a window it claimed but never bound opens on its own. */
+    internal fun disown(id: String, a: GuiWindowActivity) = guard("launch $id: disown") {
+        if (!owners.remove(id, a)) return@guard
+        val opened = launches[id]?.state?.value as? LaunchState.Opened ?: return@guard
+        val v = views[opened.window] ?: return@guard
+        if (v.claimed && v.activity == null) {
+            v.claimed = false
+            openWindow(opened.window)
+        }
+    }
+
+    /**
+     * Binds [a], a launch's splash, to [window]: the window the launch
+     * opened, or the one it activated when that has no activity yet. False
+     * when the window is gone or another activity shows it.
+     */
+    internal fun bindLaunched(a: GuiWindowActivity, window: Int): Boolean = guard("window ${window.u}: bind a launch", false) {
+        val instance = synchronized(lock) {
+            val v = views[window] ?: return@guard false
+            if (v.activity != null && v.activity !== a) return@guard false
+            state.instance
+        } ?: return@guard false
+        bind(a, instance, window).also { if (it) views[window]?.claimed = false }
+    }
+
+    /** Brings [window]'s task forward, opening it when it has none; only while Android lets pocketnix. */
+    internal fun raise(window: Int) {
+        if (!Foreground.visible) return
+        val v = views[window] ?: return
+        val task = app.getSystemService(ActivityManager::class.java).appTasks
+            .firstOrNull { runCatching { it.taskInfo.taskId }.getOrNull() == v.taskId }
+        if (task != null && v.activity != null) task.moveToFront() else if (!v.claimed) openWindow(window)
+    }
+
+    /** Starts entry [app] for a splash; it becomes a recent app. */
+    internal fun launch(app: String, action: String): Launch {
+        catalog.launched(app)
+        shortcuts.update()
+        return launches.start(app, action)
+    }
+
+    /** The app-list entry toplevel [window] belongs to, if the list has it. */
+    internal fun appOf(window: Int): AppEntry? = synchronized(lock) { state.windows[window]?.toplevel?.app }?.let(catalog::app)
+
+    /** The titles of the open windows, for asking before the VM stops. */
+    fun windowTitles(): List<String> = synchronized(lock) { state.windows.keys.toList() }.map(::title)
+
+    /** An icon's size in pixels: a launcher grid's, or [large] for a splash or shortcut. */
+    fun iconSize(large: Boolean): Int {
+        val dp = if (large) LARGE_ICON_DP else SMALL_ICON_DP
+        return (dp * app.resources.displayMetrics.density).roundToInt().coerceIn(Gui.MIN_ICON_SIZE, Gui.MAX_ICON_SIZE)
+    }
+
+    /** Asks for every icon the list names that isn't cached, once per connection. */
+    private fun requestIcons() {
+        val wanted = catalog.missingIcons(listOf(iconSize(false), iconSize(true)).distinct())
+        val ask = synchronized(lock) { wanted.filter { askedIcons.add(it) } }
+        for ((key, size) in ask) link.send(Gui.icon(key, size))
+    }
+
     internal fun title(id: Int): String = views[id]?.title?.ifEmpty { null } ?: app.getString(R.string.app_name)
 
     private fun title(t: GuiMessage.Toplevel): String = t.title.ifEmpty { t.appId }
@@ -381,14 +539,19 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         return Gui.output(dm.widthPixels, dm.heightPixels, dm.densityDpi / 160f, refresh)
     }
 
-    /** Debug dumps: the connection, every window and the hash checks. */
+    /** Debug dumps: the connection, every window, the hash checks, the app list and the launches waited on. */
     fun dump(): List<String> = synchronized(lock) {
-        listOf("connected=${link.connected} instance=${state.instance} hashes ok=$hashesOk bad=$hashesBad") +
+        listOf(
+            "connected=${link.connected} ready=${_ready.value} instance=${state.instance} hashes ok=$hashesOk bad=$hashesBad",
+            "apps=${catalog.apps.size} recent=${catalog.recent.map { it.id }} launcher=${shortcuts.launcherEnabled} " +
+                "launches=${owners.keys.map { "$it:${launches[it]?.state?.value}" }}",
+        ) +
             state.windows.values.map { w ->
                 val v = views[w.id]
                 val surfaces = state.surfaces.values.filter { it.window == w.id }
                     .joinToString(" ") { "${it.id.u}:${it.role}:${it.content.width}x${it.content.height}" }
-                "window ${w.id.u} '${title(w.id)}' activity=${v?.activity != null} shown=${v?.renderer != null} " +
+                "window ${w.id.u} '${title(w.id)}' app=${w.toplevel.app} launch=${w.toplevel.launch} " +
+                    "activity=${v?.activity != null} shown=${v?.renderer != null} " +
                     "seq=${w.lastSeq.u} sent=${v?.sent} surfaces=[$surfaces]"
             }
     }
@@ -398,6 +561,8 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         private const val CHANNEL = "gui-windows"
         private const val NOTIFY_TAG = "gui-window"
         private const val RELAUNCH_MS = 2_000L
+        private const val SMALL_ICON_DP = 48
+        private const val LARGE_ICON_DP = 96
 
         /** Removes every window task: at process start, those belong to a dead session. */
         fun sweep(context: Context) = guard("sweeping window tasks") {
@@ -423,6 +588,7 @@ internal inline fun guard(what: String, block: () -> Unit) = guard(what, Unit, b
 /** Whether any of the app's activities is started: Android only lets a visible app launch activities. */
 object Foreground : android.app.Application.ActivityLifecycleCallbacks {
     @Volatile private var started = 0
+    private var created = false
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
     val visible: Boolean get() = started > 0
 
@@ -439,7 +605,17 @@ object Foreground : android.app.Application.ActivityLifecycleCallbacks {
         started = (started - 1).coerceAtLeast(0)
     }
 
-    override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) {}
+    override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) {
+        if (created) return
+        created = true
+        // A launch's task can't be told from a fresh one while the process starts, but by its first
+        // activity every other launch task is a card from a dead session.
+        guard("sweeping launch tasks") {
+            for (t in activity.getSystemService(ActivityManager::class.java).appTasks) {
+                runCatching { if (GuiWindowActivity.isLaunchTask(t) && t.taskInfo.taskId != activity.taskId) t.finishAndRemoveTask() }
+            }
+        }
+    }
     override fun onActivityResumed(activity: android.app.Activity) {}
     override fun onActivityPaused(activity: android.app.Activity) {}
     override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: android.os.Bundle) {}

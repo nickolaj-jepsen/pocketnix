@@ -17,15 +17,18 @@ class CompositorFrames {
 
     fun raw(type: Int, payload: ByteArray) = apply { out.write(Frames.encode(type, payload)) }
 
-    fun hello(instance: String = "inst-1") = json(JSONObject().put("type", "hello").put("version", 1).put("compositor", "test").put("instance", instance))
+    fun hello(instance: String = "inst-1") = json(JSONObject().put("type", "hello").put("version", 2).put("compositor", "test").put("instance", instance))
 
-    fun toplevel(id: Int, title: String = "") = json(
-        JSONObject().put("type", "toplevel").put("id", id).put("parent", 0).put("title", title).put("appId", "test")
+    /** A window, or with [parent] a dialog drawn in [window]. */
+    fun toplevel(id: Int, title: String = "", window: Int = id, parent: Int = 0, app: String = "", launch: String = "") = json(
+        JSONObject().put("type", "toplevel").put("id", id).put("window", window).put("parent", parent).put("title", title)
+            .put("appId", "test").put("app", app).put("launch", launch).put("tab", "")
             .put("width", 0).put("height", 0).put("decoration", "client"),
     )
 
-    fun surface(id: Int, window: Int, role: String = "toplevel", parent: Int = 0) =
-        json(JSONObject().put("type", "surface").put("id", id).put("window", window).put("role", role).put("parent", parent))
+    fun surface(id: Int, window: Int, role: String = "toplevel", parent: Int = 0, toplevel: Int = if (role == "toplevel") id else window) = json(
+        JSONObject().put("type", "surface").put("id", id).put("window", window).put("toplevel", toplevel).put("role", role).put("parent", parent),
+    )
 
     fun ready() = json(JSONObject().put("type", "ready"))
 

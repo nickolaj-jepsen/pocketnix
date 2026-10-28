@@ -56,7 +56,7 @@ class GuiLinkTest {
                     assertEquals(Gui.MIN_VERSION, app.getInt("minVersion"))
                     assertTrue(app.getBoolean("hashes"))
 
-                    assertEquals(GuiMessage.Hello(1, "test", "i-1"), next())
+                    assertEquals(GuiMessage.Hello(2, "test", "i-1"), next())
                     assertEquals(4, (next() as GuiMessage.Toplevel).id)
                     assertEquals(GuiMessage.Ready, next())
                     link.send(Gui.presented(4, round))

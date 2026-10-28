@@ -194,6 +194,12 @@ class Vm(private val app: Context) {
             }
         }
         scope.launch {
+            // Only a config the agent sent says anything: none arrives while the VM is off.
+            control.config.map { cfg -> cfg?.let { it.gui?.enable == true } }.distinctUntilChanged().collect { on ->
+                if (on != null) gui.shortcuts.setLauncherEnabled(on)
+            }
+        }
+        scope.launch {
             combine(control.config, state) { cfg, s -> cfg?.forwards.orEmpty() to (s == VmState.Running) }
                 .distinctUntilChanged()
                 .collectLatest { (fw, running) ->

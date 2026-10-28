@@ -7,6 +7,7 @@ import android.service.quicksettings.TileService
 import dev.nickolaj.pocketnix.ControlActivity
 import dev.nickolaj.pocketnix.agent.ControlChannel
 import dev.nickolaj.pocketnix.engine.VmState
+import dev.nickolaj.pocketnix.gui.StopActivity
 import dev.nickolaj.pocketnix.vm
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -53,7 +54,12 @@ class VmTileService : TileService() {
     private fun toggle() {
         val s = vm.state.value
         if (s == VmState.Running || s == VmState.Starting) {
-            vm.stop()
+            // Open GUI windows close with it: that asks first.
+            if (vm.gui.windowTitles().isEmpty()) {
+                vm.stop()
+            } else {
+                startActivityAndCollapse(PendingIntent.getActivity(this, 1, StopActivity.intent(this), PendingIntent.FLAG_IMMUTABLE))
+            }
             return
         }
         // Through an activity: a foreground service may only start from the foreground.

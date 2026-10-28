@@ -6,4 +6,13 @@
         <item name="android:windowSplashScreenBackground">@android:color/black</item>
         <item name="android:windowBackground">@android:color/black</item>
     </style>
+
+    <!-- A dialog over whatever showed before, with no window of its own. -->
+    <style name="Translucent" parent="@android:style/Theme.DeviceDefault.DayNight">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
 </resources>

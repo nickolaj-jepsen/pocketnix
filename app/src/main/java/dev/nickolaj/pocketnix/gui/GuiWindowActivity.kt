@@ -4,6 +4,8 @@ import android.app.Activity
 import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
@@ -16,12 +18,28 @@ import android.view.SurfaceView
 import android.view.WindowInsets
 import android.widget.FrameLayout
 import android.window.OnBackInvokedDispatcher
+import android.util.Log
+import dev.nickolaj.pocketnix.engine.VmState
+import dev.nickolaj.pocketnix.ui.missingRequirements
 import dev.nickolaj.pocketnix.vm
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.launch
+import java.util.UUID
 
 /**
  * One guest toplevel as an Android window: its own document task, so it has
  * its own Recents card and, docked, its own freeform window. The session
  * owns the window; this only shows it while Android keeps the activity.
+ *
+ * Opened for an app-list entry instead (a launcher tap, a shortcut), it
+ * first shows a splash: it boots the VM if needed, launches the app and
+ * becomes the window the launch opens.
  */
 class GuiWindowActivity : Activity() {
     var windowId = 0
@@ -38,16 +56,44 @@ class GuiWindowActivity : Activity() {
     private var started = false
     private val pushState = Runnable { pushState() }
 
+    // A launch's splash, until it's bound to the window.
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, e -> Log.e(TAG, "splash failed", e) },
+    )
+    private var target: AppTarget? = null
+    private var launch: Launch? = null
+    private var watch: Job? = null
+    private var splash: SplashView? = null
+    private var stale: Runnable? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val target = intent.data?.let(::parse)
+        onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT) { moveTaskToBack(true) }
+        target = intent.data?.let(::parseApp)
+        if (target != null) {
+            guard("splash: create") { createLaunch(savedInstanceState) }
+            return
+        }
+        val window = intent.data?.let(::parse)
         // A card from an earlier session, or a window that closed while its notification waited.
-        if (target == null || !vm.gui.bind(this, target.first, target.second)) {
+        if (window == null || !vm.gui.bind(this, window.first, window.second)) {
             finishAndRemoveTask()
             return
         }
-        windowId = target.second
+        showWindow(window.second)
+    }
+
+    /** Shows bound window [id] in place of anything this showed before. */
+    private fun showWindow(id: Int) {
+        windowId = id
         bound = true
+        splash = null
+        watch?.cancel()
+        launch?.let {
+            vm.gui.disown(it.id, this)
+            vm.gui.launches.forget(it.id)
+        }
+        launch = null
         input = WindowInput(windowId, vm.gui::send) { resources.displayMetrics.densityDpi / 160f }
         view = SurfaceView(this).apply {
             holder.addCallback(surfaceCallback)
@@ -69,9 +115,124 @@ class GuiWindowActivity : Activity() {
             }
         }
         setContentView(root)
-        onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT) { moveTaskToBack(true) }
         toplevelChanged()
+        // The activity started before its window existed.
+        if (started) pushState()
+        if (focused) input.focused()
     }
+
+    // --- A launch's splash ---
+
+    private fun createLaunch(saved: Bundle?) {
+        val savedWindow = saved?.getInt(KEY_WINDOW) ?: 0
+        val savedLaunch = saved?.getString(KEY_LAUNCH)?.let { vm.gui.launches[it] }
+        showSplash()
+        when {
+            savedWindow != 0 -> if (vm.gui.bindLaunched(this, savedWindow)) showWindow(savedWindow) else finishAndRemoveTask()
+            savedLaunch != null -> follow(savedLaunch)
+            // Recents restoring a card whose VM died with the app; a tap on its pin follows as a new intent.
+            saved != null || intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0 -> {
+                Log.i(TAG, "a stale launch card for ${target?.app}; removing it")
+                stale = Runnable { finishAndRemoveTask() }.also { handler.post(it) }
+            }
+            else -> startLaunch()
+        }
+    }
+
+    private fun showSplash() {
+        val t = target ?: return
+        val app = vm.gui.catalog.app(t.app)
+        val label = app?.label ?: t.app
+        val icon = app?.let { iconBitmap(it) }
+        val v = SplashView(this, onCancel = ::cancelLaunch, onRetry = ::startLaunch, onClose = ::finishAndRemoveTask)
+        v.app(label, icon)
+        splash = v
+        setContentView(v)
+        title = label
+        @Suppress("DEPRECATION")
+        setTaskDescription(ActivityManager.TaskDescription(label, icon))
+    }
+
+    /** Boots the VM if it's off, and launches the app; again after a failure. */
+    private fun startLaunch() {
+        val t = target ?: return
+        launch?.let {
+            vm.gui.launches.cancel(it.id)
+            vm.gui.disown(it.id, this)
+            vm.gui.launches.forget(it.id)
+        }
+        val s = vm.state.value
+        if (s == VmState.Stopped || s is VmState.Failed) {
+            val missing = missingRequirements(this, vm)
+            if (missing.isNotEmpty()) {
+                splash?.show(SplashStatus(getString(dev.nickolaj.pocketnix.R.string.gui_vm_cant_start, missing.joinToString { it.name }), failed = true))
+                return
+            }
+            // Through the same foreground service the tile uses.
+            vm.start()
+        }
+        follow(vm.gui.launch(t.app, t.action))
+    }
+
+    private fun follow(l: Launch) {
+        launch = l
+        vm.gui.own(l.id, this)
+        val name = vm.gui.catalog.app(l.app)?.label ?: l.app
+        watch?.cancel()
+        watch = scope.launch {
+            val vmFlows = combine(vm.state, vm.control.link, vm.agentLate, vm.config, vm.gui.ready) { s, link, late, cfg, ready ->
+                { ls: LaunchState -> splashStatus(name, s, link, late, cfg?.gui?.enable, ready, ls) }
+            }
+            combine(vmFlows, l.state) { status, ls -> status(ls) to ls }.collect { (status, ls) ->
+                when (ls) {
+                    is LaunchState.Opened -> bindTo(ls.window)
+                    is LaunchState.Activated -> bindTo(ls.window)
+                    else -> splash?.show(status)
+                }
+            }
+        }
+    }
+
+    /** The launch ended with [window]: show it here, or bring forward the task already showing it. */
+    private fun bindTo(window: Int) {
+        if (bound) return
+        if (vm.gui.bindLaunched(this, window)) {
+            showWindow(window)
+        } else {
+            vm.gui.raise(window)
+            finishAndRemoveTask()
+        }
+    }
+
+    private fun cancelLaunch() {
+        launch?.let { vm.gui.launches.cancel(it.id) }
+        finishAndRemoveTask()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        guard("splash: new intent") {
+            if (bound || target == null) return@guard
+            val pending = stale
+            if (pending != null) {
+                // A tap on the pin of a stale card: launch after all.
+                handler.removeCallbacks(pending)
+                stale = null
+                startLaunch()
+            } else if (launch?.state?.value is LaunchState.Failed) {
+                startLaunch()
+            }
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        if (bound && target != null) outState.putInt(KEY_WINDOW, windowId)
+        launch?.let { outState.putString(KEY_LAUNCH, it.id) }
+    }
+
+    private fun iconBitmap(app: AppEntry): Bitmap? =
+        vm.gui.catalog.icon(app.icon, vm.gui.iconSize(large = true))?.let { BitmapFactory.decodeFile(it.path) }
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
@@ -114,8 +275,9 @@ class GuiWindowActivity : Activity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (!bound) return
+        // Kept on a splash too: the window it becomes has the focus it had.
         focused = hasFocus
+        if (!bound) return
         pushState()
         if (hasFocus) input.focused()
     }
@@ -128,6 +290,15 @@ class GuiWindowActivity : Activity() {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean = (bound && input.key(event)) || super.dispatchKeyEvent(event)
 
     override fun onDestroy() {
+        scope.cancel()
+        launch?.let {
+            // Closed while waiting: the user doesn't want it any more.
+            if (isFinishing) {
+                vm.gui.launches.cancel(it.id)
+                vm.gui.launches.forget(it.id)
+            }
+            vm.gui.disown(it.id, this)
+        }
         if (bound) {
             handler.removeCallbacks(pushState)
             input.release()
@@ -160,20 +331,55 @@ class GuiWindowActivity : Activity() {
         finishAndRemoveTask()
     }
 
-    /** The toplevel's title or app id changed. */
+    /** The toplevel's title, app id or app-list entry changed. */
     internal fun toplevelChanged() {
+        if (!bound) return
         val t = vm.gui.title(windowId)
         title = t
-        setTaskDescription(ActivityManager.TaskDescription.Builder().setLabel(t).build())
+        val icon = vm.gui.appOf(windowId)?.let(::iconBitmap)
+        @Suppress("DEPRECATION") // The Builder takes an icon only as a resource.
+        setTaskDescription(ActivityManager.TaskDescription(t, icon))
     }
 
     internal fun cursor(name: String) {
         if (bound) view.pointerIcon = PointerIcon.getSystemIcon(this, pointerType(name))
     }
 
+    /** An app-list entry to launch, and the action ("" for none). */
+    internal data class AppTarget(val app: String, val action: String)
+
     companion object {
         internal const val SCHEME = "pocketnix-gui"
         private const val RESIZE_DEBOUNCE_MS = 150L
+        private const val TAG = "GuiWindowActivity"
+        private const val KEY_WINDOW = "window"
+        private const val KEY_LAUNCH = "launch"
+
+        /**
+         * Launches entry [app] ([action] "" for none) on a splash that becomes
+         * its window. The same entry and action share a task, so a second tap
+         * brings the first forward the way an Android app's icon does;
+         * [newWindow] always starts another.
+         */
+        fun appIntent(context: Context, app: String, action: String = "", newWindow: Boolean = false): Intent {
+            val uri = Uri.Builder().scheme(SCHEME).authority("app").appendPath(app)
+                .apply { if (action.isNotEmpty()) appendQueryParameter("action", action) }
+                .apply { if (newWindow) appendQueryParameter("new", UUID.randomUUID().toString()) }
+                .build()
+            return Intent(Intent.ACTION_VIEW, uri, context, GuiWindowActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NEW_DOCUMENT)
+        }
+
+        /** An app URI's entry and action. */
+        internal fun parseApp(uri: Uri): AppTarget? {
+            if (uri.scheme != SCHEME || uri.host != "app") return null
+            val app = uri.pathSegments.singleOrNull()?.takeIf(::validAppId) ?: return null
+            return AppTarget(app, uri.getQueryParameter("action").orEmpty())
+        }
+
+        /** Whether a task's base intent is a launch's, which shows its window under the app's URI. */
+        internal fun isLaunchTask(t: ActivityManager.AppTask): Boolean =
+            runCatching { t.taskInfo.baseIntent.data?.let(::parseApp) != null }.getOrDefault(false)
 
         /** Opens (or brings back) the task of toplevel [id]: one document per window, deduplicated by its URI. */
         fun intent(context: Context, instance: String, id: Int): Intent = Intent(context, GuiWindowActivity::class.java)

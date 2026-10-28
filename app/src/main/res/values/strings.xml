@@ -9,4 +9,13 @@
     <string name="share_label">Send to pocketnix</string>
     <string name="gui_channel">Guest windows</string>
     <string name="gui_window_opened">Opened a window. Tap to show it.</string>
+    <string name="gui_launcher">pocketnix apps</string>
+    <string name="gui_retry">Retry</string>
+    <string name="gui_close">Close</string>
+    <string name="gui_stop">Stop</string>
+    <string name="gui_stop_question">Stop the VM? The guest shuts down and every tab ends. %1$s</string>
+    <string name="gui_app_gone">%1$s is no longer installed in the guest</string>
+    <string name="gui_already_pinned">%1$s is already on the home screen</string>
+    <string name="gui_pin_unsupported">This launcher can\'t add shortcuts</string>
+    <string name="gui_vm_cant_start">The VM can\'t start yet: %1$s. pocketnix shows what\'s missing.</string>
 </resources>

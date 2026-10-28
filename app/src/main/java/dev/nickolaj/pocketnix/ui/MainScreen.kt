@@ -1,6 +1,7 @@
 package dev.nickolaj.pocketnix.ui
 
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -51,6 +52,8 @@ import dev.nickolaj.pocketnix.agent.ControlChannel
 import dev.nickolaj.pocketnix.agent.ExtraKey
 import dev.nickolaj.pocketnix.engine.DiskImage
 import dev.nickolaj.pocketnix.engine.VmState
+import dev.nickolaj.pocketnix.gui.LauncherActivity
+import dev.nickolaj.pocketnix.gui.closingWindows
 import dev.nickolaj.pocketnix.terminal.Modifiers
 import dev.nickolaj.pocketnix.terminal.Tab
 import dev.nickolaj.pocketnix.terminal.TerminalTheme
@@ -136,12 +139,20 @@ fun MainScreen(vm: Vm) {
             canStart = missing.isEmpty(),
             foreground = foreground,
             onStart = { vm.start() },
-            onStop = { confirm = "Stop the VM? The guest shuts down and every tab ends." to vm::stop },
+            onStop = {
+                confirm = "Stop the VM? The guest shuts down and every tab ends. ${closingWindows(vm.gui.windowTitles())}".trim() to vm::stop
+            },
             composerOpen = composerOpen,
             onComposer = { composerOpen = !composerOpen },
             updateAvailable = updates?.available != null,
             onUpdates = { showUpdates = true },
         ) { dismiss ->
+            if (config?.gui?.enable == true || vm.gui.catalog.apps.isNotEmpty()) {
+                MenuItem("Apps") {
+                    dismiss()
+                    context.startActivity(Intent(context, LauncherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                }
+            }
             MenuItem("Commands", enabled = agentUp) { dismiss(); showPalette = true }
             MenuItem("System and updates", enabled = agentUp) { dismiss(); showUpdates = true }
             MenuItem("Settings") { dismiss(); showSettings = true }
@@ -153,7 +164,7 @@ fun MainScreen(vm: Vm) {
             if (running) {
                 MenuItem("Reboot", enabled = agentUp) {
                     dismiss()
-                    confirm = "Reboot the guest? Every tab ends." to vm::reboot
+                    confirm = "Reboot the guest? Every tab ends. ${closingWindows(vm.gui.windowTitles())}".trim() to vm::reboot
                 }
                 if (ownsGuest) {
                     MenuItem("Restart with boot menu") {

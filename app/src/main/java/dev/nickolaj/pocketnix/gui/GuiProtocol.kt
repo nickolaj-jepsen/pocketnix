@@ -12,12 +12,13 @@ import java.nio.ByteBuffer
 class GuiProtocolException(message: String) : IOException(message)
 
 object Gui {
-    const val VERSION = 1
-    const val MIN_VERSION = 1
+    const val VERSION = 2
+    const val MIN_VERSION = 2
 
     const val JSON = 0x00
     const val COMMIT = 0x01
     const val COMMIT_DATA = 0x02
+    const val ICON = 0x03
     const val PRESENTED = 0x10
     const val POINTER_MOTION = 0x20
     const val POINTER_BUTTON = 0x21
@@ -61,6 +62,10 @@ object Gui {
     const val MOD_CAPS = 1 shl 4
     const val MOD_NUM = 1 shl 5
 
+    // An `icon` request's bounds; the compositor clamps others.
+    const val MIN_ICON_SIZE = 16
+    const val MAX_ICON_SIZE = 512
+
     fun hello(app: String, hashes: Boolean): ByteArray = json(
         JSONObject().put("type", "hello").put("version", VERSION).put("minVersion", MIN_VERSION).put("app", app).put("hashes", hashes),
     )
@@ -84,6 +89,15 @@ object Gui {
     )
 
     fun close(window: Int): ByteArray = json(JSONObject().put("type", "close").put("id", window.toUInt().toLong()))
+
+    /** Asks for icon [key] rendered at [size] × [size] pixels. */
+    fun icon(key: String, size: Int): ByteArray = json(JSONObject().put("type", "icon").put("icon", key).put("size", size))
+
+    /** Starts entry [app] (its [action], or "" for none) as launch [id]; [tab] "" gives its windows their own task. */
+    fun launch(id: String, app: String, action: String, tab: String): ByteArray =
+        json(JSONObject().put("type", "launch").put("id", id).put("app", app).put("action", action).put("tab", tab))
+
+    fun launchCancel(id: String): ByteArray = json(JSONObject().put("type", "launch-cancel").put("id", id))
 
     fun json(o: JSONObject): ByteArray = Frames.encode(JSON, o.toString().toByteArray(Charsets.UTF_8))
 
@@ -183,13 +197,33 @@ sealed interface GuiMessage {
         val maxWidth: Int,
         val maxHeight: Int,
         val decoration: String,
-    ) : GuiMessage
+        /** The window it draws in: its own [id] for a window, the topmost ancestor's for a dialog. */
+        val window: Int = id,
+        /** The app-list entry it belongs to, or "". */
+        val app: String = "",
+        /** The launch it was bound to when it first mapped, or "". */
+        val launch: String = "",
+        /** "" for its own task, else the terminal tab it follows. */
+        val tab: String = "",
+    ) : GuiMessage {
+        val isDialog: Boolean get() = window != id
+    }
     data class ToplevelRemoved(val id: Int) : GuiMessage
     data class ToplevelRequest(val id: Int, val request: String) : GuiMessage
-    data class Surface(val id: Int, val window: Int, val role: String, val parent: Int) : GuiMessage
+    /** [toplevel]: the toplevel whose tree it's in (0 from a compositor that didn't say). */
+    data class Surface(val id: Int, val window: Int, val role: String, val parent: Int, val toplevel: Int = 0) : GuiMessage
     data class SurfaceRemoved(val id: Int) : GuiMessage
     data class Cursor(val window: Int, val name: String) : GuiMessage
     data object Ready : GuiMessage
+    class Apps(val apps: List<AppEntry>) : GuiMessage
+
+    /** An ICON answer: an empty [png] means the guest has no icon there. */
+    class Icon(val key: String, val size: Int, val png: ByteArray) : GuiMessage
+    data class LaunchStarted(val id: String) : GuiMessage
+    data class LaunchFailed(val id: String, val reason: String, val message: String) : GuiMessage
+
+    /** A client activated [window]; [launch] is the launch whose token it was, or "". */
+    data class Activate(val window: Int, val launch: String) : GuiMessage
 
     /** Commits applied atomically: every one but the last had GROUPED set. */
     class Group(val commits: List<Commit>) : GuiMessage
@@ -220,6 +254,10 @@ class GuiReader(private val input: InputStream) {
                     if (!c.grouped) return GuiMessage.Group(group)
                 }
                 Gui.COMMIT_DATA -> throw GuiProtocolException("COMMIT_DATA outside a commit")
+                Gui.ICON -> {
+                    if (group.isNotEmpty()) throw GuiProtocolException("ICON inside a commit group")
+                    return readIcon(f.payload)
+                }
             }
         }
     }
@@ -246,18 +284,37 @@ class GuiReader(private val input: InputStream) {
                     maxWidth = o.optInt("maxWidth"),
                     maxHeight = o.optInt("maxHeight"),
                     decoration = o.optString("decoration"),
+                    window = o.optId("window").takeIf { it != 0 } ?: o.id("id"),
+                    app = o.optString("app"),
+                    launch = o.optString("launch"),
+                    tab = o.optString("tab"),
                 )
                 "toplevel-removed" -> GuiMessage.ToplevelRemoved(o.id("id"))
                 "toplevel-request" -> GuiMessage.ToplevelRequest(o.id("id"), o.optString("request"))
-                "surface" -> GuiMessage.Surface(o.id("id"), o.id("window"), o.optString("role"), o.optId("parent"))
+                "surface" -> GuiMessage.Surface(o.id("id"), o.id("window"), o.optString("role"), o.optId("parent"), o.optId("toplevel"))
                 "surface-removed" -> GuiMessage.SurfaceRemoved(o.id("id"))
                 "cursor" -> GuiMessage.Cursor(o.optId("window"), o.optString("name"))
                 "ready" -> GuiMessage.Ready
+                "apps" -> GuiMessage.Apps(AppEntry.parseList(o.getJSONArray("apps")))
+                "launch-started" -> GuiMessage.LaunchStarted(o.getString("id"))
+                "launch-failed" -> GuiMessage.LaunchFailed(o.getString("id"), o.optString("reason"), o.optString("message"))
+                "activate" -> GuiMessage.Activate(o.id("window"), o.optString("launch"))
                 else -> null
             }
         } catch (e: JSONException) {
             throw GuiProtocolException("${o.optString("type")}: ${e.message}")
         }
+    }
+
+    /** `[size u16][keyLength u8][key][png]`. */
+    private fun readIcon(payload: ByteArray): GuiMessage.Icon {
+        if (payload.size < 3) throw GuiProtocolException("ICON ${payload.size} bytes")
+        val size = ((payload[0].toInt() and 0xff) shl 8) or (payload[1].toInt() and 0xff)
+        val keyLength = payload[2].toInt() and 0xff
+        if (3 + keyLength > payload.size) throw GuiProtocolException("ICON key past its frame")
+        val key = String(payload, 3, keyLength, Charsets.UTF_8)
+        if (!validIconKey(key)) throw GuiProtocolException("ICON key '$key'")
+        return GuiMessage.Icon(key, size, payload.copyOfRange(3 + keyLength, payload.size))
     }
 
     private fun readCommit(payload: ByteArray): Commit {
