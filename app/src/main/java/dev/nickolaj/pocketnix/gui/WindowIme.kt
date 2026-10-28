@@ -68,6 +68,9 @@ internal class WindowIme(
     // Whether the keyboard was up when the window lost focus mid-session: the session that
     // follows focus coming back gets that, not a fresh keyboard, as Android's own fields do.
     private var restore: Boolean? = null
+
+    // The keyboard button's show (or hide) waiting for window focus.
+    private var pendingKeyboard: Boolean? = null
     private var extractToken = -1
     private var monitorCursor = false
     private var reported = IntArray(4) { -2 }
@@ -135,9 +138,18 @@ internal class WindowIme(
 
     // --- The keyboard button ---
 
-    /** Opens the phone keyboard, on any window, or hides it when it's up. */
+    /**
+     * Opens the phone keyboard, on any window, or hides it when it's up.
+     * From a menu, whose popup holds window focus and so the IME, it
+     * happens once focus is back.
+     */
     fun toggleKeyboard() {
-        if (view.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) == true) {
+        val show = view.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) != true
+        if (view.hasWindowFocus()) keyboard(show) else pendingKeyboard = show
+    }
+
+    private fun keyboard(show: Boolean) {
+        if (!show) {
             userOpened = false
             imm.hideSoftInputFromWindow(view.windowToken, 0)
             return
@@ -156,6 +168,11 @@ internal class WindowIme(
     /** The window gained or lost Android's window focus. */
     fun windowFocus(focused: Boolean) {
         if (!focused && state.active) restore = view.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) == true
+        val show = pendingKeyboard ?: return
+        if (!focused) return
+        pendingKeyboard = null
+        // Posted: while focus listeners run, the IMM may not serve the view yet.
+        main.post { guard("window ${window.u}: keyboard") { if (view.hasWindowFocus()) keyboard(show) } }
     }
 
     /** A touch went down on the window: a text field it focuses brings the keyboard up. */
