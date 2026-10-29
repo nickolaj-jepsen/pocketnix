@@ -146,8 +146,9 @@ Copies of code in docs and tests have drifted here repeatedly; keep one source.
   order: in NixOS tests, connect by IP.
 - Android creates content providers before `Application.onCreate`: anything the
   provision provider reaches must not depend on onCreate having run.
-- Any change under `go/`, tests included, rebuilds the aarch64 agent under
-  binfmt and so the whole example image: budget ~15 minutes.
+- A change to the guest's Go source (which files that leaves out: `nix/go.nix`)
+  rebuilds the aarch64 agent under binfmt and so the whole example image:
+  budget ~15 minutes.
 - The Nix-built QEMU breaks if the shell leaks an `LD_LIBRARY_PATH` from a
   newer glibc; `boot-example` unsets it.
 - A NixOS test node that really switches (`switch`, not `test`) needs

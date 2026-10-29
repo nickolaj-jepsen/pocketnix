@@ -21,7 +21,7 @@ jobs:
       # Every system's outputs evaluate, the aarch64 guest's included.
       - run: nix flake check --no-build --all-systems
       # checks.x86_64-linux.avf-boot needs an aarch64 builder; the aarch64 job runs it natively.
-      - run: nix build -L .#checks.x86_64-linux.{format,pocketnix,pocketnix-compositor,agent,gui}
+      - run: nix build -L .#checks.x86_64-linux.{format,go,compositor,agent,gui}
 
   # The guest's own AVF image, booted and switched under QEMU TCG.
   aarch64:
@@ -29,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
-      - run: nix build -L .#checks.aarch64-linux.{pocketnix,pocketnix-compositor,avf-boot}
+      - run: nix build -L .#checks.aarch64-linux.{go,compositor,avf-boot}
 
   android:
     runs-on: ubuntu-latest

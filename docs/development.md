@@ -12,8 +12,9 @@ The guest is `aarch64-linux`. On x86_64, building the example image needs
 ## Build
 
 `./gradlew assembleDebug` builds `app/build/outputs/apk/debug/app-debug.apk`.
-The flake's packages and apps (`nix flake show`) build the Go binaries and the
-compositor, running their tests, and the example guest's disk image;
+The flake's packages and apps (`nix flake show`) build the Go binaries, the
+compositor and the example guest's disk image (the tests are checks of their
+own, so editing one doesn't rebuild the image);
 `nix run .#boot-example` boots that image under QEMU and prints the agent's
 vsock address.
 

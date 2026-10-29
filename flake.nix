@@ -14,9 +14,9 @@
       own = self.packages.${pkgs.stdenv.hostPlatform.system};
     in
       {
-        # One Go module builds both: the guest agent and the host-side CLI.
+        # The guest's agent and pocketnix-guest.
         pocketnix = pkgs.callPackage ./nix/go.nix {};
-        pocketnix-cli = pkgs.callPackage ./nix/cli.nix {inherit (own) pocketnix;};
+        pocketnix-cli = pkgs.callPackage ./nix/cli.nix {};
         default = own.pocketnix-cli;
         # On aarch64 it's the guest's gui.package; from x86_64 it builds under binfmt (slow).
         pocketnix-compositor = pkgs.callPackage ./nix/compositor.nix {};
@@ -66,8 +66,8 @@
       (forAll (pkgs: let
         own = self.packages.${pkgs.stdenv.hostPlatform.system};
       in {
-        # Their checkPhases run the Go and cargo tests.
-        inherit (own) pocketnix pocketnix-compositor;
+        go = pkgs.callPackage ./nix/go.nix {withTests = true;};
+        compositor = pkgs.callPackage ./nix/compositor.nix {withTests = true;};
         avf-boot = pkgs.callPackage ./nix/avf-boot-test.nix {image = own.example-image;};
         format = (import ./nix/treefmt.nix {inherit pkgs;}).check self;
       }))
