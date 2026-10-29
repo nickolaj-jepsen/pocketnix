@@ -26,11 +26,6 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("network", true)
         set(v) = prefs.edit { putBoolean("network", v) }
 
-    /** Debug builds: the guest's GPU backend ("" = default). */
-    var gpu: String
-        get() = if (BuildConfig.DEBUG) prefs.getString("gpu", "")!! else ""
-        set(v) = prefs.edit { putString("gpu", v) }
-
     /** Debug builds: give the guest a speaker. */
     var audio: Boolean
         get() = BuildConfig.DEBUG && prefs.getBoolean("audio", false)
@@ -69,7 +64,7 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("wakeLocks", true)
         set(v) = prefs.edit { putBoolean("wakeLocks", v) }
 
-    fun vm() = VmSettings(memoryMb = memoryMb, cpus = cpus, diskGb = diskGb, network = network, gpu = gpu, audio = audio)
+    fun vm() = VmSettings(memoryMb = memoryMb, cpus = cpus, diskGb = diskGb, network = network, audio = audio)
 
     companion object {
         const val MAX_MEMORY_MB = 65_536

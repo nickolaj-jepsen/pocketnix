@@ -115,7 +115,7 @@ class AvfEngine(private val context: Context) : VmEngine {
             AvfReflect.run(v)
             vm = v
             _state.value = VmState.Running
-            Log.i(TAG, "VM running (${settings.memoryMb} MB, cpus=${settings.cpus}, network=${settings.network}, gpu=${settings.gpu.ifEmpty { "-" }}, audio=${settings.audio})")
+            Log.i(TAG, "VM running (${settings.memoryMb} MB, cpus=${settings.cpus}, network=${settings.network}, audio=${settings.audio})")
         } catch (e: Throwable) {
             val cause = (e as? java.lang.reflect.InvocationTargetException)?.cause ?: e
             Log.e(TAG, "VM start failed", cause)
@@ -130,10 +130,8 @@ class AvfEngine(private val context: Context) : VmEngine {
         AvfReflect.setBootloaderPath(custom, UBOOT)
         AvfReflect.addDisk(custom, disk.absolutePath, writable = true)
         AvfReflect.setNetworkSupported(custom, settings.network)
-        // A GPU config also selects full crosvm (see AvfReflect.setGpuConfig). The
-        // default is the backend alone: the config the test phone has always run.
-        val gpu = if (settings.gpu.isNotEmpty()) gpuSpec(settings.gpu) else if (settings.network) AvfReflect.Gpu("2d") else null
-        if (gpu != null) AvfReflect.setGpuConfig(custom, gpu)
+        // A GPU config selects full crosvm, which a networked VM needs (see AvfReflect.setGpuConfig).
+        if (settings.network) AvfReflect.setGpuConfig(custom, "2d")
         if (settings.audio) AvfReflect.setAudioConfig(custom)
         // Hands the guest's free pages back to Android while the VM runs.
         AvfReflect.useAutoMemoryBalloon(custom, true)
@@ -151,22 +149,6 @@ class AvfEngine(private val context: Context) : VmEngine {
         AvfReflect.setVmConsoleInputSupported(b, true)
         AvfReflect.setCustomImageConfig(b, AvfReflect.build(custom))
         return AvfReflect.build(b)
-    }
-
-    /**
-     * The guest's GPU, by name. gfxstream mirrors what the Terminal app asks for
-     * (no host GL, surfaceless, Vulkan only); venus and virgl are the upstream
-     * Mesa paths a Linux guest drives itself. The extra variants exist because
-     * which one a given crosvm accepts is only knowable by trying.
-     */
-    private fun gpuSpec(name: String): AvfReflect.Gpu = when (name) {
-        "gfxstream" -> AvfReflect.Gpu("gfxstream", vulkan = true, egl = false, gles = false, glx = false,
-            surfaceless = true, contexts = listOf("gfxstream-vulkan", "gfxstream-composer"))
-        "gfxstream-egl" -> AvfReflect.Gpu("gfxstream", vulkan = true,
-            surfaceless = false, contexts = listOf("gfxstream-vulkan"))
-        "virgl" -> AvfReflect.Gpu("virglrenderer", contexts = listOf("virgl"))
-        "venus" -> AvfReflect.Gpu("virglrenderer", vulkan = true, contexts = listOf("venus"))
-        else -> AvfReflect.Gpu(name, surfaceless = true)
     }
 
     private fun pump(out: InputStream, console: ConsoleLog) {

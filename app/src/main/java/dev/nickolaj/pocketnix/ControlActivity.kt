@@ -48,10 +48,6 @@ class ControlActivity : Activity() {
         // provision's image size: a smaller disk setting would leave the root no room to grow.
         intent.getIntExtra(EXTRA_MIN_DISK, 0).takeIf { it > s.diskGb && it <= DiskImage.maxGb(this) }?.let { s.diskGb = it }
         if (intent.hasExtra(EXTRA_CPUS)) s.cpus = if (intent.getIntExtra(EXTRA_CPUS, 0) == 1) 1 else 0
-        // Debug builds: `--es gpu <name>` picks the guest's GPU (names in AvfEngine.gpuSpec; "default" clears it).
-        if (BuildConfig.DEBUG && intent.hasExtra(EXTRA_GPU)) {
-            s.gpu = intent.getStringExtra(EXTRA_GPU).orEmpty().takeUnless { it == "default" }.orEmpty()
-        }
         // Debug builds: `--ez audio true` gives the guest a speaker from the next VM start.
         if (BuildConfig.DEBUG && intent.hasExtra(EXTRA_AUDIO)) s.audio = intent.getBooleanExtra(EXTRA_AUDIO, false)
         // Debug builds: `--ez guiHashes true` checks every GUI commit against the compositor's content hash.
@@ -81,7 +77,6 @@ class ControlActivity : Activity() {
         const val EXTRA_DISK = "diskGb"
         const val EXTRA_MIN_DISK = "minDiskGb"
         const val EXTRA_CPUS = "cpus"
-        const val EXTRA_GPU = "gpu"
         const val EXTRA_GUI_HASHES = "guiHashes"
         const val EXTRA_AUDIO = "audio"
     }
