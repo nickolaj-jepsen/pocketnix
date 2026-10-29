@@ -6,6 +6,9 @@
 nix develop   # the toolchains for everything below (x86_64-linux only)
 ```
 
+The shell also puts this checkout's `pocketnix` on PATH, rebuilt from source
+on each run.
+
 The guest is `aarch64-linux`. On x86_64, building the example image needs
 `boot.binfmt.emulatedSystems = ["aarch64-linux"]` or an aarch64 builder.
 

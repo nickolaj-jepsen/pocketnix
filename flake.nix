@@ -9,6 +9,14 @@
   }: let
     systems = ["aarch64-linux" "x86_64-linux"];
     forAll = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+    # The Android SDK is unfree, and androidenv has it for x86_64 only.
+    androidPkgs = import nixpkgs {
+      system = "x86_64-linux";
+      config = {
+        allowUnfree = true;
+        android_sdk.accept_license = true;
+      };
+    };
   in {
     packages = forAll (pkgs: let
       own = self.packages.${pkgs.stdenv.hostPlatform.system};
@@ -83,15 +91,7 @@
       };
 
     # `nix develop`, then `./gradlew assembleDebug`.
-    devShells.x86_64-linux.default = import ./nix/devshell.nix {
-      pkgs = import nixpkgs {
-        system = "x86_64-linux";
-        config = {
-          allowUnfree = true;
-          android_sdk.accept_license = true;
-        };
-      };
-    };
+    devShells.x86_64-linux.default = import ./nix/devshell.nix {pkgs = androidPkgs;};
 
     formatter = forAll (pkgs: import ./nix/treefmt.nix {inherit pkgs;});
   };

@@ -15,10 +15,11 @@ unless the user asked for it.
 
 ## Running it
 
-From the repo, inside `nix develop` (which puts `adb` on PATH):
+Inside `nix develop`, which puts `adb` and this checkout's `pocketnix` on
+PATH (rebuilt from source on each run):
 
 ```bash
-go -C go run ./cmd/pocketnix control <command> …
+pocketnix control <command> …
 ```
 
 Add `--serial <serial>` before the command when more than one device is
@@ -47,9 +48,9 @@ matches the command would match right away. Wait for a marker that only the
 output contains, built by the shell:
 
 ```bash
-id=$(go -C go run ./cmd/pocketnix control tab)
-go -C go run ./cmd/pocketnix control type --tab "$id" "sh -c 'systemctl is-system-running; echo status-\$?'"
-go -C go run ./cmd/pocketnix control wait --tab "$id" --lines 80 '^status-[0-9]+$'
+id=$(pocketnix control tab)
+pocketnix control type --tab "$id" "sh -c 'systemctl is-system-running; echo status-\$?'"
+pocketnix control wait --tab "$id" --lines 80 '^status-[0-9]+$'
 ```
 
 Here the command line shows `status-$?` and only the output shows
