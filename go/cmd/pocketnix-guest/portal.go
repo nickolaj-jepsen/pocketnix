@@ -35,7 +35,7 @@ const (
 	responseCancelled = 1
 	responseFailed    = 2
 
-	// saveWait bounds the app's write of a file the user saved; the agent gives up then too.
+	// saveWait bounds the app's write of a file the user saved; matches the agent's pickWait.
 	saveWait = 10 * time.Minute
 	// saveSettle is how long a written file must stay untouched before it goes to Android.
 	saveSettle = 500 * time.Millisecond

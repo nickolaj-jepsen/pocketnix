@@ -6,7 +6,6 @@ on:
   pull_request:
 
 jobs:
-  # Formatting, the Go and cargo tests, and the NixOS VM tests (agent, gui).
   x86_64:
     runs-on: ubuntu-latest
     steps:

@@ -1,4 +1,4 @@
-# A minimal pocketnix guest: the test image and the NixOS test boot this.
+# A minimal pocketnix guest, which the tests boot too.
 # Build its image with `nix build .#example-image`.
 {pkgs, ...}: {
   pocketnix.guest = {

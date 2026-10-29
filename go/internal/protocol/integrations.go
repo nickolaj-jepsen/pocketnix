@@ -30,14 +30,14 @@ type Event struct {
 	URL   string `json:"url,omitempty"`
 	Path  string `json:"path,omitempty"`
 	Text  string `json:"text,omitempty"`
-	// A notify's id (notify.go), and the one a notify-close withdraws. Not
-	// "id": that pairs answers with requests.
+	// A notify's id, and the one a notify-close withdraws. Not "id": that
+	// pairs answers with requests.
 	Notification uint32         `json:"notification,omitempty"`
 	AppName      string         `json:"appName,omitempty"`
 	Urgency      string         `json:"urgency,omitempty"`
 	Actions      []NotifyAction `json:"actions,omitempty"`
 
-	// Transfers (transfers.go).
+	// Transfers.
 	Ref      string   `json:"ref,omitempty"`
 	Paths    []string `json:"paths,omitempty"`
 	Types    []string `json:"types,omitempty"`
@@ -129,7 +129,7 @@ type Done struct {
 // way per request, as many as the connection likes. The agent answers with
 // [GuestReply].
 const (
-	GuestNotify = "notify" // Title, Body; more in notify.go
+	GuestNotify = "notify" // Title, Body, and the notification fields
 	GuestOpen   = "open"   // URL, or Path (absolute in the guest)
 	GuestCopy   = "copy"   // Text
 	GuestPaste  = "paste"  // answers Text
@@ -143,15 +143,15 @@ type GuestRequest struct {
 	URL   string `json:"url,omitempty"`
 	Path  string `json:"path,omitempty"`
 	Text  string `json:"text,omitempty"`
-	// Notifications (notify.go): Replaces is the id a notify takes over (0
-	// for a new one), ID the one a notify-close withdraws.
+	// Notifications: Replaces is the id a notify takes over (0 for a new
+	// one), ID the one a notify-close withdraws.
 	Replaces uint32         `json:"replaces,omitempty"`
 	ID       uint32         `json:"id,omitempty"`
 	AppName  string         `json:"appName,omitempty"`
 	Urgency  string         `json:"urgency,omitempty"`
 	Actions  []NotifyAction `json:"actions,omitempty"`
 
-	// Transfers (transfers.go).
+	// Transfers.
 	Paths    []string `json:"paths,omitempty"`
 	Types    []string `json:"types,omitempty"`
 	Multiple bool     `json:"multiple,omitempty"`
@@ -167,7 +167,7 @@ type GuestReply struct {
 	// ID is a notify's notification id.
 	ID uint32 `json:"id,omitempty"`
 
-	// Transfers (transfers.go).
+	// Transfers.
 	Paths []string `json:"paths,omitempty"`
 	// Names are a pick's files' names as Android gave them, in Paths' order.
 	Names     []string `json:"names,omitempty"`

@@ -31,7 +31,7 @@ android {
         }
     }
 
-    // The GUI renderer's C half: zstd and AHardwareBuffer copies. The SDK's CMake, as AGP would download another.
+    // The GUI renderer's C half. The SDK's CMake, as AGP would download another.
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
@@ -82,7 +82,7 @@ android {
     }
 
     testOptions {
-        // Keys.kt reads android.view.KeyEvent constants, which compile inline; Log calls return defaults.
+        // KeyEvent constants compile inline; android.jar's stubs (Log) return defaults instead of throwing.
         unitTests.isReturnDefaultValues = true
     }
 }

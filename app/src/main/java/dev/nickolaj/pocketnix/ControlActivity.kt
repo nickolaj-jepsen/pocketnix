@@ -9,11 +9,9 @@ import dev.nickolaj.pocketnix.gui.GuiWindowActivity
 import dev.nickolaj.pocketnix.gui.validAppId
 
 /**
- * Scripted control over adb (`am start -n <pkg>/dev.nickolaj.pocketnix.ControlActivity -a …`):
- * `pocketnix provision` starts the VM with ACTION_START. An invisible activity
- * with no history, so the system never replays its intent: restoring a task
- * relaunches it from its base intent, which booted the VM again when that was
- * the main activity.
+ * Scripted control over adb (`am start -n <pkg>/dev.nickolaj.pocketnix.ControlActivity -a …`).
+ * Invisible and without history, so the system never replays its intent: restoring
+ * a task relaunches it from its base intent, which would start the VM again.
  */
 class ControlActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {

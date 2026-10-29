@@ -35,7 +35,6 @@ import java.util.concurrent.atomic.AtomicInteger
 class HostFolderLinks(
     private val control: ControlChannel,
     private val appVersion: String,
-    /** The folder's files; SAF in the app, anything in tests. */
     private val open: (SharedFolder) -> HostFolderFs,
 ) {
     private val counter = AtomicInteger()

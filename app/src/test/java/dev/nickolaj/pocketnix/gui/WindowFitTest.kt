@@ -38,7 +38,7 @@ class WindowFitTest {
 
     @Test
     fun aPresetBelowTheFloorIsKept() {
-        // Only the presets set the floor; none is below Desktop today, but the fit never raises a scale.
+        // The fit lowers a scale, never raises one.
         assertEquals(density * 0.4f, fit(0.4f, 1080, 2000, 100f), 0f)
     }
 

@@ -512,7 +512,7 @@ func (u *Updater) switchTo(path string) error {
 		"--unit=pocketnix-switch-to-configuration", stc, "switch")
 }
 
-// Deadlines per phase. They're backstops; the ssh keepalives below notice a
+// Deadlines per phase. They're backstops; the ssh keepalives (sshArgs) notice a
 // build host that went away much sooner.
 const (
 	buildTimeout  = 3 * time.Hour

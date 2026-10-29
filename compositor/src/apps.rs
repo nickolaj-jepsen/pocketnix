@@ -414,7 +414,6 @@ fn path_watches(path: &Path) -> Vec<Watch> {
     out
 }
 
-/// Scans the data directories for the app list.
 pub fn scan(env: &Env, hashes: &mut HashCache) -> AppList {
     let bases = env.data_bases();
     let mut watch = Vec::new();

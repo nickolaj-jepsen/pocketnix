@@ -2,8 +2,8 @@
 
 The wire between the guest compositor (`pocketnix-compositor`) and the app
 (see [GUI apps](gui.md) for the user-facing side). The agent only carries it.
-Names for features not built yet are reserved at the end, so adding them only
-adds things. The last section is the contract between the compositor, the
+Features not built yet have reserved names (see Reserved), so adding them
+only adds things. Contract is the agreement between the compositor, the
 agent, the NixOS module and the app.
 
 ## Transport
@@ -75,14 +75,13 @@ and never reused in it. Ids from another instance mean nothing. When the
 instance differs from the one the app last saw, the compositor restarted and
 its clients died with it: the app closes every window it had.
 
-The protocol version is the GUI protocol's own, independent of the agent's
-protocol version. This page is version 2. Version 1 showed every toplevel,
-dialogs included, as a window of its own; version 2 draws a child toplevel
-inside its parent's window (see Dialogs), which changes what `toplevel` and a
-commit's `window` mean for it. Version 1 was never released, so neither side
-speaks it: both send `minVersion` 2. Everything else version 2 adds to
-version 1 is new messages, fields and frame types. A side that lacks one
-behaves as if it were absent (a `toplevel` without `touch` has none, so the
+The protocol version is the GUI protocol's own, independent of the agent's.
+This page is version 2. Version 1, never released and spoken by neither side
+(both send `minVersion` 2), showed every toplevel as a window of its own;
+version 2 draws a child toplevel inside its parent's window (see Dialogs),
+which changes what `toplevel` and a commit's `window` mean. Everything else
+version 2 added is new messages, fields and frame types. A side that lacks
+one behaves as if it were absent (a `toplevel` without `touch` has none, so the
 app uses Pointer mode).
 
 ### Replay
@@ -454,8 +453,7 @@ above, and need nothing else on the wire.
   capture).
 - Android draws no pointer for a touchscreen, so in Trackpad mode the app
   draws its own cursor at that position, picking the image by `cursor`'s
-  `name` and drawing none for `"hidden"`. A client-drawn cursor surface
-  comes as `"default"` (CURSOR_IMAGE is reserved).
+  `name` and drawing none for `"hidden"`.
 
 ### Keyboard layout
 
@@ -857,9 +855,8 @@ agent restart). The compositor decides it when the window first maps:
 Only the client's own environment counts, not its ancestors': children
 inherit the variable, so a client without it was started outside a tab
 (systemd, D-Bus activation, ssh) or cleared its environment on purpose. The
-agent's tab ids are 16 lowercase hex digits; the compositor treats the value
-as opaque but takes only 1–64 characters from `[A-Za-z0-9_-]`, and anything
-else as unset.
+compositor treats the value as opaque but takes only 1–64 characters from
+`[A-Za-z0-9_-]`, and anything else as unset.
 
 ### Moving a window
 
@@ -885,9 +882,8 @@ for each remaining byte b:
     h = (h ^ b) × 0x100000001b3
 ```
 
-All arithmetic wraps at 64 bits. Rows are
-packed so stride padding doesn't count. JVM tests run the decoder against a
-real compositor with `hashes: true` and compare every hash.
+All arithmetic wraps at 64 bits. Rows are packed so stride padding doesn't
+count.
 
 ## Reserved
 
@@ -986,8 +982,6 @@ The options and what `gui.enable` turns on besides are in `nix/module.nix`.
   pam_env fills from NixOS's profile-relative session variables: both cover
   the user's and the system's profiles. The module adds nothing to them; it
   only sets `enableDefaultPath = false` on the service, since NixOS would
-  otherwise replace that `PATH` with a minimal one of its own. Its VM test
-  checks that the compositor lists an app from the system profile and
-  launches it.
+  otherwise replace that `PATH` with a minimal one of its own.
 - The session user's lingering, which the module already sets, is what
   starts the user manager and so the sockets.

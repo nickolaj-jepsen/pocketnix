@@ -157,7 +157,7 @@ data class Generation(
 /** The guest's update state, pushed by the agent (go/internal/protocol/updates.go). */
 data class Updates(
     val sources: List<String>,
-    /** idle, checking, fetching or switching. */
+    /** One of the protocol's Update* states. */
     val state: String,
     val op: Int,
     val current: String,

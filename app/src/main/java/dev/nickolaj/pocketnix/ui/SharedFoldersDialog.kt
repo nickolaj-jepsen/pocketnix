@@ -29,8 +29,8 @@ import dev.nickolaj.pocketnix.hostfs.SharedFolder
 import dev.nickolaj.pocketnix.hostfs.SharedFolders
 
 /**
- * The Android folders mounted in the guest, at ~/Android/<name> unless the
- * module says otherwise. Changes reach a running guest at once.
+ * The Android folders mounted in the guest, under
+ * `pocketnix.guest.hostFolders.mountPoint`. Changes reach a running guest at once.
  */
 @Composable
 fun SharedFoldersDialog(vm: Vm, onDismiss: () -> Unit) {

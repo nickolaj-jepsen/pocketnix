@@ -375,7 +375,6 @@ private fun TabRow(
                     val tab = item.tab
                     val ended = !tab.session.isRunning && tab.kind != Tab.Kind.Console
                     TabChip(
-                        // A bell or notification arrived while nobody watched the tab.
                         mark = if (tab.attention) "● " else "",
                         title = tab.title + if (ended) " (ended)" else "",
                         selected = selectedWindow == 0 && tab.id == selected,

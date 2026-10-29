@@ -44,7 +44,7 @@ data class GuestNotification(
     companion object {
         const val DEFAULT_ACTION = "default"
 
-        /** The notify event's notification, or null for one without an id (an older agent, or `pocketnix-guest notify`'s before ids). */
+        /** The notify event's notification, or null for an older agent's, which has no id. */
         fun parse(msg: JSONObject): GuestNotification? {
             val id = msg.optLong("notification")
             if (id == 0L) return null

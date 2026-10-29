@@ -399,8 +399,7 @@ func agentExec(c *client.Client, args []string) error {
 		return err
 	}
 	defer p.Close()
-	// Typing before the session's shell is up would race its tty setup, so
-	// both wait for the first output.
+	// Wait for the first output: typing earlier races the shell's tty setup.
 	pending := *resize != "" || *input != ""
 	buf := make([]byte, 32*1024)
 	for {
@@ -442,7 +441,6 @@ type exitStatus int32
 
 func (e exitStatus) Error() string { return fmt.Sprintf("session exited with status %d", int32(e)) }
 
-// spliceStdio ends when the guest closes its side, even if stdin stays open.
 func agentUDP(c *client.Client, args []string) error {
 	fs := flag.NewFlagSet("udp", flag.ContinueOnError)
 	wait := fs.Duration("wait", 2*time.Second, "")
@@ -508,6 +506,7 @@ func agentUDP(c *client.Client, args []string) error {
 	}
 }
 
+// spliceStdio ends when the guest closes its side, even if stdin stays open.
 func spliceStdio(conn net.Conn) error {
 	go func() {
 		io.Copy(conn, os.Stdin)

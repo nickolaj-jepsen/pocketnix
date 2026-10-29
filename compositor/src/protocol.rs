@@ -240,8 +240,7 @@ impl Commit {
     }
 }
 
-/// The spikes' row hash over the reference copy, fed in any slicing of the
-/// same byte stream.
+/// The spec's Content hash, fed in any slicing of the same byte stream.
 pub struct ContentHash {
     h: u64,
     tail: [u8; 8],

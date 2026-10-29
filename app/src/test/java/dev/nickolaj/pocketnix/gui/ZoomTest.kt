@@ -30,7 +30,6 @@ class ZoomTest {
 
     @Test
     fun aZoomedTapMapsBackThroughTheTransform() {
-        // The spike's check: at 2x, panned to (-100, -100), view (340, 340) is window (220, 220).
         val z = zoom()
         z.zoomBy(2f, 0f, 0f)
         z.panBy(-100f, -100f)

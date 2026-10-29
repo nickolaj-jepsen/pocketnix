@@ -139,7 +139,7 @@ impl State {
         self.send_apps();
     }
 
-    /// Rescans after things have been quiet for a second.
+    /// Rescans once things have been quiet for `RESCAN_DEBOUNCE`.
     pub fn schedule_rescan(&mut self) {
         if let Some(token) = self.rescan_timer.take() {
             self.lh.remove(token);

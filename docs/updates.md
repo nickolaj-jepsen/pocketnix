@@ -83,12 +83,11 @@ one (`nix-env --switch-generation`, then `switch`).
 
 ## A generation that won't boot
 
-- `boot.loader.timeout` is 0, so systemd-boot doesn't wait.
+- systemd-boot doesn't wait (the module's `boot.loader.timeout`).
 - "Start with boot menu" in the app taps a key on the console during boot, so
   systemd-boot shows its menu in the console tab. Pick an older generation
   there.
-- The app offers this when the agent hasn't connected two minutes after
-  start.
+- The app offers this when the agent is late to connect.
 
 ## Pushing from a desktop
 

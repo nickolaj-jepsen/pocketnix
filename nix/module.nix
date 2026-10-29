@@ -150,7 +150,7 @@
   agentConfigFile = (pkgs.formats.json {}).generate "pocketnix-agent.json" agentConfig;
 
   portalBusName = "org.freedesktop.impl.portal.desktop.pocketnix";
-  # The portal definition and its D-Bus activation, which goes through the user unit below.
+  # The portal definition and its D-Bus activation.
   portalPackage = pkgs.runCommand "pocketnix-portal" {} ''
     mkdir -p $out/share/xdg-desktop-portal/portals $out/share/dbus-1/services
     cat > $out/share/xdg-desktop-portal/portals/pocketnix.portal <<EOF
@@ -268,7 +268,7 @@
         '';
       };
 
-  # What the app's theme takes (TerminalTheme.kt); it drops anything else.
+  # What the app's theme takes (TerminalTheme's key); it drops anything else.
   colorKey = "foreground|background|cursor|color([0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])";
   # time.ParseDuration's syntax without a sign: the agent refuses negative intervals.
   goDuration = "0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+";
@@ -822,10 +822,8 @@ in {
       boot.loader.efi.canTouchEfiVariables = false;
       # The app's boot-menu start taps a key on hvc0 to show the menu.
       boot.loader.timeout = mkDefault 0;
-      # Google's kernel has no efivarfs, yet /sys/firmware/efi exists, so the
-      # version check a plain `switch` runs (`bootctl status`, which reads EFI
-      # variables) exits 1 and fails the switch. The install path passes
-      # --no-variables: take it on every switch, as --install-bootloader does.
+      # Google's kernel has no efivarfs but has /sys/firmware/efi: a plain switch's
+      # `bootctl status` exits 1, so every switch takes the --no-variables install path.
       system.build.installBootLoader = mkIf cfg.avf.wrapBootLoader (lib.mkForce (pkgs.writeShellScript "install-bootloader-pocketnix" ''
         export NIXOS_INSTALL_BOOTLOADER=1
         exec ${(extendModules {modules = [{pocketnix.guest.avf.wrapBootLoader = false;}];}).config.system.build.installBootLoader} "$@"
@@ -844,9 +842,8 @@ in {
       };
       boot.growPartition = true;
 
-      # Google's kernel brings dummy, ifb and tunnel devices; dhcpcd waiting
-      # on them was the longest unit on phone-vm's boot (7 of 18 s). Only the
-      # virtio NIC gets DHCP, without an ARP probe of its lease.
+      # dhcpcd waiting on Google's kernel's dummy, ifb and tunnel devices
+      # slowed boot by seconds; only the virtio NIC gets DHCP, with no ARP probe.
       networking.dhcpcd.allowInterfaces = mkDefault ["en*" "eth*"];
       networking.dhcpcd.denyInterfaces = ["dummy*" "ifb*"];
       networking.dhcpcd.extraConfig = "noarp";

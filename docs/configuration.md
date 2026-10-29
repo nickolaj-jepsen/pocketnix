@@ -61,8 +61,7 @@ pocketnix.guest.forwards = {
 
 - Forwards share the phone's ports with every other app. One that can't
   listen shows in the app and is retried.
-- A UDP forward keeps one stream per phone-side client, dropped after 2
-  minutes of silence.
+- A UDP forward keeps one stream per phone-side client, dropped once idle.
 
 ## Android integration
 
@@ -76,8 +75,8 @@ All on by default.
 | `pocketnix-guest copy` / `paste`, OSC 52 | the clipboard |
 | `pocketnix-guest share <file>` | the share sheet |
 | `pocketnix-guest pick` / `save`, the FileChooser portal | the document pickers |
-| `files.root` (default: the user's home) | the Files app and every file picker |
-| `share.directory` (default: `~/Inbox`) | where the share sheet drops files |
+| `files.root` | the Files app and every file picker |
+| `share.directory` | where the share sheet drops files |
 
 ```nix
 pocketnix.guest = {
@@ -92,8 +91,8 @@ From the background, Android won't let an app open an activity, so `open` and
 
 ## Shared Android folders
 
-Pick folders in the app's settings. They mount in the guest at
-`~/Android/<name>` (`hostFolders.mountPoint` moves them).
+Pick folders in the app's settings. They mount in the guest under
+`hostFolders.mountPoint`.
 
 - Only the user can enter them, not even root.
 - While the app is gone, operations fail with EIO and the mount stays.

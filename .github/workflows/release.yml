@@ -1,7 +1,7 @@
 name: release
 
-# A `v<VERSION>` tag publishes the signed APK that `pocketnix provision` downloads
-# (releases/download/v<ver>/pocketnix-<ver>.apk) and Obtainium tracks.
+# A `v<VERSION>` tag publishes the signed APK that `pocketnix provision`
+# downloads (its asset name must match downloadRelease's URL) and Obtainium tracks.
 on:
   push:
     tags: ["v*"]
@@ -37,7 +37,7 @@ jobs:
           mkdir dist
           cp app/build/outputs/apk/release/app-release.apk "dist/pocketnix-$ver.apk"
           nix develop --command sh -c "\$ANDROID_HOME/build-tools/*/apksigner verify --print-certs dist/pocketnix-$ver.apk"
-          # The certificate provision pins (go/cmd/pocketnix/apksig.go), or provision would refuse this release.
+          # The certificate provision pins (releaseCertSHA256), or provision would refuse this release.
           POCKETNIX_RELEASE_APK=$PWD/dist/pocketnix-$ver.apk nix develop --command go -C go test -run TestReleaseSignerRealAPK -v ./cmd/pocketnix/ | grep -- '--- PASS'
           (cd dist && sha256sum "pocketnix-$ver.apk" > "pocketnix-$ver.apk.sha256")
       - name: Publish

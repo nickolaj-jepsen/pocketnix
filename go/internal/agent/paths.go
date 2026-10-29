@@ -10,10 +10,9 @@ import (
 	"syscall"
 )
 
-// The module names paths the agent opens as root (files.root, share.directory,
-// terminal.historyFile, the font). A path in the session user's home goes
-// through the home's os.Root, since the user owns every step of it; anywhere
-// else, no component may belong to anyone but root.
+// The module names paths the agent opens as root. A path in the session
+// user's home goes through the home's os.Root, since the user owns every step
+// of it; anywhere else, no component may belong to anyone but root.
 
 // confine is whether configured paths need vetting: an unprivileged agent
 // can't reach more than its own user already can.

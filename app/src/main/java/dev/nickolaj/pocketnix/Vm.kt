@@ -60,10 +60,8 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * The app's one VM and everything that lives with it: the engine running
- * it, the agent's control channel, port forwards, the module's theme, and
- * the terminal tabs. Owned by [PocketnixApp]; the foreground service keeps
- * the process (and so this) alive while the VM runs.
+ * The app's one VM and everything that lives with it. Owned by [PocketnixApp];
+ * the foreground service keeps the process (and so this) alive while the VM runs.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class Vm(private val app: Context) {
@@ -307,9 +305,8 @@ class Vm(private val app: Context) {
     }
 
     /**
-     * Runs an update request (update-check, update-apply, or
-     * switch-generation with [generation]); progress arrives in [updates].
-     * Returns why the agent refused, or null.
+     * Runs an update request ([generation] for switch-generation); progress
+     * arrives in [updates]. Returns why the agent refused, or null.
      */
     suspend fun updateRequest(type: String, generation: Int? = null): String? {
         val req = JSONObject().put("type", type)

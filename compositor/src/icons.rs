@@ -35,8 +35,7 @@ pub struct IconFile {
 
 pub type IconSet = Arc<Vec<IconFile>>;
 
-/// The icon directories of one scan: every theme file and pixmap by icon
-/// name, and the content hashes of files seen before.
+/// The icon directories of one scan: every theme file and pixmap by icon name.
 #[derive(Default)]
 pub struct IconIndex {
     themes: Vec<HashMap<String, Vec<IconFile>>>,
@@ -147,8 +146,7 @@ fn subdirs(dir: &Path) -> Vec<String> {
 }
 
 impl IconIndex {
-    /// Indexes `hicolor` and `Adwaita` under each of `icon_bases`, and the
-    /// `pixmaps` directories.
+    /// Indexes each of [`THEMES`] under every icon base, and the pixmap directories.
     pub fn build(icon_bases: &[PathBuf], pixmap_dirs: &[PathBuf]) -> Self {
         let mut themes = Vec::new();
         for theme in THEMES {

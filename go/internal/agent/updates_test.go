@@ -390,7 +390,7 @@ func TestHungBuildHost(t *testing.T) {
 
 	hung()
 	u, err = ctl.Run(func() error {
-		// Answered at once: the app gives up on a request after 5 s.
+		// Answered at once: the app gives up on a slow request.
 		start := time.Now()
 		err := ctl.SwitchGeneration(1)
 		if d := time.Since(start); d > time.Second {

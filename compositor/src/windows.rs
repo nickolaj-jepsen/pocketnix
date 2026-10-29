@@ -194,7 +194,7 @@ impl State {
         tree
     }
 
-    /// Recomputes the window model; called at the start of every flush.
+    /// Recomputes the window model.
     pub fn update_tree(&mut self) {
         let mut tree = self.build_tree();
         let old = std::mem::take(&mut self.tree.of);
@@ -467,7 +467,7 @@ impl State {
             })
     }
 
-    /// A pointer press on a toplevel's surface raises and focuses it.
+    /// Raises and focuses a toplevel, unless a modal dialog blocks it.
     pub fn pressed_on(&mut self, window: u32, toplevel: u32) {
         if self.blocked_by_modal(toplevel) {
             return;

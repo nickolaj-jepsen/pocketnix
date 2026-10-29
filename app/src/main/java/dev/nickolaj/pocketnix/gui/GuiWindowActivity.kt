@@ -286,7 +286,6 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
                 splash?.show(SplashStatus("The VM can't start yet: ${missing.joinToString { it.name }}. pocketnix shows what's missing.", failed = true))
                 return
             }
-            // Through the same foreground service the tile uses.
             vm.start()
         }
         follow(vm.gui.launch(t.app, t.action))

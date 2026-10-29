@@ -10,7 +10,7 @@ package protocol
 // a typed copy read the first, a typed paste writes to it. The guest program
 // opened it with its own rights, so these reach any file its user can.
 
-// Guest requests, beyond integrations.go's.
+// Guest requests for transfers.
 const (
 	// GuestShare offers Paths (absolute, under the file provider's root) or
 	// Text to Android's share sheet. It doesn't wait for the user.

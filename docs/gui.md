@@ -43,8 +43,7 @@ flowchart LR
 
 ## Size
 
-- `phone` uses Android's density, `compact` about 0.75 of it, `desktop` about
-  0.5.
+- `phone` uses Android's density; `compact` and `desktop` shrink it.
 - If a window's minimum size doesn't fit, the app lowers that window's scale,
   but not below the `desktop` factor.
 - Pinch zoom magnifies and pans without changing the app's layout.

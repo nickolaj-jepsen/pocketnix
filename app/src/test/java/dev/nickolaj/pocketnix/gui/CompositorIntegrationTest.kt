@@ -220,7 +220,6 @@ class CompositorIntegrationTest {
             val m = second.next()
             if (m === GuiMessage.Ready) {
                 ready = true
-                // Everything was replayed, with content.
                 assertEquals(windows, state.windows.keys)
                 assertTrue(state.surfaces.values.filter { it.role == "toplevel" }.all { it.mapped })
             }

@@ -124,7 +124,7 @@ fun Commit.unpacked(unpacker: Unpacker): Commit {
     )
 }
 
-/** gui-protocol.md's content hash (the spikes' row_hash over packed rows). */
+/** gui-protocol.md's Content hash, over packed rows. */
 fun contentHash(b: ByteArray, off: Int, len: Int): Long {
     val prime = 0x100000001b3L
     var h = -0x340d631b7bdddcdbL // 0xcbf29ce484222325

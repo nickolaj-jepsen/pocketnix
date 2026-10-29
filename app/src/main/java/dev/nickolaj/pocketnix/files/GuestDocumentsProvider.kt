@@ -28,10 +28,9 @@ import java.io.File
 import java.io.FileNotFoundException
 
 /**
- * The guest's file-provider root (`pocketnix.guest.files.root`, by default
- * the user's home) in the Files app and every file picker, read-write
- * through the agent's file streams. While the VM is stopped the root is
- * still listed, and says to start it.
+ * The guest's file-provider root (`pocketnix.guest.files.root`) in the Files
+ * app and every file picker, read-write through the agent's file streams.
+ * While the VM is stopped the root is still listed, and says to start it.
  *
  * Document ids are "/" + the path under the root.
  */

@@ -11,7 +11,7 @@ import kotlin.math.roundToInt
 /**
  * A window's mouse, touchpad and keyboard as GUI protocol input, in the
  * window's pixels: the SurfaceView's coordinates mapped back through
- * [zoom]. Touchscreen gestures are the input mode's (TouchInput.kt).
+ * [zoom]. Touchscreen gestures are the input mode's ([TouchMode]).
  */
 internal class WindowInput(
     private val window: Int,

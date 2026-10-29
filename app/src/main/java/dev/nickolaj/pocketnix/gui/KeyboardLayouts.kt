@@ -20,9 +20,7 @@ data class XkbLayout(val layout: String, val variant: String = "") {
         /**
          * The XKB layout for an Android keyboard layout: by its descriptor's
          * name (AOSP's `keyboard_layout_<name>`), else by its language tag
-         * and layout type (`qwerty`, `qwertz`, `azerty`, `dvorak`,
-         * `colemak`, `workman`, `turkish_q`, `turkish_f`); DEFAULT for
-         * neither.
+         * and Android layout type (`qwerty`, `dvorak`, …); DEFAULT for neither.
          */
         fun of(descriptor: String?, languageTag: String?, layoutType: String?): XkbLayout {
             descriptor?.substringAfterLast('/')?.removePrefix("keyboard_layout_")?.let { names[it] }?.let { return it }

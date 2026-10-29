@@ -94,7 +94,6 @@ class AgentIntegrationTest {
             "--guest-socket", File(dir, "guest.sock").path,
         )
             .redirectErrorStream(true).redirectOutput(File(dir, "agent.log")).start()
-        // Wait for the listener.
         val deadline = System.currentTimeMillis() + 10_000
         while (runCatching { Socket("127.0.0.1", port).close() }.isFailure) {
             check(System.currentTimeMillis() < deadline) { "agent didn't listen: " + File(dir, "agent.log").readText() }
@@ -157,7 +156,6 @@ class AgentIntegrationTest {
         assertEquals(listOf("moved.txt", "notes.txt", "sub"), files.list("").map { it.name }.sorted())
         files.delete("sub")
         assertEquals(listOf("moved.txt", "notes.txt"), files.list("").map { it.name }.sorted())
-        // Refused paths surface as AgentException.
         assertTrue(runCatching { files.read("../agent.json") }.exceptionOrNull() is AgentException)
 
         val landed = files.share("photo.jpg", 4, "JPEG".byteInputStream())

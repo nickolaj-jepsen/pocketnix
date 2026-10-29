@@ -55,7 +55,7 @@
             android:resizeableActivity="true"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density" />
 
-        <!-- The guest's apps (gui/LauncherActivity), in a task of its own beside the terminal's. -->
+        <!-- The guest's apps, in a task of its own beside the terminal's. -->
         <activity
             android:name=".gui.LauncherActivity"
             android:exported="false"

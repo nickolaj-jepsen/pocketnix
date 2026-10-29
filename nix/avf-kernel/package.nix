@@ -1,8 +1,6 @@
-# Google's guest kernel for the Android Terminal's (AVF) Debian VM, repackaged
-# for NixOS guests. Under Pixel pKVM, nixpkgs' kernels (6.1 to 6.18) read
-# corrupted data from virtio disks into recycled pages; this android16 build,
-# made for that hypervisor, reads clean. Prebuilt: the Image plus the module
-# tree from the image's initramfs (most drivers are built in).
+# Google's prebuilt guest kernel for the Android Terminal's (AVF) VM: under
+# Pixel pKVM, nixpkgs' kernels read corrupted virtio disk data; this one reads
+# clean. The Image plus its initramfs's module tree (most drivers are built in).
 # NixOS's boot.kernelPackages re-overrides every kernel with kernelPatches,
 # features and randstructSeed; they come in through `...` because callPackage
 # would fill a named `kernelPatches` with pkgs.kernelPatches.
@@ -22,7 +20,7 @@
   in
     lib.optional (m != null) (lib.nameValuePair (lib.elemAt m 0) (lib.elemAt m 1)))
   (lib.splitString "\n" (builtins.readFile ./config)));
-  # Same interface as nixpkgs-built kernels' `config` (pkgs/os-specific/linux/kernel/build.nix).
+  # Same interface as nixpkgs-built kernels' `config`.
   config = let
     getValue = attr: options."CONFIG_${attr}" or null;
   in

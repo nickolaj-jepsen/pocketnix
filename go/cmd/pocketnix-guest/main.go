@@ -45,7 +45,7 @@ commands:
 As xdg-open it opens. $POCKETNIX_GUEST_SOCKET overrides the agent's socket.
 `
 
-// version is set by the build (nix/go.nix).
+// version is set at link time (-X main.version).
 var version = "dev"
 
 var errUsage = errors.New("usage")

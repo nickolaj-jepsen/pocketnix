@@ -23,8 +23,8 @@ import (
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/protocol"
 )
 
-// Transfers (protocol/transfers.go): guest requests that wait on the app,
-// a picker the user answers or bytes it fetches or sends.
+// Transfers: guest requests that wait on the app, a picker the user answers
+// or bytes it fetches or sends.
 
 const (
 	// pickWait bounds a pick or a save: the user may take a while.

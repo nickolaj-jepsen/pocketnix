@@ -10,7 +10,7 @@
   - an aarch64 Linux machine or remote builder, or
   - x86_64 with `boot.binfmt.emulatedSystems = ["aarch64-linux"];`. Most of the
     closure comes from cache.nixos.org; the agent builds under emulation.
-- Free space on the phone for the disk (16 GiB by default, set in the app).
+- Free space on the phone for the disk (`--disk`, or set in the app).
 
 ## 1. Describe the guest
 
@@ -76,7 +76,7 @@ sequenceDiagram
 
 - `--inject <guest path>=<file>` puts secrets (ssh host keys for agenix,
   authorized keys) into the image without them entering the Nix store.
-  Repeatable; `--mode` applies to the one before it (default `0600`).
+  Repeatable; `--mode` applies to the one before it.
 - `--memory`, `--cpus one|all` and `--disk` set the VM's hardware, which the
   app's Settings can change later.
 - An existing disk is never replaced without `--replace`, which destroys it.

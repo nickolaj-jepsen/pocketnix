@@ -47,8 +47,7 @@ const (
 	releasePackage = "dev.nickolaj.pocketnix"
 	activityClass  = "dev.nickolaj.pocketnix.ControlActivity"
 	actionStart    = "dev.nickolaj.pocketnix.action.START"
-	// chunkSize bounds one adb push: bulk transfers over USB drop the device
-	// after ~100–200 MB.
+	// chunkSize bounds one adb push: bulk USB transfers drop the device after ~100–200 MB.
 	chunkSize   = 32 << 20
 	deviceChunk = "/data/local/tmp/pocketnix.chunk"
 )
@@ -317,13 +316,11 @@ func (o *provisionOpts) prepareImage() (string, error) {
 	return cp, nil
 }
 
-// resolveImage accepts an image file, a directory holding one (a Nix build
-// result), or an installable to build.
 var bareConfiguration = regexp.MustCompile(`#nixosConfigurations\.("[^"]+"|[^."]+)$`)
 
 // imageInstallable turns `<flake>#nixosConfigurations.<host>` into that
-// host's image as this machine assembles it: the guest's own system's
-// assembly fails under binfmt, which made picking the key by hand a trap.
+// host's image as this machine assembles it: the guest system's own
+// assembly fails under binfmt.
 func imageInstallable(p string) string { return imageInstallableOn(p, runtime.GOOS, runtime.GOARCH) }
 
 func imageInstallableOn(p, goos, goarch string) string {
@@ -339,6 +336,8 @@ func imageInstallableOn(p, goos, goarch string) string {
 	return p + ".config.system.build.pocketnixImage." + arch + "-linux"
 }
 
+// resolveImage accepts an image file, a directory holding one (a Nix build
+// result), or an installable to build.
 func (o *provisionOpts) resolveImage() (string, error) {
 	p := o.image
 	if _, err := os.Stat(p); err != nil {

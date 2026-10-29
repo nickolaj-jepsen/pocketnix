@@ -912,7 +912,7 @@ impl SeatHandler for State {
         let name = match image {
             CursorImageStatus::Hidden => "hidden".to_string(),
             CursorImageStatus::Named(icon) => icon.name().to_string(),
-            // A client-drawn cursor reaches the app as CURSOR_IMAGE, later.
+            // CURSOR_IMAGE is reserved, so a client-drawn cursor reports as the default.
             CursorImageStatus::Surface(_) => "default".to_string(),
         };
         let window = self.pointer_window.unwrap_or(0);

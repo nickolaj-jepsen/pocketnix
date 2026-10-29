@@ -60,7 +60,6 @@ class ProtocolTest {
         assertEquals("/nix/store/c-sys", u.available)
         assertEquals(listOf(2, 1), u.generations.map { it.number })
         assertEquals(Generation(1, "/nix/store/a-sys", 1690000000, null, current = false, booted = true), u.generations[1])
-        // A minimal state: nothing configured, nothing found.
         val empty = Updates.parse(JSONObject("""{"type":"updates","state":"checking"}"""))
         assertEquals(true, empty.busy)
         assertNull(empty.available)

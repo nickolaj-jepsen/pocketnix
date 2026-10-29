@@ -354,7 +354,7 @@ var (
 	errnos     map[string]syscall.Errno
 )
 
-// Path-level operations, which the FUSE nodes (hostfs_fuse.go) map to.
+// Path-level operations, which the FUSE nodes ([hostNode]) map to.
 
 func (f *hostFolder) do(ctx context.Context, req protocol.HostFSRequest) (protocol.HostFSReply, syscall.Errno) {
 	r, _, errno := f.link.call(ctx, req, nil)

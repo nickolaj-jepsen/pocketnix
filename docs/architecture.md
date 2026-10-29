@@ -15,7 +15,7 @@ flowchart TB
     android[notifications, clipboard,<br/>share sheet, Files, SAF]
   end
   subgraph guest[NixOS guest]
-    agent[pocketnix-agent<br/>root, vsock:9100]
+    agent[pocketnix-agent<br/>root, vsock]
     guestcli[pocketnix-guest<br/>xdg-open, notifyd, portal]
     comp[pocketnix-compositor<br/>user service]
     shells[tabs: $SHELL -l]

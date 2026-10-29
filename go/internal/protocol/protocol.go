@@ -10,12 +10,12 @@
 //     each again whenever it changes.
 //     Requests are answered in order, with a message of the request's own
 //     type or an [Error].
-//   - pty: binary frames (see frame.go) carrying one terminal session.
+//   - pty: binary frames ([WriteFrame]) carrying one terminal session.
 //   - forward: raw bytes spliced to a TCP port on the guest's loopback.
-//   - udp: datagrams (see datagram.go) relayed to a UDP port on the guest's
+//   - udp: datagrams ([WriteDatagram]) relayed to a UDP port on the guest's
 //     loopback, one stream per client address on the phone.
 //   - font: the configured font file's bytes, then EOF.
-//   - gui: raw bytes spliced to the guest compositor (gui.go).
+//   - gui: raw bytes spliced to the guest compositor ([StreamGUI]).
 package protocol
 
 // Version is bumped on any incompatible change. Additive changes (new
@@ -94,13 +94,13 @@ type Request struct {
 	// ID, when set, comes back in the answer's "id": requests are answered in
 	// order, but a requester that gave up on one can tell its late answer apart.
 	ID int `json:"id,omitempty"`
-	// Notify-action and notify-closed (notify.go).
+	// Notify-action and notify-closed.
 	Notification uint32 `json:"notification,omitempty"`
 	Key          string `json:"key,omitempty"`
 	Reason       uint32 `json:"reason,omitempty"`
 
-	// Transfers (transfers.go): the Event's Ref a guest-done answers, and
-	// how it ended; set-clipboard's MIME types.
+	// Transfers: the Event's Ref a guest-done answers, and how it ended;
+	// set-clipboard's MIME types.
 	Ref       string   `json:"ref,omitempty"`
 	Cancelled bool     `json:"cancelled,omitempty"`
 	Error     string   `json:"error,omitempty"`
@@ -109,7 +109,7 @@ type Request struct {
 	// Host is a host-state request's.
 	Host *HostState `json:"host,omitempty"`
 
-	// Folders is a host-folders request's (hostfs.go).
+	// Folders is a host-folders request's.
 	Folders []HostFolder `json:"folders,omitempty"`
 }
 
@@ -145,7 +145,7 @@ type Hello struct {
 	// app's on a share; on a file list, the entry count.
 	Size int64 `json:"size,omitempty"`
 
-	// Share and file streams (integrations.go).
+	// Share and file streams.
 	Op   string    `json:"op,omitempty"`
 	Path string    `json:"path,omitempty"`
 	Name string    `json:"name,omitempty"`
@@ -154,8 +154,7 @@ type Hello struct {
 	// Mode is a FileOpen's.
 	Mode string `json:"mode,omitempty"`
 
-	// Ref ties a share or save stream to the guest request an [Event] named
-	// (transfers.go).
+	// Ref ties a share or save stream to the guest request an [Event] named.
 	Ref string `json:"ref,omitempty"`
 }
 

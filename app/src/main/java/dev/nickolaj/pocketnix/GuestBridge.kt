@@ -17,12 +17,7 @@ import android.webkit.MimeTypeMap
 import dev.nickolaj.pocketnix.files.GuestDocumentsProvider
 import org.json.JSONObject
 
-/**
- * Guest programs reaching Android (docs/architecture.md, Integrations):
- * a notification becomes one (with ids and actions: [GuestNotifications]), `xdg-open` opens a URL or a file
- * (through the file provider), a share goes to the share sheet, and a guest
- * copy sets the clipboard.
- */
+/** Guest programs reaching Android: see docs/architecture.md, Integrations. */
 class GuestBridge(private val context: Context, private val hostname: () -> String?) {
     private val manager = context.getSystemService(NotificationManager::class.java)
     private val clipboard = context.getSystemService(ClipboardManager::class.java)
@@ -70,7 +65,6 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
         startOrNotify(chooser, appVisible, "Open from ${hostname() ?: "the guest"}", url.ifEmpty { msg.optString("path") })
     }
 
-    /** Offers files under the file provider's root, or text, through the share sheet. */
     private fun share(msg: JSONObject, appVisible: Boolean) {
         val paths = msg.optJSONArray("paths")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty()
         val send = if (paths.isEmpty()) {
@@ -121,7 +115,7 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
     companion object {
         private const val TAG = "GuestBridge"
         private const val CHANNEL = "guest"
-        // Clear of the VM service's (1) and the tabs' (1000 + tab).
+        // Clear of the VM service's and the tabs' notification ids.
         private const val NOTIFICATION_BASE = 100_000
         private const val MAX_NOTIFICATIONS = 50
         private const val MAX_CLIP_CHARS = 100_000

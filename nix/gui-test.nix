@@ -1,8 +1,5 @@
-# A guest with gui.enable: socket activation brings up the compositor for a
-# Wayland client, and the agent's gui stream reaches it and gets its replay,
-# also after the agent restarts; the app list has the system profile's apps,
-# a launch from it opens a window bound to the launch, and foot takes text
-# from the IME and as typed keys.
+# A guest with gui.enable: the compositor, the agent's gui stream and the app
+# list, driven the way the app drives them.
 {
   pkgs,
   self,
@@ -305,7 +302,7 @@ in
       with subtest("a reload rescans the app list and keeps the windows"):
           apps = "/home/nixos/.local/share/applications"
           phone.succeed(user(f"mkdir -p {apps}"))
-          # Lets the rescan the mkdir scheduled run first: each waits out a 1 s debounce.
+          # Lets the rescan the mkdir scheduled run first: each waits out the compositor's RESCAN_DEBOUNCE.
           time.sleep(3)
           # Every replay rescans, so the probe stays connected through the mount and the reload.
           phone.succeed(f"${probe}/bin/gui-probe --wait-app pocketnix-mounted {A} gui >/tmp/pushed.json 2>/tmp/probe.err &")

@@ -20,9 +20,8 @@ import (
 // maxClipboard bounds clipboard text both ways; Android's binder can't carry much more.
 const maxClipboard = 128 << 10
 
-// ServeGuest serves guest programs on l, a unix socket inside the guest:
-// notifications, opening URLs and files, and the clipboard, all through the
-// app. Only root and the session user may use it.
+// ServeGuest serves guest programs' requests to the app on l, a unix socket
+// inside the guest. Only root and the session user may use it.
 func (s *Server) ServeGuest(l net.Listener) error {
 	slots := make(chan struct{}, maxGuestConns)
 	for {

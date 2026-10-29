@@ -3,7 +3,7 @@
  */
 package dev.nickolaj.pocketnix.engine
 
-/** Names of VirtualMachineCallback STOP_REASON_* and ERROR_* codes, for logs and the UI. */
+/** Names of VirtualMachineCallback STOP_REASON_* codes, for logs and the UI. */
 object AvfReasons {
     const val STOP_REASON_KILLED = 1
     const val STOP_REASON_SHUTDOWN = 3

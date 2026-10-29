@@ -58,8 +58,7 @@ talks to an agent the way the app does (`pocketnix agent -h`).
 
 `ControlActivity` takes intents over adb (it needs the `DUMP` permission,
 which the adb shell has). Send scripted actions there, never to
-`MainActivity`, whose launch intent Android replays when it restores the
-task.
+`MainActivity` (see `AGENTS.md`).
 
 The actions are `dev.nickolaj.pocketnix.action.START` and `STOP`, and in debug
 builds `DEBUG_TAB` (open and type into a tab), `DEBUG_DUMP` (dump tabs to
@@ -67,12 +66,9 @@ logcat) and `DEBUG_LAUNCH` (launch a GUI app). Their extras are the `EXTRA_*`
 constants in `ControlActivity`; `start` reads `START`'s and gates the
 debug-only ones on `BuildConfig.DEBUG`.
 
-With the phone locked, an activity started over adb is never laid out, and
-logcat is the only way to see the app; the debug actions exist for that.
-
 ## Permissions by hand
 
-`provision` grants these, per Android user; uninstalling loses them:
+`provision` grants these:
 
 ```bash
 adb shell pm grant dev.nickolaj.pocketnix.debug android.permission.MANAGE_VIRTUAL_MACHINE

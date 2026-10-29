@@ -54,7 +54,7 @@ class ControlChannel(
     val wake: StateFlow<Wake?> = _wake.asStateFlow()
 
     private val _events = MutableSharedFlow<JSONObject>(extraBufferCapacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
-    /** The agent's other pushes: a guest's notify, open and guest-clipboard (go/internal/protocol/integrations.go). */
+    /** The agent's other pushes (go/internal/protocol/integrations.go). */
     val events: SharedFlow<JSONObject> = _events.asSharedFlow()
 
     private var job: Job? = null
@@ -117,7 +117,7 @@ class ControlChannel(
                     }
                 }
                 delay(backoff)
-                // An agent that hasn't come in two minutes isn't booting: stop asking virtmgr every 2 s.
+                // An agent that hasn't come in [SLOW_AFTER_MS] isn't booting: stop asking virtmgr so often.
                 val cap = if (System.currentTimeMillis() - downSince > SLOW_AFTER_MS) MAX_SLOW_BACKOFF_MS else MAX_BACKOFF_MS
                 backoff = (backoff * 2).coerceAtMost(cap)
             }

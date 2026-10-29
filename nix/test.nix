@@ -10,7 +10,6 @@
   # The builder's binary cache; a test-only key.
   cacheSecret = pkgs.writeText "cache.sec" "pocketnix-test-builder:cNCiLJRJKtj/NYr6HKMIB0f0JS0K51uY8Boefn15NtUdEVxl8P73M2yibOJqDDCQxM7dSd+4OSUHzjzwmf6O5A==";
   cachePublic = "pocketnix-test-builder:HRFcZfD+9zNsomziagwwkMTO3UnfuDklB8488Jn+juQ=";
-  # The published path is https only: a self-signed certificate for the builder's address, trusted by the phone.
   # Calls the FileChooser backend as xdg-desktop-portal would, as the user.
   portalCall = pkgs.writeShellScript "portal-call" ''
     exec ${pkgs.util-linux}/bin/runuser -u nixos -- ${pkgs.coreutils}/bin/env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
@@ -24,6 +23,7 @@
     exec ${pkgs.systemd}/bin/systemd-run --unit="$unit" -p User=nixos -E PATH=/run/current-system/sw/bin \
       ${pkgs.bash}/bin/sh -c '"$@" > /tmp/'"$unit"'.out; echo $? > /tmp/'"$unit"'.status' sh "$@"
   '';
+  # The published path is https only: a self-signed certificate for the builder's address, trusted by the phone.
   tlsFor = ip:
     pkgs.runCommand "pocketnix-test-tls" {nativeBuildInputs = [pkgs.openssl];} ''
       mkdir $out
@@ -166,7 +166,7 @@ in
       import time
       import urllib.parse
 
-      # Absolute: the systemd-run unit below doesn't get the system PATH.
+      # Absolute: systemd-run units don't get the system PATH.
       A = "${cli}/bin/pocketnix agent --connect tcp:${nodes.phone.networking.primaryIPAddress}:9100"
 
       start_all()

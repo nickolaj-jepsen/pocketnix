@@ -137,7 +137,7 @@ class Launches(private val send: (ByteArray) -> Unit, private val newId: () -> S
 /** What a launch's splash says, and whether it ended without a window. */
 data class SplashStatus(val text: String, val failed: Boolean = false, val canRetry: Boolean = false)
 
-/** Why app-list entry [name] can't launch any more, on its splash and its disabled pins. */
+/** Why app-list entry [name] can't launch any more. */
 fun appGone(name: String): String = "$name is no longer installed in the guest."
 
 /**

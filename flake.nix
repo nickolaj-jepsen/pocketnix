@@ -30,7 +30,6 @@
     apps = forAll (pkgs: let
       own = self.packages.${pkgs.stdenv.hostPlatform.system};
     in {
-      # `nix run .#provision -- <flags>` is `pocketnix provision <flags>`.
       provision = {
         type = "app";
         program = "${pkgs.writeShellScript "provision" ''exec ${own.pocketnix-cli}/bin/pocketnix provision "$@"''}";

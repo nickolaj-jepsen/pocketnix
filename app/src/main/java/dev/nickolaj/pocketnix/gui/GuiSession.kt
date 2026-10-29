@@ -621,7 +621,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
     internal fun fitScale(id: Int, width: Int, height: Int, density: Float): Float {
         val t = synchronized(lock) { state.windows[id]?.toplevel }
         val factor = appSettings.of(appKey(t)).size.factor
-        // Without it (a compositor from before step 3) the minimum's scale is a guess that can be stale: no fit.
+        // A compositor that sends no scale leaves the minimum's scale a guess that can be stale: no fit.
         val at = t?.scale ?: 0f
         return WindowFit.scale(
             density, factor, width, height,
