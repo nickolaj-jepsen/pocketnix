@@ -1,0 +1,3 @@
+# `git config blame.ignoreRevsFile .git-blame-ignore-revs` skips these in blame.
+# style(app): ktlint
+f529e3f316e4965a94ab4ae119b3856c997a079f

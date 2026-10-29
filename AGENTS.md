@@ -15,8 +15,9 @@ in `docs/development.md`.
 ## Working rules
 
 - CI builds the flake's checks, per system (`.github/workflows/ci.yml`); `nix flake check` runs them all.
-- Run `nix fmt .` before committing Nix; Go is gofmt'ed. The compositor isn't
-  rustfmt'ed, so don't reformat it wholesale.
+- Run `nix fmt` before committing: it formats Nix, Go and Kotlin (`nix/treefmt.nix`;
+  ktlint's rules are in `.editorconfig`). The compositor isn't rustfmt'ed, so
+  don't reformat it wholesale.
 - Never build anything inside a guest: an unthrottled build pegs the whole phone.
 - Uninstalling the app, clearing its data or `provision --replace` deletes
   the VM's disk: never do it to a phone's working VM without asking.
@@ -145,7 +146,6 @@ Copies of code in docs and tests have drifted here repeatedly; keep one source.
   order: in NixOS tests, connect by IP.
 - Android creates content providers before `Application.onCreate`: anything the
   provision provider reaches must not depend on onCreate having run.
-- `nix fmt` with no path formats stdin; pass `.`.
 - Any change under `go/`, tests included, rebuilds the aarch64 agent under
   binfmt and so the whole example image: budget ~15 minutes.
 - The Nix-built QEMU breaks if the shell leaks an `LD_LIBRARY_PATH` from a

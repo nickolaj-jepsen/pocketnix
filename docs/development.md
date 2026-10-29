@@ -25,7 +25,7 @@ After changing `go/go.mod`, update `vendorHash` in `nix/go.nix`.
 nix flake check                       # every check for this system (avf-boot on x86_64 needs aarch64 builds)
 go -C go vet ./... && go -C go test ./...
 ./gradlew testDebugUnitTest
-nix fmt .                             # alejandra; Go code is gofmt'ed
+nix fmt                               # Nix, Go and Kotlin (nix/treefmt.nix)
 ```
 
 The checks are `checks` in `flake.nix`; each VM test's file under `nix/`

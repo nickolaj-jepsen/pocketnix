@@ -69,11 +69,7 @@
         # Their checkPhases run the Go and cargo tests.
         inherit (own) pocketnix pocketnix-compositor;
         avf-boot = pkgs.callPackage ./nix/avf-boot-test.nix {image = own.example-image;};
-        format = pkgs.runCommand "pocketnix-format" {nativeBuildInputs = [pkgs.alejandra pkgs.go];} ''
-          alejandra --check ${self}
-          test -z "$(gofmt -l ${self}/go)"
-          touch $out
-        '';
+        format = (import ./nix/treefmt.nix {inherit pkgs;}).check self;
       }))
       {
         x86_64-linux.agent = import ./nix/test.nix {
@@ -97,6 +93,6 @@
       };
     };
 
-    formatter = forAll (pkgs: pkgs.alejandra);
+    formatter = forAll (pkgs: import ./nix/treefmt.nix {inherit pkgs;});
   };
 }
