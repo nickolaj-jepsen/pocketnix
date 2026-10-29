@@ -21,14 +21,14 @@ phone.
 
 commands:
   dump [--tab <id>] [--lines <n>]
-        the VM's state, each tab's last lines (40) and the GUI windows
+        the VM's state, each tab's last lines and the GUI windows
   tab [--profile <name>] [--timeout <dur>] [--no-enter] [<text>]
         open a terminal tab once the agent is up (60s), type <text> and
         Enter into it, and print its id
   type --tab <id> [--no-enter] <text>
         type <text> and Enter into an open tab
   wait --tab <id> [--timeout <dur>] [--lines <n>] <regexp>
-        poll the tab's last lines (40) until <regexp> matches one of them,
+        poll the tab's last lines until <regexp> matches one of them,
         then print them; exit 1 if it doesn't within the timeout (30s)
 
 global flags:

@@ -21,12 +21,12 @@ import kotlin.concurrent.thread
  * control` wraps them.
  *
  * - `content read --uri content://<package>.control/dump[?tab=<id>&lines=<n>]`:
- *   the VM's state, the last `lines` (40) of every tab's transcript (or one
+ *   the VM's state, the last `lines` ([DUMP_LINES]) of every tab's transcript (or one
  *   tab's) and the GUI windows, as text; `error: <message>` when it can't
  * - `content call --uri content://<package>.control --method tab [--arg <profile>]
  *   [--extra input:s:<text>] [--extra enter:b:true] [--extra timeoutMs:l:<ms>]`:
- *   opens a terminal tab once the agent is up (60 s), types `input` and,
- *   with `enter`, Enter into it, and answers its id as `tab`
+ *   opens a terminal tab once the agent is up (`timeoutMs`, [TAB_TIMEOUT_MS]),
+ *   types `input` and, with `enter`, Enter into it, and answers its id as `tab`
  * - `--method type --arg <tab id> --extra input:s:<text> [--extra enter:b:true]`:
  *   types into an open tab
  *

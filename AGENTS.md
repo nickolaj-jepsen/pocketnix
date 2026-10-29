@@ -129,6 +129,8 @@ Copies of code in docs and tests have drifted here repeatedly; keep one source.
 - logind grants `/dev/snd` only to sessions on a seat; the console on hvc0,
   tabs and the lingering user manager (PipeWire's) have none, so without the
   `audio` group PipeWire sees no card and only root can play.
+- crosvm hands AAudio S32LE as 24-bit packed, so every sample misaligns into
+  static: the module pins virtio_snd to S16LE.
 
 ## Traps (verified on the desktop)
 

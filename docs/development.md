@@ -61,10 +61,12 @@ which the adb shell has). Send scripted actions there, never to
 `MainActivity` (see `AGENTS.md`).
 
 The actions are `dev.nickolaj.pocketnix.action.START` and `STOP`, and in debug
-builds `DEBUG_TAB` (open and type into a tab), `DEBUG_DUMP` (dump tabs to
-logcat) and `DEBUG_LAUNCH` (launch a GUI app). Their extras are the `EXTRA_*`
+builds `DEBUG_LAUNCH` (launch a GUI app). Their extras are the `EXTRA_*`
 constants in `ControlActivity`; `start` reads `START`'s and gates the
 debug-only ones on `BuildConfig.DEBUG`.
+
+In debug builds, `pocketnix control` opens tabs, types into them and reads
+them back (`pocketnix control -h`; `.agents/skills/pocketnix-control/SKILL.md`).
 
 ## Permissions by hand
 

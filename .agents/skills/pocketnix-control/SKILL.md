@@ -10,9 +10,8 @@ only the adb shell may call. `pocketnix control` wraps it. Nothing needs the
 screen, so all of this works with the phone locked, where activities never
 lay out and the UI shows you nothing.
 
-Before touching the test phone, reread "The test phone" in `AGENTS.md`: its
-debug app holds the real phone-vm. Don't open tabs or type there unless the
-user asked for it.
+A phone's debug app may hold a working VM: don't open tabs or type there
+unless the user asked for it.
 
 ## Running it
 
@@ -29,10 +28,10 @@ attached (`adb devices`). `pocketnix control -h` lists the commands.
 
 | command | does |
 |---|---|
-| `dump [--tab <id>] [--lines <n>]` | Prints the VM state (`state=… link=… host=…`), then each tab as `tab <id> <kind> '<title>' running=<bool>` followed by its last lines (40) as `\|<id>\| <line>`, then `gui …` lines for the GUI connection and each window. `--tab` limits it to one tab and leaves out the GUI. |
-| `tab [--profile <name>] [--timeout 60s] [<text>]` | Waits for the agent, opens a terminal tab, types `<text>` and Enter, and prints the new tab's id. |
+| `dump [--tab <id>] [--lines <n>]` | Prints the VM state (`state=… link=… host=…`), then each tab as `tab <id> <kind> '<title>' running=<bool>` followed by its last lines as `\|<id>\| <line>`, then `gui …` lines for the GUI connection and each window. `--tab` limits it to one tab and leaves out the GUI. |
+| `tab [--profile <name>] [--timeout <dur>] [<text>]` | Waits for the agent, opens a terminal tab, types `<text>` and Enter, and prints the new tab's id. |
 | `type --tab <id> <text>` | Types `<text>` and Enter into an open tab. |
-| `wait --tab <id> [--timeout 30s] [--lines <n>] <regexp>` | Polls the tab until one of its transcript lines matches, then prints the tab's dump. Exits 1 with the last dump if nothing matches in time. |
+| `wait --tab <id> [--timeout <dur>] [--lines <n>] <regexp>` | Polls the tab until one of its transcript lines matches, then prints the tab's dump. Exits 1 with the last dump if nothing matches in time. |
 
 `tab` and `type` take `--no-enter` to type without pressing Enter. Tab 0 is
 the hvc0 console: it always exists and shows boot and login output.

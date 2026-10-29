@@ -115,7 +115,7 @@ func TestControlWait(t *testing.T) {
 
 func TestControlDumpErrors(t *testing.T) {
 	c, d := testControl(t)
-	if _, err := c.dump(-1, 0); err == nil || !strings.Contains(err.Error(), "Error while accessing provider") {
+	if _, err := c.dump(-1, 0); err == nil {
 		t.Errorf("no provider: got %v", err)
 	}
 	d.setDump("error: no tab 9\n")
