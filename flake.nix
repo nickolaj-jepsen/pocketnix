@@ -76,6 +76,16 @@
     # For the desktop the guests update from (`pocketnix.guest.updates.buildHost`).
     nixosModules.buildHost = ./nix/build-host.nix;
 
+    templates.default = {
+      path = ./templates/default;
+      description = "A pocketnix guest";
+      welcomeText = ''
+        A pocketnix guest, `nixosConfigurations.phone`. Rename the user and
+        the host in `configuration.nix`, then follow docs/getting-started.md
+        at https://github.com/nickolaj-jepsen/pocketnix.
+      '';
+    };
+
     nixosConfigurations.example = nixpkgs.lib.nixosSystem {
       modules = [
         self.nixosModules.default
@@ -93,6 +103,16 @@
         compositor = pkgs.callPackage ./nix/compositor.nix {withTests = true;};
         avf-boot = pkgs.callPackage ./nix/avf-boot-test.nix {image = own.example-image;};
         format = (import ./nix/treefmt.nix {inherit pkgs;}).check self;
+        # Evaluates the template against this checkout without building it: its systems' drv paths.
+        template = let
+          template = (import ./templates/default/flake.nix).outputs {
+            inherit nixpkgs;
+            pocketnix = self;
+          };
+        in
+          pkgs.writeText "pocketnix-template" (builtins.unsafeDiscardStringContext (toString (
+            map (c: c.config.system.build.toplevel.drvPath) (builtins.attrValues template.nixosConfigurations)
+          )));
       }))
       {
         x86_64-linux.agent = import ./nix/test.nix {

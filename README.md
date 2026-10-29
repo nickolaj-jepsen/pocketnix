@@ -36,32 +36,13 @@ flowchart LR
 
 ## Quick start
 
-```nix
-# flake.nix
-{
-  inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
-  inputs.pocketnix.url = "github:nickolaj-jepsen/pocketnix";
-
-  outputs = {nixpkgs, pocketnix, ...}: {
-    nixosConfigurations.phone = nixpkgs.lib.nixosSystem {
-      modules = [
-        pocketnix.nixosModules.default
-        {
-          nixpkgs.hostPlatform = "aarch64-linux";
-          pocketnix.guest.enable = true;
-          system.stateVersion = "26.05";
-        }
-      ];
-    };
-  };
-}
-```
-
 ```bash
+nix flake init -t github:nickolaj-jepsen/pocketnix
 nix run github:nickolaj-jepsen/pocketnix#provision -- --image .#nixosConfigurations.phone
 ```
 
-`provision` installs the release APK of its own version, or one you built
+The template ([`templates/default`](templates/default)) is a guest named
+`phone` with a user and ssh through a port forward. `provision` installs the release APK of its own version, or one you built
 (`--debug --apk ...`). [Getting started](docs/getting-started.md) covers
 building it, the requirements, ssh access and the first boot.
 

@@ -14,26 +14,15 @@
 
 ## 1. Describe the guest
 
-Add the module to an `aarch64-linux` NixOS configuration. A useful start, with
-ssh through a port forward:
+Add the module to an `aarch64-linux` NixOS configuration, or start a flake
+from the template:
 
-```nix
-{pkgs, ...}: {
-  pocketnix.guest = {
-    enable = true;
-    user = "alice"; # terminal tabs and the console log in as this user
-    forwards.ssh = {guestPort = 22; hostPort = 2022;};
-  };
-
-  users.users.alice = {isNormalUser = true; extraGroups = ["wheel"];};
-  security.sudo.wheelNeedsPassword = false;
-  services.openssh = {enable = true; settings.PasswordAuthentication = false;};
-
-  networking.hostName = "phone";
-  system.stateVersion = "26.05";
-}
+```bash
+nix flake init -t github:nickolaj-jepsen/pocketnix
 ```
 
+Its [`configuration.nix`](../templates/default/configuration.nix) is a useful
+start, with ssh through a port forward; rename its user and host.
 [`example/configuration.nix`](../example/configuration.nix) is a fuller one,
 and [Configuration](configuration.md) covers the rest.
 
