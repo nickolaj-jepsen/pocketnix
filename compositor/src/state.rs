@@ -199,6 +199,11 @@ pub struct State {
     /// Frame callbacks sent to the app with a commit, per window id, with
     /// the seq the app must present before they fire.
     pub held: HashMap<u32, Vec<(u32, smithay::reexports::wayland_server::protocol::wl_callback::WlCallback)>>,
+    /// Per window id, the groups sent and not yet presented, oldest first:
+    /// the last seq of each, and its bytes on the wire.
+    pub unpresented: HashMap<u32, std::collections::VecDeque<(u32, usize)>>,
+    /// See `flush::FRAMES_IN_FLIGHT`.
+    pub frames_in_flight: usize,
     /// Surfaces that committed frame callbacks not yet sent or fired.
     pub cb_surfaces: Vec<WlSurface>,
     /// The integer wl_output scale each client was last sent.
@@ -316,6 +321,8 @@ impl State {
             initial_scales: HashMap::new(),
             layouts: HashMap::new(),
             held: HashMap::new(),
+            unpresented: HashMap::new(),
+            frames_in_flight: crate::flush::FRAMES_IN_FLIGHT,
             cb_surfaces: Vec::new(),
             client_scales: HashMap::new(),
             grabs: Vec::new(),

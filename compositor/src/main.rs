@@ -52,13 +52,14 @@ use crate::state::ClientState;
 use crate::state::State;
 
 const USAGE: &str =
-    "usage: pocketnix-compositor [--gui-socket PATH] [--wayland-display NAME] [--stats-socket PATH] [--log-hashes]";
+    "usage: pocketnix-compositor [--gui-socket PATH] [--wayland-display NAME] [--stats-socket PATH] [--frames-in-flight N] [--log-hashes]";
 
 struct Args {
     gui_socket: Option<PathBuf>,
     stats_socket: Option<PathBuf>,
     wayland_display: String,
     log_hashes: bool,
+    frames_in_flight: usize,
 }
 
 fn parse_args() -> Result<Args> {
@@ -67,6 +68,7 @@ fn parse_args() -> Result<Args> {
         stats_socket: None,
         wayland_display: "wayland-0".into(),
         log_hashes: std::env::var("POCKETNIX_COMPOSITOR_LOG_HASHES").is_ok_and(|v| v == "1"),
+        frames_in_flight: flush::FRAMES_IN_FLIGHT,
     };
     let mut it = std::env::args_os().skip(1);
     while let Some(arg) = it.next() {
@@ -80,6 +82,13 @@ fn parse_args() -> Result<Args> {
                     .map_err(|_| anyhow::anyhow!("--wayland-display must be UTF-8"))?
             }
             Some("--log-hashes") => args.log_hashes = true,
+            Some("--frames-in-flight") => {
+                args.frames_in_flight = value("--frames-in-flight")?
+                    .to_str()
+                    .and_then(|v| v.parse().ok())
+                    .filter(|n| *n >= 1)
+                    .with_context(|| format!("--frames-in-flight must be a whole number from 1\n{USAGE}"))?
+            }
             Some("--help" | "-h") => {
                 println!("{USAGE}");
                 std::process::exit(0);
@@ -215,6 +224,7 @@ fn main() -> Result<()> {
         }
     })?;
     let mut state = State::new(&dh, event_loop.handle(), gui, channels)?;
+    state.frames_in_flight = args.frames_in_flight;
 
     insert(&event_loop, Generic::new(sighup, Interest::READ, Mode::Level), |_, fd, state: &mut State| {
         if watch::drain(&**fd) {

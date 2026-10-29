@@ -344,16 +344,19 @@ a buffer that's two or three commits behind.
 ## Frame pacing
 
 - Clients draw at Android's pace: the compositor fires a surface's
-  `wl_surface.frame` callbacks only when the app reports that a commit
-  requesting them has been shown.
+  `wl_surface.frame` callbacks by what the app reports shown. It may fire a
+  commit's callbacks before that commit is shown, keeping a few of a
+  window's groups on their way to the screen so that no stage waits on the
+  others, and fewer when they're large, since those only queue in the
+  transport. The compositor's `callback_wait` holds the rule.
 - Every Wayland commit that requested a frame callback produces a COMMIT,
   even when nothing visible changed, so the app has something to acknowledge.
 - **PRESENTED (`0x10`)**, `[window u32][seq u32]`: the app's commits for
   `window` up to `seq` are on screen. The app sends it once the transaction
   carrying a group has been committed by SurfaceFlinger. A group with nothing
   to show is acknowledged at the next Choreographer frame. The compositor then
-  fires the callbacks of every commit in that window with a `seq` up to that
-  number, its dialogs' included.
+  fires the callbacks that wait on that window's commits up to that number,
+  its dialogs' included.
 - For a window the app isn't showing (`visible: false`, not yet open, or
   closed but still mapped), the app still applies commits but sends no
   PRESENTED. The compositor holds that window's callbacks and tells the client
@@ -908,7 +911,7 @@ directory, `$XDG_RUNTIME_DIR` (`/run/user/<uid>`).
 
 - Crate `compositor/`, binary `pocketnix-compositor`. wprs's Apache-2.0
   `LICENSE` and `NOTICE` stay in the crate.
-- `pocketnix-compositor [--gui-socket PATH] [--wayland-display NAME] [--log-hashes]`
+- `pocketnix-compositor [--gui-socket PATH] [--wayland-display NAME] [--stats-socket PATH] [--frames-in-flight N] [--log-hashes]`
 - Sockets: it takes listening `AF_UNIX` stream sockets from systemd socket
   activation (`LISTEN_PID`, `LISTEN_FDS`, `LISTEN_FDNAMES`): the one named
   `gui` is the GUI socket, `wayland` the Wayland socket. It unsets the

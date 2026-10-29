@@ -4,6 +4,7 @@
 //! blank slate, which is its replay.
 
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -54,6 +55,39 @@ pub struct Layer {
     pub size: Size<i32, Logical>,
     pub mapped: bool,
     pub input: Option<RegionAttributes>,
+}
+
+/// The most unpresented groups remembered per window.
+const MAX_UNPRESENTED: usize = 64;
+
+/// How many of a visible window's groups may be on their way to the screen
+/// while its clients draw the next frame, unless `--frames-in-flight` says.
+pub const FRAMES_IN_FLIGHT: usize = 3;
+
+/// How many bytes of groups older than a window's newest may be on their
+/// way to the screen while its clients draw the next frame: past that, more
+/// frames only queue in the transport and show later.
+const IN_FLIGHT_BYTES: usize = 1 << 20;
+
+/// The seq the app must present before the callbacks of a window's newest
+/// group fire, or None to fire them now. `unpresented` holds the window's
+/// unpresented groups, oldest first, newest included: each one's last seq
+/// and its bytes on the wire. At most `frames_in_flight` of them stay
+/// unpresented when the callbacks fire, and those older than the newest
+/// hold at most IN_FLIGHT_BYTES.
+fn callback_wait(unpresented: &VecDeque<(u32, usize)>, frames_in_flight: usize) -> Option<u32> {
+    let n = unpresented.len();
+    let (mut stay, mut ahead) = (0, 0);
+    while stay + 1 < frames_in_flight && stay < n {
+        if stay > 0 {
+            ahead += unpresented[n - 1 - stay].1;
+            if ahead > IN_FLIGHT_BYTES {
+                break;
+            }
+        }
+        stay += 1;
+    }
+    n.checked_sub(stay + 1).map(|i| unpresented[i].0)
 }
 
 fn to_px(v: i32, scale: f64) -> i32 {
@@ -151,6 +185,7 @@ impl State {
         // Nothing will present an unmapped window.
         let time = self.time_ms();
         for window in gone_windows {
+            self.unpresented.remove(&window);
             for (_, cb) in self.held.remove(&window).unwrap_or_default() {
                 cb.done(time);
             }
@@ -347,6 +382,7 @@ impl State {
         }
         let last = group.len() - 1;
         let mut seq = 0;
+        let mut sent = 0;
         for (i, (mut commit, data, hash)) in group.into_iter().enumerate() {
             seq = conn.next_seq();
             commit.seq = seq;
@@ -360,15 +396,33 @@ impl State {
                 );
             }
             for frame in commit.encode(&data) {
-                stats.add("bytesSent", frame.len() as u64);
+                sent += frame.len();
                 conn.send(frame);
             }
         }
+        stats.add("bytesSent", sent as u64);
         stats.add("groupsSent", 1);
         stats.sent(window, seq);
         stats.record("groupBuild", start.elapsed());
-        if !callbacks.is_empty() {
-            self.held.entry(window).or_default().extend(callbacks.into_iter().map(|cb| (seq, cb)));
+        let unpresented = self.unpresented.entry(window).or_default();
+        unpresented.push_back((seq, sent));
+        if unpresented.len() > MAX_UNPRESENTED {
+            unpresented.pop_front();
+        }
+        if callbacks.is_empty() {
+            return;
+        }
+        // A window the app doesn't show gets no PRESENTED: its callbacks wait for one.
+        let visible = self.windows.get(&window).is_some_and(|c| c.visible);
+        match callback_wait(unpresented, if visible { self.frames_in_flight } else { 1 }) {
+            Some(wait) => {
+                self.held.entry(window).or_default().extend(callbacks.into_iter().map(|cb| (wait, cb)));
+            }
+            None => {
+                let time = self.time_ms();
+                self.stats.add("callbacksFired", callbacks.len() as u64);
+                callbacks.into_iter().for_each(|cb| cb.done(time));
+            }
         }
     }
 
@@ -551,4 +605,32 @@ fn build_commit(
     s.sent = Some(Sent { content: Some(content), placement });
     s.sent_gen = generation;
     Some((commit, data, content_hash))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn groups(g: &[(u32, usize)]) -> VecDeque<(u32, usize)> {
+        g.iter().copied().collect()
+    }
+
+    #[test]
+    fn one_in_flight_waits_for_the_newest_group() {
+        assert_eq!(callback_wait(&groups(&[(4, 100)]), 1), Some(4));
+    }
+
+    #[test]
+    fn small_groups_keep_frames_in_flight() {
+        assert_eq!(callback_wait(&groups(&[(4, 100)]), 3), None);
+        assert_eq!(callback_wait(&groups(&[(4, 100), (5, 100)]), 3), None);
+        assert_eq!(callback_wait(&groups(&[(4, 100), (5, 100), (6, 100)]), 3), Some(4));
+    }
+
+    #[test]
+    fn large_older_groups_shorten_the_pipeline() {
+        let big = 8 << 20;
+        assert_eq!(callback_wait(&groups(&[(4, big), (5, big)]), 3), Some(4));
+        assert_eq!(callback_wait(&groups(&[(4, 100), (5, big)]), 3), None);
+    }
 }

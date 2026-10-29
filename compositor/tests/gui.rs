@@ -753,6 +753,10 @@ fn a_client_window_reaches_the_app_with_matching_pixels() {
         "focused": true, "visible": true, "maximized": false, "fullscreen": false}));
     client.dispatch_until("the window's configure", |s| s.size == (300, 200) && s.keyboard_focus);
     assert!(client.state.states.contains(&(xdg_toplevel::State::Activated as u32)));
+
+    // A window the app shows keeps frames in flight: this callback needs no PRESENTED.
+    client.draw(&scrolled, [0, 0, 0, 0], true);
+    client.dispatch_until("a frame callback in flight", |s| s.frames == 2);
     app.send_binary(0x20, &[&window.to_be_bytes(), &100f32.to_be_bytes(), &50f32.to_be_bytes()]);
     app.send_binary(
         0x21,

@@ -561,6 +561,7 @@ impl State {
         info!("app connected");
 
         // Callbacks sent on the old connection wait for the replay instead.
+        self.unpresented.clear();
         for (window, held) in std::mem::take(&mut self.held) {
             let Some(toplevel) = self.toplevel_by_id(window) else {
                 let time = self.time_ms();
@@ -700,6 +701,11 @@ impl State {
         let time = self.time_ms();
         self.stats.presented(window, seq);
         let mut fired = 0;
+        if let Some(unpresented) = self.unpresented.get_mut(&window) {
+            while unpresented.front().is_some_and(|(s, _)| *s <= seq) {
+                unpresented.pop_front();
+            }
+        }
         if let Some(held) = self.held.get_mut(&window) {
             held.retain(|(s, cb)| {
                 if *s <= seq {
