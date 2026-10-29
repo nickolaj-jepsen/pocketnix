@@ -413,17 +413,18 @@ class Vm(private val app: Context) {
     val config: StateFlow<GuestConfig?> get() = control.config
 
     /** Debug builds, over adb: opens a tab once the agent is up and types [input] into it; returns its id. */
-    suspend fun debugOpenTab(profile: String?, input: String?): Int = withContext(Dispatchers.Main) {
+    suspend fun debugOpenTab(profile: String?, input: String, enter: Boolean): Int = withContext(Dispatchers.Main) {
         control.link.first { it is ControlChannel.Link.Up }
         val tab = openTab(profile?.takeIf { it.isNotEmpty() }) ?: error("the VM stopped")
-        debugType(tab.id, input)
+        debugType(tab.id, input, enter)
         tab.id
     }
 
-    /** Debug builds, over adb, on the main thread: types [input] into tab [id], a literal `\r` as Enter. */
-    fun debugType(id: Int, input: String?) {
+    /** Debug builds, over adb, on the main thread: types [input] into tab [id], then Enter if [enter]. */
+    fun debugType(id: Int, input: String, enter: Boolean) {
         val tab = tabs.all().firstOrNull { it.id == id } ?: error("no tab $id")
-        if (!input.isNullOrEmpty()) tab.session.write(input.replace("\\r", "\r"))
+        val text = if (enter) "$input\r" else input
+        if (text.isNotEmpty()) tab.session.write(text)
     }
 
     /**

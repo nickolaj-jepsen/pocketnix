@@ -39,20 +39,28 @@ the hvc0 console: it always exists and shows boot and login output.
 
 ## Running a command and reading its result
 
+A tab runs the guest user's login shell, which may not be sh (phone-vm's is
+fish, which rejects `$((…))` and `$?`). Wrap commands in `sh -c '…'`
+so they mean the same everywhere.
+
 The typed command line stays in the transcript, so a pattern that also
 matches the command would match right away. Wait for a marker that only the
 output contains, built by the shell:
 
 ```bash
 id=$(go -C go run ./cmd/pocketnix control tab)
-go -C go run ./cmd/pocketnix control type --tab "$id" 'systemctl is-system-running; echo "done-$((40+2))"'
-go -C go run ./cmd/pocketnix control wait --tab "$id" --lines 80 '^done-42$'
+go -C go run ./cmd/pocketnix control type --tab "$id" "sh -c 'systemctl is-system-running; echo status-\$?'"
+go -C go run ./cmd/pocketnix control wait --tab "$id" --lines 80 '^status-[0-9]+$'
 ```
 
-`wait` prints the transcript. The lines just above the marker are the
-output. For long output, raise `--lines`, or redirect it to a file in the
-guest and `cat` just the part you need. Check an exit status the same way:
-`cmd; echo "status-$?"`.
+Here the command line shows `status-$?` and only the output shows
+`status-0`. `wait` prints the transcript, and the lines just above the
+marker are the output. For long output, raise `--lines`, or redirect it to a
+file in the guest and `cat` just the part you need.
+
+Typing goes into whatever is on the shell's command line. fish keeps a
+command it rejected there, and `--no-enter` leaves text behind, so the next
+`type` adds to it. When a tab's line is in an unknown state, open a new tab.
 
 ## Reading the state
 
@@ -68,14 +76,16 @@ guest and `cat` just the part you need. Check an exit status the same way:
 
 The provider can also be called directly. `adb shell` runs its arguments
 through the phone's shell again, so quote the whole command and quote the
-values inside it once more. In `--extra` values, escape every `:` as `\:`,
-since `content` splits bindings at unescaped colons. A literal `\r` in
-`input` is Enter.
+values inside it once more. `content` reads a backslash in an `--extra`
+value as escaping the next character, and splits the binding at unescaped
+colons, so the text goes over with `\\` for each backslash and `\:` for each
+colon. `input` is typed exactly as it arrives, and `enter:b:true` presses
+Enter after it.
 
 ```bash
 adb shell "content read --uri 'content://dev.nickolaj.pocketnix.debug.control/dump?tab=1&lines=80'"
-adb shell "content call --uri content://dev.nickolaj.pocketnix.debug.control --method tab --extra 'input:s:uname -a\r'"
-adb shell "content call --uri content://dev.nickolaj.pocketnix.debug.control --method type --arg 1 --extra 'input:s:ls\r'"
+adb shell "content call --uri content://dev.nickolaj.pocketnix.debug.control --method tab --extra 'input:s:uname -a' --extra enter:b:true"
+adb shell "content call --uri content://dev.nickolaj.pocketnix.debug.control --method type --arg 1 --extra 'input:s:date +%H\:%M' --extra enter:b:true"
 ```
 
 A call answers `Result: Bundle[{…}]`, carrying an `error` key when it failed.

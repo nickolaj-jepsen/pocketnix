@@ -12,8 +12,9 @@ import (
 )
 
 // fakeControl is the app's ControlProvider: `content read` of the dump
-// answers the state's control-dump file, and `type` appends its input to
-// control-typed, decoded as `content` decodes a binding.
+// answers the state's control-dump file, and `type` appends its input, and
+// "<enter>" for Enter, to control-typed. Values are decoded as the phone's
+// `content` does: a backslash escapes the next character.
 func fakeControl(state, line string) (string, int) {
 	w := shellWords(line)
 	switch {
@@ -24,25 +25,40 @@ func fakeControl(state, line string) (string, int) {
 		}
 		return string(b), 0
 	case len(w) >= 6 && w[0] == "content" && w[1] == "call" && w[5] == "type":
+		typed := ""
 		for i, a := range w {
-			if v, ok := strings.CutPrefix(a, "input:s:"); ok && w[i-1] == "--extra" {
-				f, _ := os.OpenFile(filepath.Join(state, "control-typed"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-				f.WriteString(strings.ReplaceAll(v, `\:`, ":") + "\n")
-				f.Close()
+			if i == 0 || w[i-1] != "--extra" {
+				continue
+			}
+			if v, ok := strings.CutPrefix(a, "input:s:"); ok {
+				typed += contentEscape.ReplaceAllString(v, "$1")
+			}
+			if a == "enter:b:true" {
+				typed += "<enter>"
 			}
 		}
+		f, _ := os.OpenFile(filepath.Join(state, "control-typed"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		f.WriteString(typed + "\n")
+		f.Close()
 		return "Result: Bundle[{ok=true}]\n", 0
 	}
 	return "fake adb: unknown control command " + line, 127
 }
 
+var contentEscape = regexp.MustCompile(`\\(.)`)
+
 // shellWords splits a command line the way sh does for adb.ShellQuote's quoting.
 func shellWords(line string) []string {
 	var words []string
 	var cur strings.Builder
-	in, started := false, false
+	in, started, escaped := false, false, false
 	for _, r := range line {
 		switch {
+		case escaped:
+			cur.WriteRune(r)
+			escaped = false
+		case r == '\\' && !in:
+			escaped, started = true, true
 		case r == '\'':
 			in, started = !in, true
 		case r == ' ' && !in:
@@ -71,13 +87,16 @@ func (d *fakeDevice) setDump(s string) {
 	os.WriteFile(filepath.Join(d.state, "control-dump"), []byte(s), 0o644)
 }
 
-func TestControlTypeKeepsColons(t *testing.T) {
+func TestControlTypesTextVerbatim(t *testing.T) {
 	_, d := testControl(t)
-	if err := runControl([]string{"type", "--tab", "2", "echo", "a:b"}); err != nil {
+	if err := runControl([]string{"type", "--tab", "2", "printf", `'a:b\n'`}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runControl([]string{"type", "--tab", "2", "--no-enter", `C:\`}); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(filepath.Join(d.state, "control-typed"))
-	if got, want := string(b), "echo a:b\\r\n"; got != want {
+	if got, want := string(b), "printf 'a:b\\n'<enter>\nC:\\\n"; got != want {
 		t.Errorf("the app got input %q, want %q", got, want)
 	}
 }

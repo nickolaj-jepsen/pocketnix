@@ -24,13 +24,16 @@ import kotlin.concurrent.thread
  *   the VM's state, the last `lines` (40) of every tab's transcript (or one
  *   tab's) and the GUI windows, as text; `error: <message>` when it can't
  * - `content call --uri content://<package>.control --method tab [--arg <profile>]
- *   [--extra input:s:<text>] [--extra timeoutMs:l:<ms>]`: opens a terminal
- *   tab once the agent is up (60 s), types `input` into it, and answers its
- *   id as `tab`
- * - `--method type --arg <tab id> --extra input:s:<text>`: types into an open tab
+ *   [--extra input:s:<text>] [--extra enter:b:true] [--extra timeoutMs:l:<ms>]`:
+ *   opens a terminal tab once the agent is up (60 s), types `input` and,
+ *   with `enter`, Enter into it, and answers its id as `tab`
+ * - `--method type --arg <tab id> --extra input:s:<text> [--extra enter:b:true]`:
+ *   types into an open tab
  *
- * In `input`, a literal `\r` is Enter. A call's errors come back as an
- * `error` key.
+ * `content` takes a backslash in a value as escaping the next character, and
+ * splits at unescaped colons: send `\\` for each backslash in `input` and
+ * `\:` for each colon.
+ * A call's errors come back as an `error` key.
  */
 class ControlProvider : ContentProvider() {
     override fun onCreate() = true
@@ -42,15 +45,16 @@ class ControlProvider : ContentProvider() {
         try {
             if (!BuildConfig.DEBUG) error("debug builds only")
             val vm = context!!.vm
-            val input = extras?.getString("input")
+            val input = extras?.getString("input").orEmpty()
+            val enter = extras?.getBoolean("enter", false) ?: false
             when (method) {
                 "tab" -> {
                     val timeout = extras?.getLong("timeoutMs", TAB_TIMEOUT_MS) ?: TAB_TIMEOUT_MS
-                    val id = runBlocking { withTimeoutOrNull(timeout) { vm.debugOpenTab(arg, input) } }
+                    val id = runBlocking { withTimeoutOrNull(timeout) { vm.debugOpenTab(arg, input, enter) } }
                         ?: error("the agent wasn't up within $timeout ms")
                     out.putInt("tab", id)
                 }
-                "type" -> onMain { vm.debugType(tabId(arg ?: error("type needs a tab id")), input) }
+                "type" -> onMain { vm.debugType(tabId(arg ?: error("type needs a tab id")), input, enter) }
                 else -> error("unknown method $method")
             }
             out.putBoolean("ok", true)

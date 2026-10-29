@@ -75,7 +75,7 @@ func runControl(args []string) error {
 		}
 		extras := []string{"timeoutMs:l:" + strconv.FormatInt(timeout.Milliseconds(), 10)}
 		if text := strings.Join(sub.Args(), " "); text != "" {
-			extras = append(extras, inputExtra(text, !*noEnter))
+			extras = append(extras, inputExtras(text, !*noEnter)...)
 		}
 		res, err := c.call("tab", *profile, extras...)
 		if err != nil {
@@ -92,7 +92,7 @@ func runControl(args []string) error {
 			sub.Usage()
 			return errUsage
 		}
-		_, err := c.call("type", strconv.Itoa(*tab), inputExtra(strings.Join(sub.Args(), " "), !*noEnter))
+		_, err := c.call("type", strconv.Itoa(*tab), inputExtras(strings.Join(sub.Args(), " "), !*noEnter)...)
 		return err
 	case "wait":
 		tab := sub.Int("tab", -1, "")
@@ -131,13 +131,12 @@ func parseArgs(fs *flag.FlagSet, args []string, n int) error {
 	return nil
 }
 
-// inputExtra is the `input` extra typing text; `content` splits a binding
-// at every unescaped colon, so the text's own are escaped.
-func inputExtra(text string, enter bool) string {
-	if enter {
-		text += `\r`
-	}
-	return "input:s:" + strings.ReplaceAll(text, ":", `\:`)
+// inputExtras are the extras typing text and, if enter, Enter. `content`
+// takes a backslash as escaping the next character and splits a binding at
+// unescaped colons, so the text's backslashes and colons are escaped.
+func inputExtras(text string, enter bool) []string {
+	text = strings.NewReplacer(`\`, `\\`, ":", `\:`).Replace(text)
+	return []string{"input:s:" + text, "enter:b:" + strconv.FormatBool(enter)}
 }
 
 // control is the app's ControlProvider.
