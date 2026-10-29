@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+# Every job pushes what it builds to the pocketnix Cachix cache, so desktops
+# download the aarch64 builds instead of emulating them. Fork PRs have no
+# token and only read.
 jobs:
   x86_64:
     runs-on: ubuntu-latest
@@ -18,6 +21,10 @@ jobs:
       - uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: system-features = nixos-test benchmark big-parallel kvm
+      - uses: cachix/cachix-action@v16
+        with:
+          name: pocketnix
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
       # Every system's outputs evaluate, the aarch64 guest's included.
       - run: nix flake check --no-build --all-systems
       # checks.x86_64-linux.avf-boot needs an aarch64 builder; the aarch64 job runs it natively.
@@ -29,13 +36,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
-      - run: nix build -L .#checks.aarch64-linux.{go,compositor,avf-boot}
+      - uses: cachix/cachix-action@v16
+        with:
+          name: pocketnix
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      # The compositor package too: it's what GUI guests run, and desktops fetch it from the cache.
+      - run: nix build -L .#checks.aarch64-linux.{go,compositor,avf-boot} .#pocketnix-compositor
 
   android:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v16
+        with:
+          name: pocketnix
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          # The Android SDK is unfree: keep it out of a public cache.
+          pushFilter: android-sdk|androidsdk|androidenv
       # The JVM tests run against the real agent, compositor and foot; assembleRelease
       # (unsigned here) runs R8, whose rules only a release build exercises.
       - run: nix run .#gradle -- assembleDebug assembleRelease testDebugUnitTest lintDebug --console=plain
