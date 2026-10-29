@@ -94,7 +94,7 @@ data class XkbLayout(val layout: String, val variant: String = "") {
             "montenegrin_latin" to XkbLayout("me"),
             "dutch" to XkbLayout("nl"),
             "thai_kedmanee" to XkbLayout("th"),
-            "thai_pattachote" to XkbLayout("th", "pat"),
+            "thai_pattachote" to XkbLayout("th", "pat")
         )
 
         private val regional = mapOf(
@@ -108,7 +108,7 @@ data class XkbLayout(val layout: String, val variant: String = "") {
             "es-419" to XkbLayout("latam"),
             "es-MX" to XkbLayout("latam"),
             "es-AR" to XkbLayout("latam"),
-            "es-US" to XkbLayout("latam"),
+            "es-US" to XkbLayout("latam")
         )
 
         private val languages = mapOf(
@@ -118,7 +118,7 @@ data class XkbLayout(val layout: String, val variant: String = "") {
             "sr" to "rs", "bs" to "ba", "mk" to "mk", "bg" to "bg", "ro" to "ro", "hu" to "hu", "tr" to "tr",
             "el" to "gr", "he" to "il", "iw" to "il", "ar" to "ara", "fa" to "ir", "ru" to "ru", "uk" to "ua",
             "be" to "by", "ka" to "ge", "hy" to "am", "az" to "az", "kk" to "kz", "mn" to "mn", "ja" to "jp",
-            "ko" to "kr", "th" to "th", "vi" to "vn",
+            "ko" to "kr", "th" to "th", "vi" to "vn"
         ).mapValues { XkbLayout(it.value) }
     }
 }
@@ -146,7 +146,7 @@ internal class KeyboardLayouts(private val context: Context, private val onChang
                 override fun onInputDeviceRemoved(deviceId: Int) = update()
                 override fun onInputDeviceChanged(deviceId: Int) = update()
             },
-            main,
+            main
         )
         main.post { update() }
     }
@@ -168,8 +168,7 @@ internal class KeyboardLayouts(private val context: Context, private val onChang
         onChange(l)
     }
 
-    private fun physical(d: InputDevice): Boolean =
-        !d.isVirtual && d.keyboardType == InputDevice.KEYBOARD_TYPE_ALPHABETIC
+    private fun physical(d: InputDevice): Boolean = !d.isVirtual && d.keyboardType == InputDevice.KEYBOARD_TYPE_ALPHABETIC
 
     /** The layout Android uses for [d]: the one selected for it, else what it and the IME suggest. */
     private fun layout(d: InputDevice): XkbLayout {

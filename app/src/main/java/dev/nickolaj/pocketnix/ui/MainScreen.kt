@@ -13,14 +13,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -38,6 +38,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,7 +47,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.runtime.key
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
@@ -61,18 +61,16 @@ import dev.nickolaj.pocketnix.engine.VmState
 import dev.nickolaj.pocketnix.gui.LauncherActivity
 import dev.nickolaj.pocketnix.gui.MOVE_OUT
 import dev.nickolaj.pocketnix.gui.MenuAction
-import dev.nickolaj.pocketnix.gui.WindowSurface
-import dev.nickolaj.pocketnix.gui.WindowMenu
-import dev.nickolaj.pocketnix.gui.windowMenu
 import dev.nickolaj.pocketnix.gui.TabStripItem
+import dev.nickolaj.pocketnix.gui.WindowMenu
+import dev.nickolaj.pocketnix.gui.WindowSurface
 import dev.nickolaj.pocketnix.gui.closingWindows
 import dev.nickolaj.pocketnix.gui.stopQuestion
 import dev.nickolaj.pocketnix.gui.tabStrip
+import dev.nickolaj.pocketnix.gui.windowMenu
 import dev.nickolaj.pocketnix.terminal.Modifiers
 import dev.nickolaj.pocketnix.terminal.Tab
 import dev.nickolaj.pocketnix.terminal.TerminalTheme
-
-
 
 @Composable
 fun MainScreen(vm: Vm) {
@@ -142,8 +140,13 @@ fun MainScreen(vm: Vm) {
         AlertDialog(
             onDismissRequest = { confirm = null },
             text = { Text(question) },
-            confirmButton = { TextButton(onClick = { confirm = null; action() }) { Text("Yes") } },
-            dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel") } },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirm = null
+                    action()
+                }) { Text("Yes") }
+            },
+            dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel") } }
         )
     }
 
@@ -160,7 +163,7 @@ fun MainScreen(vm: Vm) {
             .fillMaxSize()
             .background(background)
             .safeDrawingPadding()
-            .imePadding(),
+            .imePadding()
     ) {
         StatusBar(
             status = statusText(state, link, stopping, config?.hostname),
@@ -174,7 +177,7 @@ fun MainScreen(vm: Vm) {
             composerOpen = composerOpen,
             onComposer = { composerOpen = !composerOpen },
             updateAvailable = updates?.available != null,
-            onUpdates = { showUpdates = true },
+            onUpdates = { showUpdates = true }
         ) { dismiss ->
             if (config?.gui?.enable == true || vm.gui.catalog.apps.isNotEmpty()) {
                 MenuItem("Apps") {
@@ -183,11 +186,23 @@ fun MainScreen(vm: Vm) {
                 }
             }
             if (shownWindow != 0) {
-                MenuItem(MOVE_OUT) { dismiss(); vm.gui.move(shownWindow, "") }
+                MenuItem(MOVE_OUT) {
+                    dismiss()
+                    vm.gui.move(shownWindow, "")
+                }
             }
-            MenuItem("Commands", enabled = agentUp) { dismiss(); showPalette = true }
-            MenuItem("System and updates", enabled = agentUp) { dismiss(); showUpdates = true }
-            MenuItem("Settings") { dismiss(); showSettings = true }
+            MenuItem("Commands", enabled = agentUp) {
+                dismiss()
+                showPalette = true
+            }
+            MenuItem("System and updates", enabled = agentUp) {
+                dismiss()
+                showUpdates = true
+            }
+            MenuItem("Settings") {
+                dismiss()
+                showSettings = true
+            }
             MenuItem(if (keepScreenOn) "✓ Keep screen on" else "Keep screen on") {
                 dismiss()
                 keepScreenOn = !keepScreenOn
@@ -205,7 +220,10 @@ fun MainScreen(vm: Vm) {
                     }
                 }
             } else if (ownsGuest) {
-                MenuItem("Start with boot menu", enabled = missing.isEmpty()) { dismiss(); vm.start(bootMenu = true) }
+                MenuItem("Start with boot menu", enabled = missing.isEmpty()) {
+                    dismiss()
+                    vm.start(bootMenu = true)
+                }
             }
         }
         for (e in forwardErrors) {
@@ -214,14 +232,18 @@ fun MainScreen(vm: Vm) {
         if (serviceRefused && running) {
             Text(
                 "Android refused the foreground service, so it may kill the VM with the app. Reopening the app retries.",
-                color = foreground.copy(alpha = 0.8f), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 8.dp),
+                color = foreground.copy(alpha = 0.8f),
+                fontSize = 12.sp,
+                modifier = Modifier.padding(horizontal = 8.dp)
             )
         }
         if (agentLate) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "No agent after two minutes. A generation that won't boot? The console tab shows the boot.",
-                    color = foreground.copy(alpha = 0.8f), fontSize = 12.sp, modifier = Modifier.weight(1f),
+                    color = foreground.copy(alpha = 0.8f),
+                    fontSize = 12.sp,
+                    modifier = Modifier.weight(1f)
                 )
                 TextButton(onClick = vm::restartWithBootMenu) { Text("Boot menu") }
             }
@@ -248,28 +270,29 @@ fun MainScreen(vm: Vm) {
             onCloseWindow = vm.gui::requestClose,
             windowMenu = { id ->
                 windowMenu(
-                    vm.gui, id,
+                    vm.gui,
+                    id,
                     listOf(
                         MenuAction("Keyboard") { vm.gui.surfaceOf(id)?.ime?.toggleKeyboard() },
-                        MenuAction(MOVE_OUT) { vm.gui.move(id, "") },
-                    ),
+                        MenuAction(MOVE_OUT) { vm.gui.move(id, "") }
+                    )
                 )
             },
-            onOpen = vm::openTab,
+            onOpen = vm::openTab
         )
         Box(Modifier.weight(1f).fillMaxWidth()) {
             AndroidView(
                 factory = { controller.create().also { controller.show(vm.tabs.current()) } },
                 // Hidden rather than removed: the controller keeps its one view.
                 update = { it.visibility = if (shownWindow != 0) View.INVISIBLE else View.VISIBLE },
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize()
             )
             if (shownWindow != 0) {
                 key(shownWindow) {
                     AndroidView(
                         factory = { ctx -> vm.gui.tabView(ctx, shownWindow) },
                         onRelease = vm.gui::release,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize()
                     )
                 }
             }
@@ -283,7 +306,7 @@ fun MainScreen(vm: Vm) {
                 modifiers = ime.modifiers,
                 revision = modifierRevision,
                 foreground = foreground,
-                onKey = ime::extraKey,
+                onKey = ime::extraKey
             )
         }
         if (shownWindow == 0) {
@@ -293,7 +316,7 @@ fun MainScreen(vm: Vm) {
                 modifiers = controller.modifiers,
                 revision = modifierRevision,
                 foreground = foreground,
-                onKey = controller::press,
+                onKey = controller::press
             )
             if (composerOpen) Composer(controller, foreground)
         }
@@ -327,7 +350,7 @@ private fun StatusBar(
     onComposer: () -> Unit,
     updateAvailable: Boolean,
     onUpdates: () -> Unit,
-    menuItems: @Composable (dismiss: () -> Unit) -> Unit,
+    menuItems: @Composable (dismiss: () -> Unit) -> Unit
 ) {
     var menu by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -361,13 +384,13 @@ private fun TabRow(
     onCloseWindow: (Int) -> Unit,
     /** A window tab's menu, read when it opens. */
     windowMenu: (Int) -> List<MenuAction>,
-    onOpen: (String?) -> Unit,
+    onOpen: (String?) -> Unit
 ) {
     var menu by remember { mutableStateOf(false) }
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.CenterVertically
     ) {
         for (item in strip) {
             when (item) {
@@ -380,9 +403,10 @@ private fun TabRow(
                         selected = selectedWindow == 0 && tab.id == selected,
                         foreground = foreground,
                         onSelect = { onSelect(tab.id) },
-                        onClose = if (tab.kind != Tab.Kind.Console) ({ onClose(tab.id) }) else null,
+                        onClose = if (tab.kind != Tab.Kind.Console) ({ onClose(tab.id) }) else null
                     )
                 }
+
                 is TabStripItem.Window -> {
                     val w = item.window
                     var windowMenuOpen by remember(w.id) { mutableStateOf(false) }
@@ -394,7 +418,7 @@ private fun TabRow(
                             foreground = foreground,
                             onSelect = { onSelectWindow(w.id) },
                             onLongPress = { windowMenuOpen = true },
-                            onClose = { onCloseWindow(w.id) },
+                            onClose = { onCloseWindow(w.id) }
                         )
                         WindowMenu(windowMenuOpen, onDismiss = { windowMenuOpen = false }) { windowMenu(w.id) }
                     }
@@ -408,10 +432,15 @@ private fun TabRow(
                 fontSize = 18.sp,
                 modifier = Modifier
                     .combinedClickable(enabled = canOpen, onLongClick = { menu = profiles.size > 1 }, onClick = { onOpen(null) })
-                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
             )
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                for (p in profiles) DropdownMenuItem(text = { Text(p) }, onClick = { menu = false; onOpen(p) })
+                for (p in profiles) {
+                    DropdownMenuItem(text = { Text(p) }, onClick = {
+                        menu = false
+                        onOpen(p)
+                    })
+                }
             }
         }
     }
@@ -425,14 +454,14 @@ private fun TabChip(
     foreground: Color,
     onSelect: () -> Unit,
     onClose: (() -> Unit)?,
-    onLongPress: (() -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null
 ) {
     Row(
         Modifier
             .background(if (selected) foreground.copy(alpha = 0.18f) else Color.Transparent, RoundedCornerShape(6.dp))
             .combinedClickable(onLongClick = onLongPress, onClick = onSelect)
             .padding(horizontal = 10.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.CenterVertically
     ) {
         if (mark.isNotEmpty()) Text(mark, color = foreground, fontSize = 10.sp)
         Text(title, color = foreground.copy(alpha = if (selected) 1f else 0.7f), fontSize = 13.sp, maxLines = 1)

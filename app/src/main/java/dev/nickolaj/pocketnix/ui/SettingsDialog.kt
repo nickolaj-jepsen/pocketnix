@@ -17,9 +17,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.platform.LocalContext
 import dev.nickolaj.pocketnix.BuildConfig
 import dev.nickolaj.pocketnix.Settings
 import dev.nickolaj.pocketnix.Vm
@@ -87,7 +87,7 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
                 onDismiss()
             }) { Text("Save") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
     if (sharedFolders) SharedFoldersDialog(vm) { sharedFolders = false }
 }
@@ -98,12 +98,13 @@ private const val MIN_DISK_GB = 4
 @Composable
 private fun NumberField(label: String, value: String, error: String?, onChange: (String) -> Unit) {
     OutlinedTextField(
-        value, { v -> onChange(v.filter(Char::isDigit).take(9)) },
+        value,
+        { v -> onChange(v.filter(Char::isDigit).take(9)) },
         label = { Text(label) },
         singleLine = true,
         isError = error != null,
         supportingText = error?.let { { Text(it) } },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
     )
 }
 

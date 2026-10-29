@@ -2,13 +2,13 @@ package dev.nickolaj.pocketnix.gui
 
 import dev.nickolaj.pocketnix.gui.TextInputModel.Op
 import dev.nickolaj.pocketnix.gui.TextInputModel.Target
+import kotlin.math.max
+import kotlin.math.min
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.math.max
-import kotlin.math.min
 
 class TextInputModelTest {
     /**
@@ -47,7 +47,9 @@ class TextInputModelTest {
                     }
                     preedit = e.preedit
                 }
+
                 is Op.Type -> insert(min(anchor, cursor), max(anchor, cursor), op.text)
+
                 is Op.Key -> repeat(op.count) { key(op.key, op.mods and Gui.MOD_SHIFT != 0) }
             }
         }
@@ -71,6 +73,7 @@ class TextInputModelTest {
                     }
                     if (!shift) anchor = cursor
                 }
+
                 TextInputModel.KEY_BACKSPACE, TextInputModel.KEY_DELETE -> {
                     if (lo != hi) {
                         insert(lo, hi, "")
@@ -96,7 +99,7 @@ class TextInputModelTest {
         }
 
         fun state(session: Int = 1, applied: Int = serial) = TextInputState(
-            1, session, applied, text, cursor, anchor, "normal", emptySet(), null,
+            1, session, applied, text, cursor, anchor, "normal", emptySet(), null
         )
     }
 

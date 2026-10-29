@@ -1,14 +1,14 @@
 package dev.nickolaj.pocketnix.agent
 
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
-import org.json.JSONObject
 import org.junit.Test
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
-import java.io.IOException
 
 class ProtocolTest {
     // As the agent sends it (go/internal/agent normalizes defaults before sending).
@@ -27,7 +27,7 @@ class ProtocolTest {
         assertEquals("phone", c.hostname)
         assertEquals(
             listOf(Forward("ssh", 22, 2222, false), Forward("web", 8080, 8080, true), Forward("mosh", 60001, 60001, false, udp = true)),
-            c.forwards,
+            c.forwards
         )
         assertEquals(listOf(Profile("htop", "htop"), Profile("shell", null)), c.profiles)
         assertEquals("shell", c.defaultProfile)
@@ -52,8 +52,8 @@ class ProtocolTest {
                  "checkedAt":1700000000,"log":["x"],
                  "generations":[{"number":2,"path":"/nix/store/b-sys","date":1700000000,"label":"26.05","current":true},
                                 {"number":1,"path":"/nix/store/a-sys","date":1690000000,"booted":true}]}
-                """.trimIndent(),
-            ),
+                """.trimIndent()
+            )
         )
         assertEquals(false, u.busy)
         assertEquals(true, u.rebootPending)
@@ -79,7 +79,7 @@ class ProtocolTest {
     fun parsesGuiConfig() {
         val c = GuestConfig.parse(
             """{"type":"config","gui":{"enable":true,"defaults":{"size":"phone","input":"touch"},
-               "appDefaults":{"org.gnome.Calculator":{"size":"compact"}}}}""",
+               "appDefaults":{"org.gnome.Calculator":{"size":"compact"}}}}"""
         )
         val gui = c.gui!!
         assertEquals(true, gui.enable)
@@ -116,7 +116,13 @@ class ProtocolTest {
     @Test
     fun helloNamesTheStream() {
         val out = ByteArrayOutputStream()
-        Protocol.writeJson(out, Protocol.hello("pty", "test") { put("profile", "htop"); put("rows", 24) })
+        Protocol.writeJson(
+            out,
+            Protocol.hello("pty", "test") {
+                put("profile", "htop")
+                put("rows", 24)
+            }
+        )
         val line = out.toString()
         assert(line.endsWith("\n"))
         val h = org.json.JSONObject(line)

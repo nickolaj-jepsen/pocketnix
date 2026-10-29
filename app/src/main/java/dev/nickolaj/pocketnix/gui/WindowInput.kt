@@ -18,7 +18,7 @@ internal class WindowInput(
     private val send: (ByteArray) -> Unit,
     /** Window pixels per logical pixel, for wheel steps. */
     private val scale: () -> Float,
-    private val zoom: Zoom,
+    private val zoom: Zoom
 ) {
     private val main = Handler(Looper.getMainLooper())
     private var buttons = 0
@@ -39,12 +39,16 @@ internal class WindowInput(
         val mouse = e.isFromSource(InputDevice.SOURCE_MOUSE) || e.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE
         when (e.actionMasked) {
             MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> move(e)
+
             MotionEvent.ACTION_HOVER_EXIT -> main.postDelayed(leave, LEAVE_DELAY_MS)
+
             MotionEvent.ACTION_SCROLL -> scroll(e, mouse)
+
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL,
-            MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.ACTION_BUTTON_RELEASE,
+            MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.ACTION_BUTTON_RELEASE
             // A press without a button state (an injected mouse tap) is a left click.
             -> if (e.buttonState != 0 || buttons != 0) mouseButtons(e) else buttonless(e)
+
             else -> return false
         }
         return true
@@ -78,7 +82,9 @@ internal class WindowInput(
                 pressing = true
                 send(Gui.pointerButton(window, x, y, Gui.BTN_LEFT, true))
             }
+
             MotionEvent.ACTION_MOVE -> move(e)
+
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (pressing) {
                 if (e.actionMasked == MotionEvent.ACTION_UP) move(e)
                 pressing = false
@@ -107,6 +113,7 @@ internal class WindowInput(
                 swipeX = e.x
                 swipeY = e.y
             }
+
             MotionEvent.ACTION_MOVE -> {
                 val dx = (swipeX - e.x) / zoom.scale
                 val dy = (swipeY - e.y) / zoom.scale
@@ -114,6 +121,7 @@ internal class WindowInput(
                 swipeY = e.y
                 if (dx != 0f || dy != 0f) send(Gui.pointerAxis(window, x, y, Gui.AXIS_FINGER, 0, dx, dy, 0, 0))
             }
+
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> send(Gui.pointerAxis(window, x, y, Gui.AXIS_FINGER, 3, 0f, 0f, 0, 0))
         }
         return true
@@ -173,6 +181,7 @@ internal class WindowInput(
 
     private companion object {
         const val LEAVE_DELAY_MS = 50L
+
         // Logical pixels per wheel notch, as libinput reports them.
         const val WHEEL_STEP = 15f
         val BUTTONS = listOf(
@@ -180,7 +189,7 @@ internal class WindowInput(
             MotionEvent.BUTTON_SECONDARY to Gui.BTN_RIGHT,
             MotionEvent.BUTTON_TERTIARY to Gui.BTN_MIDDLE,
             MotionEvent.BUTTON_BACK to Gui.BTN_SIDE,
-            MotionEvent.BUTTON_FORWARD to Gui.BTN_EXTRA,
+            MotionEvent.BUTTON_FORWARD to Gui.BTN_EXTRA
         )
     }
 }

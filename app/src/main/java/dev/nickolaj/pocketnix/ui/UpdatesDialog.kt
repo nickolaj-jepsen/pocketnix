@@ -32,9 +32,9 @@ import androidx.compose.ui.unit.sp
 import dev.nickolaj.pocketnix.Vm
 import dev.nickolaj.pocketnix.agent.Generation
 import dev.nickolaj.pocketnix.agent.Updates
-import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
+import kotlinx.coroutines.launch
 
 /** The guest's updates and generations (docs/updates.md). */
 @Composable
@@ -82,7 +82,7 @@ fun UpdatesDialog(vm: Vm, onDismiss: () -> Unit) {
                 }
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } }
     )
 }
 
@@ -98,7 +98,8 @@ private fun UpdatesBody(u: Updates, refused: String?, onSwitch: (Int) -> Unit, o
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     if (confirmingReboot) "Reboot now? Every tab ends." else "Running a generation it didn't boot; a reboot boots it fully.",
-                    Modifier.weight(1f), fontSize = 13.sp,
+                    Modifier.weight(1f),
+                    fontSize = 13.sp
                 )
                 TextButton(onClick = { if (confirmingReboot) onReboot() else confirmingReboot = true }) {
                     Text(if (confirmingReboot) "Confirm" else "Reboot")
@@ -114,7 +115,7 @@ private fun UpdatesBody(u: Updates, refused: String?, onSwitch: (Int) -> Unit, o
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(4.dp))
-                    .padding(6.dp),
+                    .padding(6.dp)
             )
         }
         Text("Generations", style = MaterialTheme.typography.titleSmall)
@@ -143,7 +144,7 @@ private fun GenerationRow(g: Generation, enabled: Boolean, confirming: Boolean, 
                 listOfNotNull(g.label, DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(g.date * 1000))).joinToString(" · "),
                 fontSize = 12.sp,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                overflow = TextOverflow.Ellipsis
             )
         }
         if (!g.current) OutlinedButton(enabled = enabled, onClick = onSwitch) { Text(if (confirming) "Confirm" else "Switch") }

@@ -27,7 +27,7 @@ data class GuestNotification(
     /** low, normal or critical. */
     val urgency: String,
     /** Key to label, in order; "default" is the notification's own tap, not a button. */
-    val actions: List<Pair<String, String>>,
+    val actions: List<Pair<String, String>>
 ) {
     val buttons: List<Pair<String, String>> get() = actions.filter { it.first != DEFAULT_ACTION }
     val hasDefault: Boolean get() = actions.any { it.first == DEFAULT_ACTION }
@@ -55,7 +55,7 @@ data class GuestNotification(
                 body = msg.optString("body"),
                 appName = msg.optString("appName"),
                 urgency = msg.optString("urgency").ifEmpty { "normal" },
-                actions = if (a == null) emptyList() else (0 until a.length()).map { a.getJSONObject(it) }.map { it.optString("key") to it.optString("label") },
+                actions = if (a == null) emptyList() else (0 until a.length()).map { a.getJSONObject(it) }.map { it.optString("key") to it.optString("label") }
             )
         }
     }
@@ -72,8 +72,8 @@ class GuestNotifications(private val context: Context, private val hostname: () 
         manager.createNotificationChannels(
             listOf(
                 NotificationChannel(CHANNEL_LOW, context.getString(R.string.guest_low_channel), NotificationManager.IMPORTANCE_LOW),
-                NotificationChannel(CHANNEL_CRITICAL, context.getString(R.string.guest_critical_channel), NotificationManager.IMPORTANCE_HIGH),
-            ),
+                NotificationChannel(CHANNEL_CRITICAL, context.getString(R.string.guest_critical_channel), NotificationManager.IMPORTANCE_HIGH)
+            )
         )
     }
 
@@ -131,8 +131,7 @@ class GuestNotifications(private val context: Context, private val hostname: () 
         private const val FLAGS = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
 
         // PendingIntents differ by data, not extras: one per notification and action.
-        private fun uri(id: Long, key: String?): Uri =
-            Uri.Builder().scheme("pocketnix-notification").authority(id.toString()).apply { if (key != null) appendPath(key) }.build()
+        private fun uri(id: Long, key: String?): Uri = Uri.Builder().scheme("pocketnix-notification").authority(id.toString()).apply { if (key != null) appendPath(key) }.build()
     }
 }
 
@@ -148,6 +147,7 @@ class GuestNotificationReceiver : BroadcastReceiver() {
                     context.getSystemService(NotificationManager::class.java).cancel(GuestNotifications.TAG, id.toInt())
                     context.vm.answerNotification(id, intent.getStringExtra(EXTRA_KEY) ?: return)
                 }
+
                 ACTION_DISMISSED -> context.vm.answerNotification(id, null)
             }
         }.onFailure { Log.e(TAG, "guest notification answer", it) }

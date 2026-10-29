@@ -14,13 +14,17 @@ object Utf8 {
             val c = s[i].code
             n += when {
                 c < 0x80 -> 1
+
                 c < 0x800 -> 2
+
                 Character.isHighSurrogate(s[i]) && i + 1 < to && Character.isLowSurrogate(s[i + 1]) -> {
                     i++
                     4
                 }
+
                 // A lone surrogate is encoded as '?'.
                 Character.isSurrogate(s[i]) -> 1
+
                 else -> 3
             }
             i++
@@ -61,7 +65,7 @@ internal class TextInputModel {
         CLIENT,
 
         /** A text input without surrounding text: committed text, deletes and moves go as keys; the preedit as edits. */
-        BLIND,
+        BLIND
     }
 
     /** What the client is sent, in order. */
@@ -205,11 +209,9 @@ internal class TextInputModel {
         return true
     }
 
-    fun textBeforeCursor(n: Int): String =
-        text.substring(boundaryUp((selectionStart - max(n, 0)).coerceAtLeast(0)).coerceAtMost(selectionStart), selectionStart)
+    fun textBeforeCursor(n: Int): String = text.substring(boundaryUp((selectionStart - max(n, 0)).coerceAtLeast(0)).coerceAtMost(selectionStart), selectionStart)
 
-    fun textAfterCursor(n: Int): String =
-        text.substring(selectionEnd, boundary((selectionEnd + max(n, 0)).coerceAtMost(text.length)).coerceAtLeast(selectionEnd))
+    fun textAfterCursor(n: Int): String = text.substring(selectionEnd, boundary((selectionEnd + max(n, 0)).coerceAtMost(text.length)).coerceAtLeast(selectionEnd))
 
     fun selectedText(): String? = if (anchor == cursor) null else text.substring(selectionStart, selectionEnd)
 
@@ -374,6 +376,7 @@ internal class TextInputModel {
                 shownBegin = pb
                 shownEnd = pe
             }
+
             Target.BLIND, Target.KEYS -> {
                 val back = codePoints(base, from, baseCursor)
                 val forward = codePoints(base, baseCursor, to)
@@ -554,12 +557,10 @@ internal class TextInputModel {
     }
 
     /** [i] moved back off the middle of a surrogate pair. */
-    private fun boundary(i: Int): Int =
-        if (i in 1 until text.length && Character.isLowSurrogate(text[i]) && Character.isHighSurrogate(text[i - 1])) i - 1 else i
+    private fun boundary(i: Int): Int = if (i in 1 until text.length && Character.isLowSurrogate(text[i]) && Character.isHighSurrogate(text[i - 1])) i - 1 else i
 
     /** [i] moved forward off the middle of a surrogate pair. */
-    private fun boundaryUp(i: Int): Int =
-        if (i in 1 until text.length && Character.isLowSurrogate(text[i]) && Character.isHighSurrogate(text[i - 1])) i + 1 else i
+    private fun boundaryUp(i: Int): Int = if (i in 1 until text.length && Character.isLowSurrogate(text[i]) && Character.isHighSurrogate(text[i - 1])) i + 1 else i
 
     private fun offsetByCodePoints(i: Int, n: Int): Int {
         var p = i

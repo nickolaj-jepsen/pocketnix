@@ -13,7 +13,7 @@ class RangedFile internal constructor(
     private val s: AgentStream,
     /** The size as opened (0 for a truncating mode). */
     size: Long,
-    private val mode: String,
+    private val mode: String
 ) : Closeable {
     var size: Long = size
         private set

@@ -99,22 +99,21 @@ class AppShortcuts(private val context: Context, private val catalog: AppCatalog
         val recent = catalog.recent.filter { !it.noDisplay }.take(RECENT_SHOWN)
         val activities = listOfNotNull(
             RECENT_MAIN to ComponentName(context, MainActivity::class.java),
-            (RECENT_APPS to launcher).takeIf { launcherEnabled },
+            (RECENT_APPS to launcher).takeIf { launcherEnabled }
         )
         sm.dynamicShortcuts = activities.flatMap { (prefix, activity) ->
             recent.mapIndexed { rank, app -> info(app, prefix + app.id, activity, rank) }
         }
     }
 
-    private fun info(app: AppEntry, id: String, activity: ComponentName?, rank: Int): ShortcutInfo =
-        ShortcutInfo.Builder(context, id)
-            .setShortLabel(app.label)
-            .setLongLabel(app.label)
-            .setIcon(icon(app))
-            .setIntent(GuiWindowActivity.appIntent(context, app.id))
-            .setRank(rank)
-            .apply { if (activity != null) setActivity(activity) }
-            .build()
+    private fun info(app: AppEntry, id: String, activity: ComponentName?, rank: Int): ShortcutInfo = ShortcutInfo.Builder(context, id)
+        .setShortLabel(app.label)
+        .setLongLabel(app.label)
+        .setIcon(icon(app))
+        .setIntent(GuiWindowActivity.appIntent(context, app.id))
+        .setRank(rank)
+        .apply { if (activity != null) setActivity(activity) }
+        .build()
 
     /** The cached icon centred on an adaptive icon's background, or a generic one. */
     private fun icon(app: AppEntry): Icon {
@@ -138,9 +137,11 @@ class AppShortcuts(private val context: Context, private val catalog: AppCatalog
         private const val PIN = "app:"
         private const val RECENT_MAIN = "recent-main:"
         private const val RECENT_APPS = "recent-apps:"
+
         // Launchers show four on a long-press.
         private const val RECENT_SHOWN = 4
         private const val SYNC_DELAY_MS = 500L
+
         // The icon's share of the adaptive icon: 54dp of 108dp keeps a square's corners inside a round mask.
         private const val ICON_SIDE = 54f
         private const val ADAPTIVE_SIDE = 108f

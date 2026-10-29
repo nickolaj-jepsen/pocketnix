@@ -1,10 +1,10 @@
 package dev.nickolaj.pocketnix.gui
 
 import android.view.MotionEvent
+import java.nio.ByteBuffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.nio.ByteBuffer
 
 class TouchInputTest {
     private val window = 7
@@ -29,9 +29,11 @@ class TouchInputTest {
 
         fun advance(ms: Long) {
             now += ms
-            for ((r, at) in due.entries.toList()) if (at <= now) {
-                due.remove(r)
-                r.run()
+            for ((r, at) in due.entries.toList()) {
+                if (at <= now) {
+                    due.remove(r)
+                    r.run()
+                }
             }
         }
     }
@@ -45,6 +47,7 @@ class TouchInputTest {
         fun xy() = "${b.getFloat().toInt()},${b.getFloat().toInt()}"
         return when (type) {
             Gui.POINTER_MOTION -> "motion ${xy()}"
+
             Gui.POINTER_BUTTON -> {
                 val at = xy()
                 val button = when (b.getInt()) {
@@ -54,17 +57,24 @@ class TouchInputTest {
                 }
                 "$button ${if (b.get().toInt() == 1) "down" else "up"} $at"
             }
+
             Gui.POINTER_AXIS -> {
                 val at = xy()
                 val source = b.get().toInt()
                 val stop = b.get().toInt()
                 "axis $source $at ${b.getFloat()},${b.getFloat()}${if (stop != 0) " stop" else ""}"
             }
+
             Gui.TOUCH_DOWN -> "touch-down ${b.getInt()} ${xy()}"
+
             Gui.TOUCH_MOTION -> "touch-motion ${b.getInt()} ${xy()}"
+
             Gui.TOUCH_UP -> "touch-up ${b.getInt()}"
+
             Gui.TOUCH_CANCEL -> "touch-cancel"
+
             Gui.TOUCH_FRAME -> "frame"
+
             else -> "0x${type.toString(16)}"
         }
     }
@@ -73,8 +83,12 @@ class TouchInputTest {
     private var time = 0L
 
     private fun ev(action: Int, vararg points: Triple<Int, Float, Float>, index: Int = 0) = Touches(
-        action, index, IntArray(points.size) { points[it].first }, FloatArray(points.size) { points[it].second },
-        FloatArray(points.size) { points[it].third }, time,
+        action,
+        index,
+        IntArray(points.size) { points[it].first },
+        FloatArray(points.size) { points[it].second },
+        FloatArray(points.size) { points[it].third },
+        time
     )
 
     private fun p(id: Int, x: Number, y: Number) = Triple(id, x.toFloat(), y.toFloat())
@@ -96,9 +110,9 @@ class TouchInputTest {
                 // Only the point that moved.
                 "touch-motion 3 310,400", "frame",
                 "touch-up 0", "frame",
-                "touch-up 3", "frame",
+                "touch-up 3", "frame"
             ),
-            frames,
+            frames
         )
     }
 
@@ -148,7 +162,7 @@ class TouchInputTest {
         g.on(ev(MotionEvent.ACTION_UP, p(0, 200, 200)))
         assertEquals(
             listOf("motion 100,200", "left down 100,200", "motion 150,200", "motion 200,200", "left up 200,200"),
-            frames,
+            frames
         )
     }
 
@@ -174,7 +188,7 @@ class TouchInputTest {
         g.on(ev(MotionEvent.ACTION_UP, p(0, 100, 420)))
         assertEquals(
             listOf("motion 100,500", "axis 1 100,500 0.0,50.0", "axis 1 100,500 0.0,30.0", "axis 1 100,500 0.0,0.0 stop"),
-            frames,
+            frames
         )
         assertEquals(1f, zoom.scale, 0f)
     }

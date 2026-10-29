@@ -13,7 +13,10 @@ import android.view.View
  */
 internal class TrackpadCursor(context: Context) : View(context) {
     private val dp = context.resources.displayMetrics.density
-    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xffffffff.toInt(); style = Paint.Style.FILL }
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xffffffff.toInt()
+        style = Paint.Style.FILL
+    }
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xff000000.toInt()
         style = Paint.Style.STROKE
@@ -68,11 +71,16 @@ internal class TrackpadCursor(context: Context) : View(context) {
         canvas.translate(hotspot, hotspot)
         when (shape) {
             "hidden" -> {}
+
             "text", "vertical-text" -> {
-                val white = Paint(stroke).apply { color = 0xffffffff.toInt(); strokeWidth = 3.5f * dp }
+                val white = Paint(stroke).apply {
+                    color = 0xffffffff.toInt()
+                    strokeWidth = 3.5f * dp
+                }
                 canvas.drawPath(beam, white)
                 canvas.drawPath(beam, stroke)
             }
+
             else -> {
                 canvas.drawPath(arrow, fill)
                 canvas.drawPath(arrow, stroke)

@@ -4,8 +4,6 @@ import android.util.Log
 import dev.nickolaj.pocketnix.agent.AgentStream
 import dev.nickolaj.pocketnix.agent.Frames
 import dev.nickolaj.pocketnix.agent.GuestFile
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.Closeable
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -18,6 +16,8 @@ import java.nio.file.NotDirectoryException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicLong
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * One shared folder's files, as a hostfs stream asks for them. Paths are
@@ -65,7 +65,7 @@ class HostFsException(val errno: String, message: String) : IOException(message)
 class HostFsServer(
     private val fs: HostFolderFs,
     private val writable: Boolean,
-    private val workers: Executor,
+    private val workers: Executor
 ) : Closeable {
     private val handles = ConcurrentHashMap<Long, HostFile>()
     private val nextHandle = AtomicLong()
@@ -111,13 +111,18 @@ class HostFsServer(
         val path = clean(req.optString("path"))
         when (op) {
             "stat" -> reply.put("file", fs.stat(path).json())
+
             "list" -> reply.put("files", JSONArray(fs.list(path).map { it.json() }))
+
             "create" -> reply.put("file", fs.create(path, name(req.optString("name")), req.optBoolean("dir")).json())
+
             "delete" -> {
                 if (path.isEmpty()) throw HostFsException("EBUSY", "can't delete the folder itself")
                 fs.delete(path)
             }
+
             "rename" -> reply.put("file", fs.rename(path, clean(req.optString("to"))).json())
+
             "open" -> {
                 val mode = req.optString("mode")
                 if (mode !in MODES) throw HostFsException("EINVAL", "open mode $mode")
@@ -126,28 +131,33 @@ class HostFsServer(
                 handles[id] = fs.open(path, mode)
                 reply.put("handle", id)
             }
+
             "read" -> {
                 val buf = ByteArray(req.optLong("size").coerceIn(0, MAX_DATA.toLong()).toInt())
                 val n = handle(req).read(req.optLong("offset"), buf, buf.size)
                 return reply to buf.copyOf(n.coerceAtLeast(0))
             }
+
             "write" -> {
                 handle(req).write(req.optLong("offset"), data, 0, data.size)
                 reply.put("size", data.size)
             }
+
             "truncate" -> {
                 val size = req.optLong("size")
                 if (req.optLong("handle") != 0L) handle(req).truncate(size) else fs.open(path, "rw").use { it.truncate(size) }
             }
+
             "sync" -> handle(req).sync()
+
             "close" -> (handles.remove(req.optLong("handle")) ?: throw HostFsException("EBADF", "no such handle")).close()
+
             else -> throw HostFsException("ENOSYS", "unknown operation $op")
         }
         return reply to null
     }
 
-    private fun handle(req: JSONObject): HostFile =
-        handles[req.optLong("handle")] ?: throw HostFsException("EBADF", "no such handle")
+    private fun handle(req: JSONObject): HostFile = handles[req.optLong("handle")] ?: throw HostFsException("EBADF", "no such handle")
 
     /** Closes every open file, for a folder no longer shared. */
     override fun close() {
@@ -159,6 +169,7 @@ class HostFsServer(
         const val REQUEST = 0x30
         const val REPLY = 0x31
         private const val PREFIX = 8
+
         /** go/internal/protocol MaxHostFSData. */
         const val MAX_DATA = 512 shl 10
         private val READS = setOf("stat", "list", "open", "read", "sync", "close")

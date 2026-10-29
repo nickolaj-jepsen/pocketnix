@@ -29,7 +29,12 @@ class BootMenu(private val console: ConsoleLog, private val scope: CoroutineScop
         scope.launch(Dispatchers.IO) {
             val end = System.currentTimeMillis() + timeoutMs
             while (!watch.started && System.currentTimeMillis() < end) {
-                console.input?.let { runCatching { it.write(SPACE); it.flush() } }
+                console.input?.let {
+                    runCatching {
+                        it.write(SPACE)
+                        it.flush()
+                    }
+                }
                 delay(TAP_MS)
             }
             console.detach(sink)

@@ -2,11 +2,11 @@
 package dev.nickolaj.pocketnix.gui
 
 import dev.nickolaj.pocketnix.agent.Frames
-import org.json.JSONException
-import org.json.JSONObject
 import java.io.IOException
 import java.io.InputStream
 import java.nio.ByteBuffer
+import org.json.JSONException
+import org.json.JSONObject
 
 /** A violation of the GUI protocol: the connection is closed, and the reconnect replays everything. */
 class GuiProtocolException(message: String) : IOException(message)
@@ -46,6 +46,7 @@ object Gui {
 
     const val HEADER_SIZE = 88
     const val MAX_RECTS = 4096
+
     // The largest buffer, per side and in bytes; the compositor refuses bigger ones (see COMMIT in gui-protocol.md).
     const val MAX_DIMENSION = 16384
     const val MAX_BUFFER_BYTES = 64L shl 20
@@ -72,12 +73,12 @@ object Gui {
     const val MAX_ICON_SIZE = 512
 
     fun hello(app: String, hashes: Boolean): ByteArray = json(
-        JSONObject().put("type", "hello").put("version", VERSION).put("minVersion", MIN_VERSION).put("app", app).put("hashes", hashes),
+        JSONObject().put("type", "hello").put("version", VERSION).put("minVersion", MIN_VERSION).put("app", app).put("hashes", hashes)
     )
 
     /** [refreshMilliHz]: the display's refresh rate in mHz. */
     fun output(width: Int, height: Int, scale: Float, refreshMilliHz: Int): ByteArray = json(
-        JSONObject().put("type", "output").put("width", width).put("height", height).put("scale", scale.toDouble()).put("refresh", refreshMilliHz),
+        JSONObject().put("type", "output").put("width", width).put("height", height).put("scale", scale.toDouble()).put("refresh", refreshMilliHz)
     )
 
     fun window(state: WindowState): ByteArray = json(
@@ -90,7 +91,7 @@ object Gui {
             .put("focused", state.focused)
             .put("visible", state.visible)
             .put("maximized", state.maximized)
-            .put("fullscreen", state.fullscreen),
+            .put("fullscreen", state.fullscreen)
     )
 
     /** New windows' size factors: [size] for any entry, [apps] by entry id for those that differ. */
@@ -101,8 +102,7 @@ object Gui {
     }
 
     /** The guest's XKB layout and variant; "" for the compositor's default. */
-    fun keyboardLayout(layout: String, variant: String): ByteArray =
-        json(JSONObject().put("type", "keyboard-layout").put("layout", layout).put("variant", variant))
+    fun keyboardLayout(layout: String, variant: String): ByteArray = json(JSONObject().put("type", "keyboard-layout").put("layout", layout).put("variant", variant))
 
     /** Types [text] into [window] as key presses. */
     fun text(window: Int, text: String): ByteArray = json(JSONObject().put("type", "text").put("window", window.toUInt().toLong()).put("text", text))
@@ -118,7 +118,7 @@ object Gui {
             .put("commit", edit.commit)
             .put("preedit", edit.preedit)
             .put("preeditCursorBegin", edit.preeditCursorBegin)
-            .put("preeditCursorEnd", edit.preeditCursorEnd),
+            .put("preeditCursorEnd", edit.preeditCursorEnd)
     )
 
     fun close(window: Int): ByteArray = json(JSONObject().put("type", "close").put("id", window.toUInt().toLong()))
@@ -130,8 +130,7 @@ object Gui {
     fun icon(key: String, size: Int): ByteArray = json(JSONObject().put("type", "icon").put("icon", key).put("size", size))
 
     /** Starts entry [app] (its [action], or "" for none) as launch [id]; [tab] "" gives its windows their own task. */
-    fun launch(id: String, app: String, action: String, tab: String): ByteArray =
-        json(JSONObject().put("type", "launch").put("id", id).put("app", app).put("action", action).put("tab", tab))
+    fun launch(id: String, app: String, action: String, tab: String): ByteArray = json(JSONObject().put("type", "launch").put("id", id).put("app", app).put("action", action).put("tab", tab))
 
     fun launchCancel(id: String): ByteArray = json(JSONObject().put("type", "launch-cancel").put("id", id))
 
@@ -142,14 +141,12 @@ object Gui {
     fun pointerMotion(window: Int, x: Float, y: Float): ByteArray = binary(POINTER_MOTION, 12) { putInt(window).putFloat(x).putFloat(y) }
 
     /** [button]: a BTN_* code. */
-    fun pointerButton(window: Int, x: Float, y: Float, button: Int, pressed: Boolean): ByteArray =
-        binary(POINTER_BUTTON, 17) { putInt(window).putFloat(x).putFloat(y).putInt(button).put(if (pressed) 1 else 0) }
+    fun pointerButton(window: Int, x: Float, y: Float, button: Int, pressed: Boolean): ByteArray = binary(POINTER_BUTTON, 17) { putInt(window).putFloat(x).putFloat(y).putInt(button).put(if (pressed) 1 else 0) }
 
     /** Positive [dx]/[dy] scroll right and down (Wayland's direction); [stop] bit 0 horizontal, bit 1 vertical. */
-    fun pointerAxis(window: Int, x: Float, y: Float, source: Int, stop: Int, dx: Float, dy: Float, v120x: Int, v120y: Int): ByteArray =
-        binary(POINTER_AXIS, 30) {
-            putInt(window).putFloat(x).putFloat(y).put(source.toByte()).put(stop.toByte()).putFloat(dx).putFloat(dy).putInt(v120x).putInt(v120y)
-        }
+    fun pointerAxis(window: Int, x: Float, y: Float, source: Int, stop: Int, dx: Float, dy: Float, v120x: Int, v120y: Int): ByteArray = binary(POINTER_AXIS, 30) {
+        putInt(window).putFloat(x).putFloat(y).put(source.toByte()).put(stop.toByte()).putFloat(dx).putFloat(dy).putInt(v120x).putInt(v120y)
+    }
 
     fun pointerLeave(window: Int): ByteArray = binary(POINTER_LEAVE, 4) { putInt(window) }
 
@@ -186,7 +183,7 @@ data class WindowState(
     val focused: Boolean,
     val visible: Boolean,
     val maximized: Boolean,
-    val fullscreen: Boolean = false,
+    val fullscreen: Boolean = false
 )
 
 /**
@@ -200,7 +197,7 @@ data class ImeEdit(
     val commit: String = "",
     val preedit: String = "",
     val preeditCursorBegin: Int = Utf8.length(preedit),
-    val preeditCursorEnd: Int = preeditCursorBegin,
+    val preeditCursorEnd: Int = preeditCursorBegin
 )
 
 /** A text input's state, as `text-input` carries it: offsets converted to UTF-16 indices into [text]. */
@@ -217,7 +214,7 @@ data class TextInputState(
     val purpose: String,
     val hints: Set<String>,
     /** In window pixels; null when the client set none. */
-    val cursorRect: PixelRect?,
+    val cursorRect: PixelRect?
 ) {
     val active: Boolean get() = window != 0 && session != 0
 
@@ -253,7 +250,7 @@ class Commit(
     val rects: IntArray,
     /** The pixel data as sent: raw, or concatenated zstd frames. */
     val data: ByteArray,
-    val hash: Long,
+    val hash: Long
 ) {
     val buffer: Boolean get() = flags and Gui.FLAG_BUFFER != 0
     val full: Boolean get() = flags and Gui.FLAG_FULL != 0
@@ -293,12 +290,13 @@ sealed interface GuiMessage {
         /** The scale its pixel sizes were computed with; 0 from a compositor that didn't say. */
         val scale: Float = 0f,
         /** Whether its client has a wl_touch. */
-        val touch: Boolean = false,
+        val touch: Boolean = false
     ) : GuiMessage {
         val isDialog: Boolean get() = window != id
     }
     data class ToplevelRemoved(val id: Int) : GuiMessage
     data class ToplevelRequest(val id: Int, val request: String) : GuiMessage
+
     /** [toplevel]: the toplevel whose tree it's in (0 from a compositor that didn't say). */
     data class Surface(val id: Int, val window: Int, val role: String, val parent: Int, val toplevel: Int = 0) : GuiMessage
     data class SurfaceRemoved(val id: Int) : GuiMessage
@@ -338,13 +336,16 @@ class GuiReader(private val input: InputStream) {
                     if (group.isNotEmpty()) throw GuiProtocolException("JSON inside a commit group")
                     parseJson(f.payload)?.let { return it }
                 }
+
                 Gui.COMMIT -> {
                     val c = readCommit(f.payload)
                     if (group.any { it.surface == c.surface }) throw GuiProtocolException("surface ${c.surface.u} twice in a group")
                     group += c
                     if (!c.grouped) return GuiMessage.Group(group)
                 }
+
                 Gui.COMMIT_DATA -> throw GuiProtocolException("COMMIT_DATA outside a commit")
+
                 Gui.ICON -> {
                     if (group.isNotEmpty()) throw GuiProtocolException("ICON inside a commit group")
                     return readIcon(f.payload)
@@ -362,7 +363,9 @@ class GuiReader(private val input: InputStream) {
         return try {
             when (o.optString("type")) {
                 "hello" -> GuiMessage.Hello(o.getInt("version"), o.optString("compositor"), o.getString("instance"))
+
                 "error" -> GuiMessage.Error(o.optString("message"))
+
                 "toplevel" -> GuiMessage.Toplevel(
                     id = o.id("id"),
                     parent = o.optId("parent"),
@@ -380,19 +383,31 @@ class GuiReader(private val input: InputStream) {
                     launch = o.optString("launch"),
                     tab = o.optString("tab"),
                     scale = o.optDouble("scale", 0.0).toFloat().takeIf { it.isFinite() && it > 0f } ?: 0f,
-                    touch = o.optBoolean("touch"),
+                    touch = o.optBoolean("touch")
                 )
+
                 "toplevel-removed" -> GuiMessage.ToplevelRemoved(o.id("id"))
+
                 "toplevel-request" -> GuiMessage.ToplevelRequest(o.id("id"), o.optString("request"))
+
                 "surface" -> GuiMessage.Surface(o.id("id"), o.id("window"), o.optString("role"), o.optId("parent"), o.optId("toplevel"))
+
                 "surface-removed" -> GuiMessage.SurfaceRemoved(o.id("id"))
+
                 "cursor" -> GuiMessage.Cursor(o.optId("window"), o.optString("name"))
+
                 "ready" -> GuiMessage.Ready
+
                 "apps" -> GuiMessage.Apps(AppEntry.parseList(o.getJSONArray("apps")))
+
                 "launch-started" -> GuiMessage.LaunchStarted(o.getString("id"))
+
                 "launch-failed" -> GuiMessage.LaunchFailed(o.getString("id"), o.optString("reason"), o.optString("message"))
+
                 "activate" -> GuiMessage.Activate(o.id("window"), o.optString("launch"))
+
                 "text-input" -> GuiMessage.TextInput(textInput(o))
+
                 else -> null
             }
         } catch (e: JSONException) {
@@ -415,7 +430,7 @@ class GuiReader(private val input: InputStream) {
             anchor = text?.let { Utf8.index(it, o.optInt("anchor")) } ?: 0,
             purpose = o.optString("purpose", "normal"),
             hints = hints,
-            cursorRect = rect,
+            cursorRect = rect
         )
     }
 
@@ -498,11 +513,13 @@ class GuiReader(private val input: InputStream) {
         if (pixelBytes > Gui.MAX_BUFFER_BYTES) throw GuiProtocolException("commit $seqU with $pixelBytes pixel bytes")
         val most = when {
             !buffer -> 0L
+
             encoding == Gui.ENCODING_RAW -> pixelBytes
+
             // zstd's worst-case expansion, with room for many small frames.
             else -> pixelBytes + pixelBytes / 128 + (1L shl 20)
         }
-        if (encoding == Gui.ENCODING_RAW && dataLength != most || dataLength > most) {
+        if ((encoding == Gui.ENCODING_RAW && dataLength != most) || dataLength > most) {
             throw GuiProtocolException("commit $seqU has $dataLength data bytes for $pixelBytes pixel bytes")
         }
         val data = ByteArray(dataLength.toInt())
@@ -523,7 +540,7 @@ class GuiReader(private val input: InputStream) {
 
         return Commit(
             flags, surface, window, seq, z, format, encoding, transform, x, y, dstWidth, dstHeight, width, height,
-            srcX, srcY, srcWidth, srcHeight, scroll, rects, data, hash,
+            srcX, srcY, srcWidth, srcHeight, scroll, rects, data, hash
         )
     }
 }

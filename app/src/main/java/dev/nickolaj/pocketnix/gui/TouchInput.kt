@@ -13,7 +13,7 @@ internal class Touches(
     val ids: IntArray,
     val xs: FloatArray,
     val ys: FloatArray,
-    val time: Long,
+    val time: Long
 ) {
     val count: Int get() = ids.size
 
@@ -21,8 +21,12 @@ internal class Touches(
         fun of(e: MotionEvent): Touches {
             val n = e.pointerCount
             return Touches(
-                e.actionMasked, e.actionIndex,
-                IntArray(n) { e.getPointerId(it) }, FloatArray(n) { e.getX(it) }, FloatArray(n) { e.getY(it) }, e.eventTime,
+                e.actionMasked,
+                e.actionIndex,
+                IntArray(n) { e.getPointerId(it) },
+                FloatArray(n) { e.getX(it) },
+                FloatArray(n) { e.getY(it) },
+                e.eventTime
             )
         }
     }
@@ -57,6 +61,7 @@ internal class TouchPoints(private val window: Int, private val send: (ByteArray
                 send(Gui.touchDown(window, id, p.first, p.second))
                 send(Gui.touchFrame(window))
             }
+
             MotionEvent.ACTION_MOVE -> {
                 var moved = false
                 for (i in 0 until t.count) {
@@ -70,6 +75,7 @@ internal class TouchPoints(private val window: Int, private val send: (ByteArray
                 }
                 if (moved) send(Gui.touchFrame(window))
             }
+
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                 val id = t.ids[t.index]
                 val last = down.remove(id) ?: return
@@ -78,6 +84,7 @@ internal class TouchPoints(private val window: Int, private val send: (ByteArray
                 send(Gui.touchUp(window, id))
                 send(Gui.touchFrame(window))
             }
+
             // A system gesture took the touch; its positions mean nothing.
             MotionEvent.ACTION_CANCEL -> if (down.isNotEmpty()) {
                 down.clear()
@@ -99,7 +106,7 @@ internal class TwoFingers(
     private val send: (ByteArray) -> Unit,
     private val zoom: Zoom,
     private val zoomed: () -> Unit,
-    private val slop: Float,
+    private val slop: Float
 ) {
     private enum class Kind { UNDECIDED, SCROLL, PINCH }
 
@@ -140,7 +147,9 @@ internal class TwoFingers(
                 val dy = (last.y - now.y) / zoom.scale
                 if (dx != 0f || dy != 0f) send(Gui.pointerAxis(window, at.first, at.second, Gui.AXIS_FINGER, 0, dx, dy, 0, 0))
             }
+
             Kind.PINCH -> if (last.pinch(zoom, now)) zoomed()
+
             Kind.UNDECIDED -> {}
         }
         last = now
@@ -201,7 +210,7 @@ internal class PointerGestures(
     private val zoom: Zoom,
     zoomed: () -> Unit,
     private val timer: Timer,
-    private val config: TouchSlop,
+    private val config: TouchSlop
 ) : TouchMode {
     private enum class State { IDLE, PRESSED, DRAGGING, LONG, TWO, DONE }
 
@@ -228,6 +237,7 @@ internal class PointerGestures(
                 state = State.PRESSED
                 timer.schedule(config.longPressMs, longPress)
             }
+
             MotionEvent.ACTION_POINTER_DOWN -> {
                 timer.cancel(longPress)
                 if (state == State.DRAGGING) send(Gui.pointerButton(window, x, y, Gui.BTN_LEFT, false))
@@ -239,6 +249,7 @@ internal class PointerGestures(
                     two.start(t, x to y)
                 }
             }
+
             MotionEvent.ACTION_MOVE -> when (state) {
                 State.PRESSED -> if (hypot(t.xs[0] - downX, t.ys[0] - downY) > config.slop) {
                     timer.cancel(longPress)
@@ -246,10 +257,14 @@ internal class PointerGestures(
                     send(Gui.pointerButton(window, x, y, Gui.BTN_LEFT, true))
                     moveTo(t, 0)
                 }
+
                 State.DRAGGING -> moveTo(t, 0)
+
                 State.TWO -> two.move(t)
+
                 else -> {}
             }
+
             MotionEvent.ACTION_POINTER_UP -> if (state == State.TWO) {
                 if (t.count > 2) {
                     two.track(t, t.index)
@@ -260,19 +275,24 @@ internal class PointerGestures(
                     state = State.DONE
                 }
             }
+
             MotionEvent.ACTION_UP -> {
                 timer.cancel(longPress)
                 when (state) {
                     State.PRESSED -> click(Gui.BTN_LEFT)
+
                     State.DRAGGING -> {
                         moveTo(t, 0)
                         send(Gui.pointerButton(window, x, y, Gui.BTN_LEFT, false))
                     }
+
                     State.TWO -> two.end()
+
                     else -> {}
                 }
                 state = State.IDLE
             }
+
             // A system gesture took the touch: let go without acting, and nowhere new.
             MotionEvent.ACTION_CANCEL -> {
                 timer.cancel(longPress)
@@ -317,7 +337,7 @@ internal class TrackpadGestures(
     /** The window's size in window pixels, which the cursor stays within. */
     private val bounds: () -> Pair<Int, Int>,
     /** The cursor moved, or appeared. */
-    private val cursorMoved: () -> Unit,
+    private val cursorMoved: () -> Unit
 ) : TouchMode {
     private enum class State { IDLE, PRESSED, MOVING, LONG, DRAGGING, TWO, DONE }
 
@@ -358,6 +378,7 @@ internal class TrackpadGestures(
                 state = State.PRESSED
                 timer.schedule(config.longPressMs, longPress)
             }
+
             MotionEvent.ACTION_POINTER_DOWN -> {
                 timer.cancel(longPress)
                 if (state == State.DRAGGING) send(Gui.pointerButton(window, x, y, Gui.BTN_LEFT, false))
@@ -369,6 +390,7 @@ internal class TrackpadGestures(
                     two.start(t, x to y)
                 }
             }
+
             MotionEvent.ACTION_MOVE -> when (state) {
                 State.PRESSED, State.LONG -> if (hypot(t.xs[0] - downX, t.ys[0] - downY) > config.slop) {
                     timer.cancel(longPress)
@@ -380,10 +402,14 @@ internal class TrackpadGestures(
                     }
                     follow(t)
                 }
+
                 State.MOVING, State.DRAGGING -> follow(t)
+
                 State.TWO -> two.move(t)
+
                 else -> {}
             }
+
             MotionEvent.ACTION_POINTER_UP -> if (state == State.TWO) {
                 if (t.count > 2) {
                     two.track(t, t.index)
@@ -393,6 +419,7 @@ internal class TrackpadGestures(
                     state = State.DONE
                 }
             }
+
             MotionEvent.ACTION_UP -> {
                 timer.cancel(longPress)
                 when (state) {
@@ -404,6 +431,7 @@ internal class TrackpadGestures(
                 }
                 state = State.IDLE
             }
+
             MotionEvent.ACTION_CANCEL -> {
                 timer.cancel(longPress)
                 when (state) {

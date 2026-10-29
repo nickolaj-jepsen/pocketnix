@@ -17,7 +17,7 @@ import java.util.concurrent.LinkedBlockingQueue
  */
 class GuiLink(
     private val appVersion: String,
-    private val listener: Listener,
+    private val listener: Listener
 ) {
     /** Called on the link's thread, in order. */
     interface Listener {
@@ -31,7 +31,9 @@ class GuiLink(
     }
 
     @Volatile private var thread: Thread? = null
+
     @Volatile private var stream: AgentStream? = null
+
     @Volatile private var writer: Writer? = null
 
     val connected: Boolean get() = writer != null

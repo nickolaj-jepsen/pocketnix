@@ -20,7 +20,7 @@ class LaunchesTest {
 
     private fun toplevel(id: Int, launch: String, window: Int = id) = GuiMessage.Toplevel(
         id = id, parent = if (window == id) 0 else window, title = "", appId = "foot", width = 0, height = 0,
-        minWidth = 0, minHeight = 0, maxWidth = 0, maxHeight = 0, decoration = "client", window = window, launch = launch,
+        minWidth = 0, minHeight = 0, maxWidth = 0, maxHeight = 0, decoration = "client", window = window, launch = launch
     )
 
     private fun connect(instance: String = "i1") {
@@ -157,7 +157,7 @@ class LaunchesTest {
         late: Boolean = false,
         gui: Boolean? = true,
         ready: Boolean = true,
-        launch: LaunchState = LaunchState.Pending,
+        launch: LaunchState = LaunchState.Pending
     ) = splashStatus("Foot", vm, link, late, gui, ready, launch)
 
     @Test

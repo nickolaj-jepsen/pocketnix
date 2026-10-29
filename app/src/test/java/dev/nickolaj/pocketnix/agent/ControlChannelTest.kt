@@ -1,5 +1,6 @@
 package dev.nickolaj.pocketnix.agent
 
+import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -14,7 +15,6 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.io.IOException
 
 class ControlChannelTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

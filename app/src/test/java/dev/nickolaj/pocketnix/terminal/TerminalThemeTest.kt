@@ -17,8 +17,8 @@ class TerminalThemeTest {
                 "color255" to "#000000",
                 "color256" to "#000000",
                 "colour1" to "#ffffff",
-                "foreground" to "white",
-            ),
+                "foreground" to "white"
+            )
         )
         assertEquals(setOf("background", "color15", "color255"), p.stringPropertyNames())
     }

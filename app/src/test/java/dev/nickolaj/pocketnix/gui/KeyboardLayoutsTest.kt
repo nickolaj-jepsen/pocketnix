@@ -42,7 +42,7 @@ class KeyboardLayoutsTest {
         assertEquals(
             InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_AUTO_CORRECT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or
                 InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS,
-            text,
+            text
         )
         assertEquals(EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING, options and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING)
         val (hidden, _) = WindowIme.editorType("normal", setOf("hidden-text"))

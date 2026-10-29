@@ -3,6 +3,20 @@ package dev.nickolaj.pocketnix.agent
 import com.termux.terminal.TerminalBackend
 import dev.nickolaj.pocketnix.forward.PortForwards
 import dev.nickolaj.pocketnix.forward.UdpForwarder
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
+import java.net.SocketTimeoutException
+import java.net.UnixDomainSocketAddress
+import java.nio.ByteBuffer
+import java.nio.channels.SocketChannel
+import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -13,28 +27,14 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
-import org.json.JSONArray
-import org.json.JSONObject
 import org.junit.Test
-import java.io.ByteArrayOutputStream
-import java.io.File
-import java.net.DatagramPacket
-import java.net.DatagramSocket
-import java.net.InetAddress
-import java.net.ServerSocket
-import java.net.SocketTimeoutException
-import java.net.Socket
-import java.net.UnixDomainSocketAddress
-import java.nio.ByteBuffer
-import java.nio.channels.SocketChannel
-import java.nio.file.Files
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 /**
  * The app's agent code against the real Go agent over TCP. Opt-in:
@@ -86,12 +86,18 @@ class AgentIntegrationTest {
                {"name":"exit4","command":"echo hi; exit 4"},
                {"name":"size","command":"while read l; do stty size; done"}],
                "theme":{"colors":{"background":"#123456"}}}}
-            """.trimIndent(),
+            """.trimIndent()
         )
         port = freePort()
         agent = ProcessBuilder(
-            bin, "--config", File(dir, "agent.json").path, "--listen", "tcp:127.0.0.1:$port", "--no-power",
-            "--guest-socket", File(dir, "guest.sock").path,
+            bin,
+            "--config",
+            File(dir, "agent.json").path,
+            "--listen",
+            "tcp:127.0.0.1:$port",
+            "--no-power",
+            "--guest-socket",
+            File(dir, "guest.sock").path
         )
             .redirectErrorStream(true).redirectOutput(File(dir, "agent.log")).start()
         val deadline = System.currentTimeMillis() + 10_000
@@ -265,7 +271,9 @@ class AgentIntegrationTest {
     private class Recorder : TerminalBackend.Sink {
         val out = ByteArrayOutputStream()
         val done = CountDownLatch(1)
+
         @Volatile var status: Int? = null
+
         @Volatile var reason: String? = null
 
         override fun onOutput(data: ByteArray, offset: Int, count: Int): Boolean {

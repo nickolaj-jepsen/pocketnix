@@ -1,11 +1,6 @@
 package dev.nickolaj.pocketnix.agent
 
 import com.termux.terminal.TerminalBackend
-import org.junit.After
-import org.junit.Assert.assertArrayEquals
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
-import org.junit.Test
 import java.io.Closeable
 import java.io.IOException
 import java.io.OutputStream
@@ -13,6 +8,11 @@ import java.net.ServerSocket
 import java.nio.ByteBuffer
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import org.junit.After
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
 
 /** PTY and file streams against stand-in agents: what reaches the guest, and what the app reads. */
 class StreamsTest {
@@ -73,6 +73,7 @@ class StreamsTest {
     private class RecordingSink : TerminalBackend.Sink {
         private val buf = java.io.ByteArrayOutputStream()
         val exited = CountDownLatch(1)
+
         @Volatile var status: Int? = null
 
         @Synchronized

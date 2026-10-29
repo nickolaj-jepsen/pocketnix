@@ -76,8 +76,10 @@ class GuestDocumentsProvider : DocumentsProvider() {
         val f = ctx.vm.files()
         when {
             f != null -> row(c, call { f.stat(path(documentId)) })
+
             // The root exists while stopped, so pickers can show why it's empty.
             documentId == "/" -> row(c, GuestFile("", ctx.getString(R.string.app_name), dir = true, size = 0, mtime = 0, writable = false))
+
             else -> throw FileNotFoundException(documentId)
         }
         return c
@@ -124,7 +126,7 @@ class GuestDocumentsProvider : DocumentsProvider() {
     private inner class Ranged(
         private val file: RangedFile,
         private val documentId: String,
-        private val thread: HandlerThread,
+        private val thread: HandlerThread
     ) : ProxyFileDescriptorCallback() {
         // The writer already saw an error, so it knows its save failed.
         private var failed = false
@@ -235,14 +237,16 @@ class GuestDocumentsProvider : DocumentsProvider() {
         return docId(renamed.path)
     }
 
-    override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean =
-        parentDocumentId == "/" || documentId.startsWith("$parentDocumentId/")
+    override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean = parentDocumentId == "/" || documentId.startsWith("$parentDocumentId/")
 
-    override fun getDocumentType(documentId: String): String =
-        if (documentId == "/") Document.MIME_TYPE_DIR else queryDocument(documentId, arrayOf(Document.COLUMN_MIME_TYPE)).use {
+    override fun getDocumentType(documentId: String): String = if (documentId == "/") {
+        Document.MIME_TYPE_DIR
+    } else {
+        queryDocument(documentId, arrayOf(Document.COLUMN_MIME_TYPE)).use {
             it.moveToFirst()
             it.getString(0)
         }
+    }
 
     private fun row(c: MatrixCursor, f: GuestFile) {
         var flags = 0
@@ -277,11 +281,20 @@ class GuestDocumentsProvider : DocumentsProvider() {
         private const val TAG = "GuestDocuments"
         private const val ROOT = "guest"
         private val ROOT_COLUMNS = arrayOf(
-            Root.COLUMN_ROOT_ID, Root.COLUMN_DOCUMENT_ID, Root.COLUMN_TITLE, Root.COLUMN_SUMMARY, Root.COLUMN_FLAGS, Root.COLUMN_ICON,
+            Root.COLUMN_ROOT_ID,
+            Root.COLUMN_DOCUMENT_ID,
+            Root.COLUMN_TITLE,
+            Root.COLUMN_SUMMARY,
+            Root.COLUMN_FLAGS,
+            Root.COLUMN_ICON
         )
         private val DOCUMENT_COLUMNS = arrayOf(
-            Document.COLUMN_DOCUMENT_ID, Document.COLUMN_DISPLAY_NAME, Document.COLUMN_MIME_TYPE,
-            Document.COLUMN_SIZE, Document.COLUMN_LAST_MODIFIED, Document.COLUMN_FLAGS,
+            Document.COLUMN_DOCUMENT_ID,
+            Document.COLUMN_DISPLAY_NAME,
+            Document.COLUMN_MIME_TYPE,
+            Document.COLUMN_SIZE,
+            Document.COLUMN_LAST_MODIFIED,
+            Document.COLUMN_FLAGS
         )
 
         fun authority(context: Context) = "${context.packageName}.files"

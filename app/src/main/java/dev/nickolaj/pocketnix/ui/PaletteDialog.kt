@@ -60,10 +60,11 @@ fun PaletteDialog(vm: Vm, controller: TerminalController, onDismiss: () -> Unit)
         text = {
             Column {
                 OutlinedTextField(
-                    query, { query = it },
+                    query,
+                    { query = it },
                     placeholder = { Text("Filter snippets and history") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focus)
                 )
                 LazyColumn(Modifier.heightIn(max = 420.dp).padding(top = 8.dp)) {
                     items(rows) { e -> PaletteRow(e, onPick = { pick(e, e.submit) }, onRun = { pick(e, true) }) }
@@ -72,7 +73,7 @@ fun PaletteDialog(vm: Vm, controller: TerminalController, onDismiss: () -> Unit)
             }
         },
         confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } }
     )
 }
 
@@ -86,7 +87,7 @@ private fun PaletteRow(e: PaletteEntry, onPick: () -> Unit, onRun: () -> Unit) {
                 fontFamily = FontFamily.Monospace,
                 fontSize = if (e.snippet) 11.sp else 13.sp,
                 maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+                overflow = TextOverflow.Ellipsis
             )
         }
         TextButton(onClick = onRun) { Text("⏎") }

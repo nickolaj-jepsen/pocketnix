@@ -11,9 +11,13 @@ data class Wake(val held: Boolean, val holders: List<WakeHolder>) {
     companion object {
         fun parse(o: JSONObject): Wake {
             val a = o.optJSONArray("holders")
-            val holders = if (a == null) emptyList() else (0 until a.length()).map {
-                val h = a.getJSONObject(it)
-                WakeHolder(h.optString("who"), h.optString("why"))
+            val holders = if (a == null) {
+                emptyList()
+            } else {
+                (0 until a.length()).map {
+                    val h = a.getJSONObject(it)
+                    WakeHolder(h.optString("who"), h.optString("why"))
+                }
             }
             return Wake(o.optBoolean("held"), holders)
         }
@@ -30,7 +34,7 @@ data class HostState(
     /** On external power. */
     val charging: Boolean,
     val batteryLow: Boolean,
-    val powerSave: Boolean,
+    val powerSave: Boolean
 ) {
     fun request(): JSONObject = JSONObject()
         .put("type", "host-state")
@@ -42,6 +46,6 @@ data class HostState(
                 .put("metered", metered)
                 .put("charging", charging)
                 .put("batteryLow", batteryLow)
-                .put("powerSave", powerSave),
+                .put("powerSave", powerSave)
         )
 }

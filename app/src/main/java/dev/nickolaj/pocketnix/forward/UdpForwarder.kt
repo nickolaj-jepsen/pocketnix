@@ -32,7 +32,7 @@ internal class UdpForwarder(
     private val dialer: AgentDialer,
     private val appVersion: String,
     private val idleMs: Long = 120_000,
-    private val maxFlows: Int = 64,
+    private val maxFlows: Int = 64
 ) : Closeable {
     private val socket = DatagramSocket(null).apply {
         // Unlike TCP's, a UDP SO_REUSEADDR would let two apps share the port.
@@ -40,6 +40,7 @@ internal class UdpForwarder(
         bind(InetSocketAddress(InetAddress.getByName(if (f.lan) "0.0.0.0" else "127.0.0.1"), f.hostPort))
     }
     private val flows = ConcurrentHashMap<SocketAddress, Flow>()
+
     @Volatile private var closed = false
 
     init {
@@ -98,6 +99,7 @@ internal class UdpForwarder(
     private inner class Flow(private val src: SocketAddress) {
         @Volatile var lastActive = System.currentTimeMillis()
         private val queue = LinkedBlockingQueue<ByteArray>(QUEUE)
+
         @Volatile private var stream: AgentStream? = null
         private val ended = AtomicBoolean(false)
         private val done get() = ended.get()

@@ -30,7 +30,7 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
 
     init {
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL, context.getString(R.string.guest_channel), NotificationManager.IMPORTANCE_DEFAULT),
+            NotificationChannel(CHANNEL, context.getString(R.string.guest_channel), NotificationManager.IMPORTANCE_DEFAULT)
         )
     }
 
@@ -39,15 +39,20 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
         when (msg.optString("type")) {
             "notify" -> GuestNotification.parse(msg)?.let { notifications.post(it) }
                 ?: notify(msg.optString("title"), msg.optString("body"), null)
+
             "notify-close" -> notifications.cancel(msg.optLong("notification"))
+
             "open" -> open(msg, appVisible)
+
             "share" -> share(msg, appVisible)
+
             "guest-clipboard" -> {
                 // A clip goes through one binder transaction (~1 MB, UTF-16): more throws.
                 val text = msg.optString("text").take(MAX_CLIP_CHARS)
                 lastGuestCopy = text
                 clipboard.setPrimaryClip(ClipData.newPlainText(hostname() ?: "pocketnix", text))
             }
+
             else -> Log.i(TAG, "ignoring agent push ${msg.optString("type")}")
         }
     }
@@ -115,12 +120,12 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
     companion object {
         private const val TAG = "GuestBridge"
         private const val CHANNEL = "guest"
+
         // Clear of the VM service's and the tabs' notification ids.
         private const val NOTIFICATION_BASE = 100_000
         private const val MAX_NOTIFICATIONS = 50
         private const val MAX_CLIP_CHARS = 100_000
 
-        fun mimeType(path: String): String =
-            MimeTypeMap.getSingleton().getMimeTypeFromExtension(path.substringAfterLast('.', "").lowercase()) ?: "application/octet-stream"
+        fun mimeType(path: String): String = MimeTypeMap.getSingleton().getMimeTypeFromExtension(path.substringAfterLast('.', "").lowercase()) ?: "application/octet-stream"
     }
 }

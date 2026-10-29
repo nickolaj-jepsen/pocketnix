@@ -12,39 +12,40 @@ import dev.nickolaj.pocketnix.agent.GuestConfig
 import dev.nickolaj.pocketnix.agent.GuestFiles
 import dev.nickolaj.pocketnix.agent.HostStateSync
 import dev.nickolaj.pocketnix.agent.PtyBackend
-import dev.nickolaj.pocketnix.agent.WakeHolder
-import dev.nickolaj.pocketnix.host.HostMonitor
-import dev.nickolaj.pocketnix.service.wakeHoldersOf
-import dev.nickolaj.pocketnix.files.GuestDocumentsProvider
-import dev.nickolaj.pocketnix.files.PendingUploads
-import dev.nickolaj.pocketnix.files.Transfers
 import dev.nickolaj.pocketnix.agent.Updates
+import dev.nickolaj.pocketnix.agent.WakeHolder
 import dev.nickolaj.pocketnix.engine.AvfEngine
 import dev.nickolaj.pocketnix.engine.BootMenu
 import dev.nickolaj.pocketnix.engine.ConsoleLog
 import dev.nickolaj.pocketnix.engine.TcpEngine
 import dev.nickolaj.pocketnix.engine.VmEngine
 import dev.nickolaj.pocketnix.engine.VmState
+import dev.nickolaj.pocketnix.files.GuestDocumentsProvider
+import dev.nickolaj.pocketnix.files.PendingUploads
+import dev.nickolaj.pocketnix.files.Transfers
 import dev.nickolaj.pocketnix.forward.PortForwards
 import dev.nickolaj.pocketnix.gui.GuiSession
+import dev.nickolaj.pocketnix.host.HostMonitor
 import dev.nickolaj.pocketnix.hostfs.HostFolderLinks
 import dev.nickolaj.pocketnix.hostfs.SafFolder
 import dev.nickolaj.pocketnix.hostfs.SharedFolders
 import dev.nickolaj.pocketnix.service.VmService
+import dev.nickolaj.pocketnix.service.wakeHoldersOf
 import dev.nickolaj.pocketnix.terminal.Tab
 import dev.nickolaj.pocketnix.terminal.TabAlerts
 import dev.nickolaj.pocketnix.terminal.Tabs
 import dev.nickolaj.pocketnix.terminal.TerminalTheme
+import java.io.File
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -57,7 +58,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
 
 /**
  * The app's one VM and everything that lives with it. Owned by [PocketnixApp];
@@ -67,7 +67,7 @@ import java.io.File
 class Vm(private val app: Context) {
     // A failed coroutine logs instead of crashing the app, and with it the VM.
     private val scope = CoroutineScope(
-        SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, e -> Log.e(TAG, "coroutine failed", e) },
+        SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, e -> Log.e(TAG, "coroutine failed", e) }
     )
     val settings = Settings(app)
     val console = ConsoleLog()
@@ -76,6 +76,7 @@ class Vm(private val app: Context) {
     private val forwards = PortForwards(appVersion)
     private val fonts = FontCache(File(app.cacheDir, "fonts"), appVersion)
     val tabs = Tabs(app, console.backend(), appVersion)
+
     /** The guest's GUI windows, while its config turns GUI on. */
     val gui = GuiSession(app, appVersion)
 
@@ -88,10 +89,12 @@ class Vm(private val app: Context) {
     val stopping: StateFlow<Boolean> = _stopping.asStateFlow()
 
     private val _forwardErrors = MutableStateFlow<List<String>>(emptyList())
+
     /** Forwards that couldn't listen, for the UI. */
     val forwardErrors: StateFlow<List<String>> = _forwardErrors.asStateFlow()
 
     private val _typeface = MutableStateFlow<Typeface?>(null)
+
     /** The module's font, or null for the default monospace. */
     val typeface: StateFlow<Typeface?> = _typeface.asStateFlow()
 
@@ -100,6 +103,7 @@ class Vm(private val app: Context) {
     val themeRevision: StateFlow<Int> = _themeRevision.asStateFlow()
 
     private val _agentLate = MutableStateFlow(false)
+
     /** The guest runs but its agent hasn't answered in [AGENT_LATE_MS]: maybe a generation that won't boot. */
     val agentLate: StateFlow<Boolean> = _agentLate.asStateFlow()
 
@@ -112,16 +116,17 @@ class Vm(private val app: Context) {
     /** The phone's network, power and timezone, watched while the agent is connected. */
     val host = HostMonitor(app)
 
-    private val _wakeLocks = MutableStateFlow(settings.wakeLocks)
+    private val wakeLocksAllowed = MutableStateFlow(settings.wakeLocks)
+
     /** Who the phone stays awake for (see [wakeHoldersOf]), or null. */
     val wakeHolders: StateFlow<List<WakeHolder>?> =
-        combine(control.wake, control.link, state, _wakeLocks) { wake, link, s, allowed ->
+        combine(control.wake, control.link, state, wakeLocksAllowed) { wake, link, s, allowed ->
             wakeHoldersOf(wake, link is ControlChannel.Link.Up, s == VmState.Running, allowed)
         }.stateIn(scope, SharingStarted.Eagerly, null)
 
     fun setWakeLocks(allowed: Boolean) {
         settings.wakeLocks = allowed
-        _wakeLocks.value = allowed
+        wakeLocksAllowed.value = allowed
     }
 
     /** Android folders mounted in the guest. */
@@ -172,7 +177,9 @@ class Vm(private val app: Context) {
             state.collect { s ->
                 when (s) {
                     VmState.Running -> _engine.value.dialer?.let { control.start(it) }
+
                     VmState.Starting -> {}
+
                     else -> {
                         control.stop()
                         control.clear()
@@ -230,13 +237,12 @@ class Vm(private val app: Context) {
         }
     }
 
-    private fun pickEngine(): VmEngine =
-        if (settings.tcpBackend) {
-            val (host, port) = settings.tcpAddress.split(":").let { it[0] to (it.getOrNull(1)?.toIntOrNull() ?: 9100) }
-            TcpEngine(host, port)
-        } else {
-            avf
-        }
+    private fun pickEngine(): VmEngine = if (settings.tcpBackend) {
+        val (host, port) = settings.tcpAddress.split(":").let { it[0] to (it.getOrNull(1)?.toIntOrNull() ?: 9100) }
+        TcpEngine(host, port)
+    } else {
+        avf
+    }
 
     /** Re-reads the backend setting; only while stopped. */
     fun reloadEngine() {
@@ -272,6 +278,7 @@ class Vm(private val app: Context) {
     }
 
     private val _serviceRefused = MutableStateFlow(false)
+
     /** The VM runs without its foreground service, so Android may kill it with the app at any time. */
     val serviceRefused: StateFlow<Boolean> = _serviceRefused.asStateFlow()
 
@@ -365,8 +372,7 @@ class Vm(private val app: Context) {
     }
 
     /** Shares text as the share sheet does; returns where it landed, or throws. */
-    suspend fun shareText(text: String): String =
-        control.call(JSONObject().put("type", "share-text").put("text", text)).optString("path")
+    suspend fun shareText(text: String): String = control.call(JSONObject().put("type", "share-text").put("text", text)).optString("path")
 
     /** The user's shell history for the command palette, newest first; empty while the agent can't be reached. */
     suspend fun history(): List<String> = runCatching {
@@ -466,6 +472,7 @@ class Vm(private val app: Context) {
         const val FORWARD_RETRY_MS = 30_000L
         const val FORWARD_RETRY_MAX_MS = 600_000L
         const val HISTORY_LIMIT = 1000
+
         // org.freedesktop.Notifications' "dismissed by the user".
         const val CLOSED_DISMISSED = 2
     }

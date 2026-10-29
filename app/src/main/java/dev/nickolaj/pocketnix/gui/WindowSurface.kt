@@ -31,7 +31,7 @@ class WindowSurface internal constructor(
     /** Whether [host] still shows the window: a dismissed host's surface tells the session nothing. */
     private val bound: () -> Boolean,
     /** The host's part of the `window` message, given whether the surface exists. */
-    private val flags: (attached: Boolean) -> Flags,
+    private val flags: (attached: Boolean) -> Flags
 ) {
     data class Flags(val focused: Boolean, val visible: Boolean, val maximized: Boolean, val fullscreen: Boolean = false)
 
@@ -194,7 +194,9 @@ class WindowSurface internal constructor(
                 edge = if (onEdgeSwipe != null && e.y >= height - zone) Edge.TRACKING else Edge.NONE
                 edgeStartY = e.y
             }
+
             MotionEvent.ACTION_POINTER_DOWN -> if (edge == Edge.TRACKING) edge = Edge.NONE
+
             MotionEvent.ACTION_MOVE -> if (edge == Edge.TRACKING && edgeStartY - e.y > EDGE_DP * view.resources.displayMetrics.density) {
                 edge = Edge.DONE
                 // The app has had the touch so far: it ends without effect, as when a system gesture takes it.
@@ -209,6 +211,7 @@ class WindowSurface internal constructor(
                 gesture = null
                 onEdgeSwipe?.invoke()
             }
+
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 val took = edge == Edge.DONE
                 edge = Edge.NONE
@@ -279,7 +282,7 @@ class WindowSurface internal constructor(
         session.windowState(
             host,
             // Hidden, the window keeps its last size: the client needn't redraw at another for nobody.
-            WindowState(id, width, height, scale, f.focused, f.visible, f.maximized, f.fullscreen),
+            WindowState(id, width, height, scale, f.focused, f.visible, f.maximized, f.fullscreen)
         )
     }
 
@@ -322,8 +325,7 @@ class WindowSurface internal constructor(
     private inner class GuiView(context: Context) : SurfaceView(context) {
         override fun onCheckIsTextEditor(): Boolean = true
 
-        override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? =
-            guard("window ${id.u}: input connection", null) { ime.connect(outAttrs) }
+        override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? = guard("window ${id.u}: input connection", null) { ime.connect(outAttrs) }
     }
 
     /**
@@ -352,10 +354,13 @@ class WindowSurface internal constructor(
 
     private companion object {
         const val RESIZE_DEBOUNCE_MS = 150L
+
         // How far above the system's own gesture area a swipe may start, and how far up it must go.
         const val EDGE_DP = 32
+
         // The longest two-finger tap that still right-clicks.
         const val TAP_MS = 300L
+
         // Room kept around a text cursor panned into view.
         const val REVEAL_MARGIN_DP = 16
     }

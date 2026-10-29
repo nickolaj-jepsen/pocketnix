@@ -10,10 +10,9 @@ object TerminalTheme {
     private val value = Regex("#[0-9a-fA-F]{6}")
 
     /** The entries Termux's scheme accepts; others are dropped rather than failing the whole theme. */
-    fun properties(colors: Map<String, String>): Properties =
-        Properties().apply {
-            for ((k, v) in colors) if (key.matches(k) && value.matches(v)) setProperty(k, v)
-        }
+    fun properties(colors: Map<String, String>): Properties = Properties().apply {
+        for ((k, v) in colors) if (key.matches(k) && value.matches(v)) setProperty(k, v)
+    }
 
     /**
      * Makes [colors] the default palette for new emulators. Existing ones

@@ -32,6 +32,7 @@ class VmService : Service() {
     private var lastStartId = 0
     private var wakeWatch: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
+
     /** Why the phone is kept awake, for the notification; null while it may sleep. */
     private var wakeLine: String? = null
     private var lastText = "Starting"
@@ -41,7 +42,7 @@ class VmService : Service() {
     override fun onCreate() {
         super.onCreate()
         getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(CHANNEL, getString(R.string.notification_channel), NotificationManager.IMPORTANCE_LOW),
+            NotificationChannel(CHANNEL, getString(R.string.notification_channel), NotificationManager.IMPORTANCE_LOW)
         )
     }
 
@@ -59,6 +60,7 @@ class VmService : Service() {
                                 // Only for the latest start: a restart's start may be on its way.
                                 if (stopSelfResult(lastStartId)) stopForeground(STOP_FOREGROUND_REMOVE)
                             }
+
                             else -> {
                                 val text = when {
                                     stopping -> "Stopping"

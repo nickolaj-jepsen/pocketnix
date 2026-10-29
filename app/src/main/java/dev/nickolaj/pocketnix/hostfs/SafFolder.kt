@@ -183,7 +183,7 @@ class SafFolder(private val resolver: ContentResolver, private val tree: Uri) : 
             Document.COLUMN_MIME_TYPE,
             Document.COLUMN_SIZE,
             Document.COLUMN_LAST_MODIFIED,
-            Document.COLUMN_FLAGS,
+            Document.COLUMN_FLAGS
         )
 
         fun parentOf(path: String) = path.substringBeforeLast('/', "")

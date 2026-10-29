@@ -8,12 +8,12 @@ import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import dev.nickolaj.pocketnix.provision.requireAdbCaller
+import java.io.FileNotFoundException
+import kotlin.concurrent.thread
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import java.io.FileNotFoundException
-import kotlin.concurrent.thread
 
 /**
  * Debug builds' scripted checks over adb, answered to the caller rather
@@ -54,7 +54,9 @@ class ControlProvider : ContentProvider() {
                         ?: error("the agent wasn't up within $timeout ms")
                     out.putInt("tab", id)
                 }
+
                 "type" -> onMain { vm.debugType(tabId(arg ?: error("type needs a tab id")), input, enter) }
+
                 else -> error("unknown method $method")
             }
             out.putBoolean("ok", true)

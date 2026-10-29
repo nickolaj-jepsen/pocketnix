@@ -12,15 +12,15 @@ import android.util.Log
 import dev.nickolaj.pocketnix.agent.AgentDialer
 import dev.nickolaj.pocketnix.agent.AgentStream
 import dev.nickolaj.pocketnix.agent.Protocol
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 import java.io.RandomAccessFile
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Boots the app's disk image under AVF: AVF's u-boot finds the image's ESP
@@ -35,10 +35,13 @@ class AvfEngine(private val context: Context) : VmEngine {
     private val lifecycle = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "avf-lifecycle") }
 
     @Volatile private var vm: Any? = null
+
     // Bumped per launch so a previous VM's late callback can't touch the current one.
     private var generation = 0L
+
     @Volatile private var stopRequested = false
     private var consoleStreams: Pair<InputStream, OutputStream>? = null
+
     // The last launch's, for a stop that gets no onStopped to clean up after.
     private var console: ConsoleLog? = null
     private var lastError: String? = null
@@ -91,14 +94,15 @@ class AvfEngine(private val context: Context) : VmEngine {
                     AvfReflect.create(mgr, VM_NAME, config)
                 }
             AvfReflect.setCallback(
-                v, lifecycle,
+                v,
+                lifecycle,
                 AvfReflect.newVmCallback(
                     onError = { code, msg ->
                         Log.e(TAG, "VM error $code: $msg")
                         lastError = "AVF error $code: ${msg ?: "no message"}"
                     },
-                    onStopped = { reason -> onStopped(gen, reason, settingsOf, console) },
-                ),
+                    onStopped = { reason -> onStopped(gen, reason, settingsOf, console) }
+                )
             )
 
             val out = AvfReflect.consoleOutput(v)
@@ -176,7 +180,9 @@ class AvfEngine(private val context: Context) : VmEngine {
                 _state.value = VmState.Starting
                 launch(settings, console)
             }
+
             stopRequested || reason == AvfReasons.STOP_REASON_SHUTDOWN -> _state.value = VmState.Stopped
+
             else -> _state.value = VmState.Failed(lastError ?: "The VM stopped: ${AvfReasons.stopReason(reason)}")
         }
     }
@@ -216,6 +222,7 @@ class AvfEngine(private val context: Context) : VmEngine {
     private companion object {
         const val TAG = "AvfEngine"
         const val VM_NAME = "pocketnix"
+
         /** AVF's EFI loader: it finds the image's ESP and runs the image's boot loader. */
         const val UBOOT = "/apex/com.android.virt/etc/u-boot.bin"
     }
@@ -243,6 +250,7 @@ class VsockStream(private val pfd: ParcelFileDescriptor) : AgentStream {
     private val outPfd = pfd.dup()
     override val input: InputStream = ParcelFileDescriptor.AutoCloseInputStream(pfd)
     override val output: OutputStream = ParcelFileDescriptor.AutoCloseOutputStream(outPfd)
+
     @Volatile private var closed = false
 
     override fun shutdownOutput() {

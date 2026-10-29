@@ -14,8 +14,8 @@ class GuestNotificationTest {
         val n = GuestNotification.parse(
             JSONObject(
                 """{"type":"notify","title":"build","body":"done","notification":7,"appName":"make","urgency":"critical",
-                "actions":[{"key":"default","label":"Open"},{"key":"ok","label":"OK"}]}""",
-            ),
+                "actions":[{"key":"default","label":"Open"},{"key":"ok","label":"OK"}]}"""
+            )
         )!!
         assertEquals(7L, n.id)
         assertEquals(listOf("ok" to "OK"), n.buttons)
@@ -31,7 +31,7 @@ class GuestNotificationTest {
     @Test
     fun urgencyPicksTheChannel() {
         fun channel(urgency: String?) = GuestNotification.parse(
-            JSONObject().put("notification", 1).put("body", "b").apply { if (urgency != null) put("urgency", urgency) },
+            JSONObject().put("notification", 1).put("body", "b").apply { if (urgency != null) put("urgency", urgency) }
         )!!.channel
         assertEquals(GuestNotifications.CHANNEL_LOW, channel("low"))
         assertEquals(GuestNotifications.CHANNEL, channel("normal"))

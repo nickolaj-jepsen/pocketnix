@@ -1,12 +1,12 @@
 package dev.nickolaj.pocketnix.gui
 
+import java.io.ByteArrayInputStream
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.io.ByteArrayInputStream
 
 class GuiStateTest {
     private val state = GuiState(JavaUnpacker)
@@ -121,7 +121,7 @@ class GuiStateTest {
         assertThrows(GuiProtocolException::class.java) {
             feed(
                 window().full(1, 1, 2, 2, ByteArray(16))
-                    .commit(1, 1, 3, 2, listOf(intArrayOf(0, 0, 1, 1)), ByteArray(4), Gui.FLAG_BUFFER),
+                    .commit(1, 1, 3, 2, listOf(intArrayOf(0, 0, 1, 1)), ByteArray(4), Gui.FLAG_BUFFER)
             )
         }
     }

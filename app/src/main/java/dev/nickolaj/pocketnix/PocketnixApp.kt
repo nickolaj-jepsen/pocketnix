@@ -23,8 +23,10 @@ class PocketnixApp : Application() {
         // for this process only. Each call replaces the list: name them all here.
         runCatching {
             HiddenApiBypass.addHiddenApiExemptions(
-                "Landroid/system/virtualmachine/", "Landroid/system/virtualizationservice/",
-                "Landroid/hardware/input/", "Landroid/view/InputDevice;",
+                "Landroid/system/virtualmachine/",
+                "Landroid/system/virtualizationservice/",
+                "Landroid/hardware/input/",
+                "Landroid/view/InputDevice;"
             )
         }.onFailure { Log.w("PocketnixApp", "hidden API exemption failed", it) }
         registerActivityLifecycleCallbacks(Foreground)

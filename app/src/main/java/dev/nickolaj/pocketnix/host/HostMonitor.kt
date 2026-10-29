@@ -13,10 +13,10 @@ import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import dev.nickolaj.pocketnix.agent.HostState
+import java.util.TimeZone
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.util.TimeZone
 
 /**
  * The phone's timezone, network and power, for the guest (docs/configuration.md,
@@ -26,6 +26,7 @@ import java.util.TimeZone
  */
 class HostMonitor(private val context: Context) {
     private val _state = MutableStateFlow<HostState?>(null)
+
     /** The current state while started, else null. */
     val state: StateFlow<HostState?> = _state.asStateFlow()
 
@@ -46,10 +47,15 @@ class HostMonitor(private val context: Context) {
             when (intent.action) {
                 // The extra: the process's default zone may not have caught up yet.
                 Intent.ACTION_TIMEZONE_CHANGED -> timeZone = intent.getStringExtra(Intent.EXTRA_TIMEZONE) ?: TimeZone.getDefault().id
+
                 Intent.ACTION_POWER_CONNECTED -> charging = true
+
                 Intent.ACTION_POWER_DISCONNECTED -> charging = false
+
                 Intent.ACTION_BATTERY_LOW -> batteryLow = true
+
                 Intent.ACTION_BATTERY_OKAY -> batteryLow = false
+
                 PowerManager.ACTION_POWER_SAVE_MODE_CHANGED -> powerSave = power.isPowerSaveMode
             }
             publish()

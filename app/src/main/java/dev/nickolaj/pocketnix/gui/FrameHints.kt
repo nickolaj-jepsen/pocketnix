@@ -15,6 +15,7 @@ import android.util.Log
 internal class FrameHints(context: Context) {
     private val manager = context.getSystemService(PerformanceHintManager::class.java)
     private var session: PerformanceHintManager.Session? = null
+
     // The thread and target the session was made for; a failed attempt counts, so it isn't retried every frame.
     private var tid = 0
     private var targetNs = 0L

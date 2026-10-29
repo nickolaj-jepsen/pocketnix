@@ -98,26 +98,26 @@ private fun Launcher(vm: Vm, open: (AppEntry, String, Boolean) -> Unit, pin: (Ap
         Text(
             launcherStatus(state, link, config?.gui?.enable, config?.hostname),
             style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(vertical = 8.dp),
+            modifier = Modifier.padding(vertical = 8.dp)
         )
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
             placeholder = { Text("Search apps") },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth()
         )
         if (vm.gui.catalog.apps.isEmpty()) {
             Text(
                 "No apps yet. With pocketnix.guest.gui.enable set, start the VM once: pocketnix keeps the guest's " +
                     "app list for when it's off.",
-                modifier = Modifier.padding(vertical = 24.dp),
+                modifier = Modifier.padding(vertical = 24.dp)
             )
         }
         LazyVerticalGrid(
             columns = GridCells.Adaptive(88.dp),
             modifier = Modifier.fillMaxSize().padding(top = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             items(apps, key = { it.id }) { app -> AppCell(vm, app, iconSize, revision, open, pin) }
         }
@@ -139,7 +139,7 @@ private fun AppCell(vm: Vm, app: AppEntry, iconSize: Int, revision: Int, open: (
                 .fillMaxWidth()
                 .combinedClickable(onClick = { open(app, "", false) }, onLongClick = { menu = true })
                 .padding(vertical = 8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
             val bitmap = icon
             if (bitmap != null) {
@@ -153,15 +153,24 @@ private fun AppCell(vm: Vm, app: AppEntry, iconSize: Int, revision: Int, open: (
                 textAlign = TextAlign.Center,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 4.dp, start = 2.dp, end = 2.dp),
+                modifier = Modifier.padding(top = 4.dp, start = 2.dp, end = 2.dp)
             )
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            DropdownMenuItem(text = { Text("New window") }, onClick = { menu = false; open(app, "", true) })
+            DropdownMenuItem(text = { Text("New window") }, onClick = {
+                menu = false
+                open(app, "", true)
+            })
             for (a in app.actions) {
-                DropdownMenuItem(text = { Text(a.name.ifEmpty { a.id }) }, onClick = { menu = false; open(app, a.id, false) })
+                DropdownMenuItem(text = { Text(a.name.ifEmpty { a.id }) }, onClick = {
+                    menu = false
+                    open(app, a.id, false)
+                })
             }
-            DropdownMenuItem(text = { Text("Add to home screen") }, onClick = { menu = false; pin(app) })
+            DropdownMenuItem(text = { Text("Add to home screen") }, onClick = {
+                menu = false
+                pin(app)
+            })
         }
     }
 }

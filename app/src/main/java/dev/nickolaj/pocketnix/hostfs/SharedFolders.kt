@@ -70,7 +70,7 @@ class SharedFolders(private val context: Context) {
             runCatching {
                 context.contentResolver.releasePersistableUriPermission(
                     Uri.parse(folder.uri),
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                 )
             }
         }

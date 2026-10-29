@@ -49,6 +49,7 @@ class PortForwards(private val appVersion: String) {
 
     private inner class Listener(private val f: Forward, private val dialer: AgentDialer) : Closeable {
         private val server = ServerSocket(f.hostPort, 16, InetAddress.getByName(if (f.lan) "0.0.0.0" else "127.0.0.1"))
+
         // Bounds threads and guest streams under a connection flood.
         private val slots = Semaphore(MAX_CONNECTIONS)
 

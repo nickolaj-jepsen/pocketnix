@@ -29,7 +29,7 @@ class TerminalController(
     private val tabs: Tabs,
     private val settings: Settings,
     val modifiers: Modifiers,
-    private val onModifiersChanged: () -> Unit,
+    private val onModifiersChanged: () -> Unit
 ) {
     var view: TerminalView? = null
         private set
@@ -114,7 +114,9 @@ class TerminalController(
                 onModifiersChanged()
                 return
             }
+
             is KeyAction.Code -> v.onKeyDown(a.keyCode, KeyEvent(KeyEvent.ACTION_DOWN, a.keyCode))
+
             is KeyAction.Text -> a.text.codePoints().forEach {
                 v.inputCodePoint(TerminalView.KEY_EVENT_SOURCE_VIRTUAL_KEYBOARD, it, false, false)
             }
@@ -173,7 +175,9 @@ class TerminalController(
             when (keyCode) {
                 // Held volume keys are modifiers: down is Ctrl, up is Termux's fn.
                 KeyEvent.KEYCODE_VOLUME_DOWN -> modifiers.hold(Modifier.CTRL, true)
+
                 KeyEvent.KEYCODE_VOLUME_UP -> modifiers.hold(Modifier.FN, true)
+
                 KeyEvent.KEYCODE_ENTER -> {
                     // "[Process completed - press Enter]" closes the tab.
                     val tab = tabs.all().firstOrNull { it.session === session }
@@ -183,6 +187,7 @@ class TerminalController(
                     }
                     return false
                 }
+
                 else -> return false
             }
             return true
@@ -208,6 +213,7 @@ class TerminalController(
             val wasOn = modifiers.state(m) != Modifiers.State.OFF
             return modifiers.consume(m).also { if (wasOn) onModifiersChanged() }
         }
+
         // Consumed in onCodePoint, where the fn combination is decided.
         override fun readFnKey() = modifiers.active(Modifier.FN)
 
@@ -220,7 +226,9 @@ class TerminalController(
                     KeyHandler.getCode(action.keyCode, 0, emu.isCursorKeysApplicationMode, emu.isKeypadApplicationMode)
                         ?.let { session.write(it) }
                 }
+
                 is KeyAction.Text -> session.write(action.text)
+
                 is KeyAction.Toggle -> {}
             }
             onModifiersChanged()

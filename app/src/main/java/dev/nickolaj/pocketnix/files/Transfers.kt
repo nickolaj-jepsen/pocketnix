@@ -13,14 +13,14 @@ import androidx.core.content.FileProvider
 import dev.nickolaj.pocketnix.GuestBridge
 import dev.nickolaj.pocketnix.agent.ControlChannel
 import dev.nickolaj.pocketnix.agent.GuestFiles
+import java.io.File
+import java.io.IOException
+import java.io.InputStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
-import java.io.File
-import java.io.IOException
-import java.io.InputStream
 
 /**
  * Guest requests the app carries out (go/internal/protocol/transfers.go):
@@ -33,7 +33,7 @@ class Transfers(
     private val control: ControlChannel,
     private val bridge: GuestBridge,
     private val files: () -> GuestFiles?,
-    private val hostname: () -> String?,
+    private val hostname: () -> String?
 ) {
     /** Android's clipboard as the app last saw it (on focus), which a guest's typed paste reads. */
     @Volatile var clip: ClipData? = null

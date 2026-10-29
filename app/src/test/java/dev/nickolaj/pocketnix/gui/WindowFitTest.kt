@@ -1,16 +1,15 @@
 package dev.nickolaj.pocketnix.gui
 
+import kotlin.math.roundToInt
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.math.roundToInt
 
 class WindowFitTest {
     // The bench emulator: 1080 px wide at 420 dpi.
     private val density = 2.625f
 
-    private fun fit(factor: Float, width: Int, height: Int, minWidth: Float, minHeight: Float = 0f) =
-        WindowFit.scale(density, factor, width, height, minWidth, minHeight)
+    private fun fit(factor: Float, width: Int, height: Int, minWidth: Float, minHeight: Float = 0f) = WindowFit.scale(density, factor, width, height, minWidth, minHeight)
 
     @Test
     fun aWindowThatFitsGetsItsPreset() {

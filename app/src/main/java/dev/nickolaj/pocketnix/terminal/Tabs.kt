@@ -16,7 +16,7 @@ class Tab(
     val id: Int,
     val kind: Kind,
     val session: TerminalSession,
-    private val agentTab: () -> String = { "" },
+    private val agentTab: () -> String = { "" }
 ) {
     sealed interface Kind {
         /** The hvc0 console: always there, never closed, the way in when the agent isn't. */
@@ -79,8 +79,7 @@ class Tabs(private val context: Context, consoleBackend: TerminalBackend, privat
 
     // Started at a default size rather than at the view's first layout, which a
     // hidden activity never gets; attaching to the view resizes it.
-    private fun session(backend: TerminalBackend) =
-        TerminalSession(backend, TRANSCRIPT_ROWS, client).apply { updateSize(80, 24, 1, 1) }
+    private fun session(backend: TerminalBackend) = TerminalSession(backend, TRANSCRIPT_ROWS, client).apply { updateSize(80, 24, 1, 1) }
 
     private val _tabs = MutableStateFlow(listOf(console))
     val tabs: StateFlow<List<Tab>> = _tabs.asStateFlow()
@@ -93,6 +92,7 @@ class Tabs(private val context: Context, consoleBackend: TerminalBackend, privat
     val revision: StateFlow<Int> = _revision.asStateFlow()
 
     private val _selectedWindow = MutableStateFlow(0)
+
     /** The guest window shown in place of the selected terminal, or 0. */
     val selectedWindow: StateFlow<Int> = _selectedWindow.asStateFlow()
 

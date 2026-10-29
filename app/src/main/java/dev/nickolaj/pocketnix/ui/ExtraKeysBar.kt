@@ -42,7 +42,7 @@ import kotlinx.coroutines.launch
 /** Used until the agent sends the module's rows (Termux's defaults). */
 val defaultExtraKeys = listOf(
     listOf(ExtraKey("ESC", null, null), ExtraKey("/", "\\", null), ExtraKey("-", "|", null), ExtraKey("HOME", null, null), ExtraKey("UP", null, null), ExtraKey("END", null, null), ExtraKey("PGUP", null, null)),
-    listOf(ExtraKey("TAB", null, null), ExtraKey("CTRL", null, null), ExtraKey("ALT", null, null), ExtraKey("LEFT", null, null), ExtraKey("DOWN", null, null), ExtraKey("RIGHT", null, null), ExtraKey("PGDN", null, null)),
+    listOf(ExtraKey("TAB", null, null), ExtraKey("CTRL", null, null), ExtraKey("ALT", null, null), ExtraKey("LEFT", null, null), ExtraKey("DOWN", null, null), ExtraKey("RIGHT", null, null), ExtraKey("PGDN", null, null))
 )
 
 /** The module's rows, or [defaultExtraKeys] while it has declared none. */
@@ -114,7 +114,7 @@ private fun ExtraKeyButton(key: ExtraKey, modifiers: Modifiers, revision: Int, f
                     }
                 }
             },
-        contentAlignment = Alignment.Center,
+        contentAlignment = Alignment.Center
     ) {
         Text(key.label ?: ExtraKeys.label(key.key), color = foreground, fontSize = 14.sp, maxLines = 1)
         key.popup?.let {
@@ -122,7 +122,7 @@ private fun ExtraKeyButton(key: ExtraKey, modifiers: Modifiers, revision: Int, f
                 ExtraKeys.label(it),
                 color = foreground.copy(alpha = 0.5f),
                 fontSize = 9.sp,
-                modifier = Modifier.align(Alignment.TopEnd).padding(end = 3.dp),
+                modifier = Modifier.align(Alignment.TopEnd).padding(end = 3.dp)
             )
         }
     }
@@ -135,6 +135,7 @@ private fun ExtraKeyButton(key: ExtraKey, modifiers: Modifiers, revision: Int, f
 @Composable
 fun Composer(controller: TerminalController, foreground: Color) {
     var text by rememberSaveable { mutableStateOf("") }
+
     // Kept when no running tab took it, so a dictated paragraph isn't lost to an ended tab.
     fun send(submit: Boolean) {
         if (controller.paste(text, submit)) text = ""
@@ -146,7 +147,7 @@ fun Composer(controller: TerminalController, foreground: Color) {
             modifier = Modifier.weight(1f),
             maxLines = 4,
             placeholder = { Text("Compose", color = foreground.copy(alpha = 0.5f)) },
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = true),
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = true)
         )
         TextButton(onClick = { send(submit = false) }) { Text("Paste") }
         Button(onClick = { send(submit = true) }) { Text("Send") }

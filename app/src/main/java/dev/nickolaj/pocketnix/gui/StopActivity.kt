@@ -8,7 +8,9 @@ import android.os.Bundle
 import dev.nickolaj.pocketnix.vm
 
 /** Stops the VM, asking first while GUI windows are open, since they close with it. */
-class StopActivity : Activity(), Helper {
+class StopActivity :
+    Activity(),
+    Helper {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val windows = vm.gui.windowTitles()
@@ -31,9 +33,7 @@ class StopActivity : Activity(), Helper {
 }
 
 /** The question before stopping the VM, naming the open windows [titles]. */
-fun stopQuestion(titles: List<String>): String =
-    "Stop the VM? The guest shuts down and every tab ends. ${closingWindows(titles)}".trim()
+fun stopQuestion(titles: List<String>): String = "Stop the VM? The guest shuts down and every tab ends. ${closingWindows(titles)}".trim()
 
 /** "Its windows close too: A, B." for [titles], or "" with none. */
-fun closingWindows(titles: List<String>): String =
-    if (titles.isEmpty()) "" else "Its windows close too: ${titles.joinToString(", ")}."
+fun closingWindows(titles: List<String>): String = if (titles.isEmpty()) "" else "Its windows close too: ${titles.joinToString(", ")}."

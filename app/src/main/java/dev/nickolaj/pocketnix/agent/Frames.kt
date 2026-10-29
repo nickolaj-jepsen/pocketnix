@@ -11,6 +11,7 @@ object Frames {
     const val DATA: Int = 0
     const val RESIZE: Int = 1
     const val EXIT: Int = 2
+
     // FileOpen streams (go/internal/protocol FileFrame*).
     const val FILE_READ: Int = 0x10
     const val FILE_WRITE: Int = 0x11
@@ -55,13 +56,12 @@ object Frames {
         }
     }
 
-    fun resize(rows: Int, cols: Int, xPixels: Int = 0, yPixels: Int = 0): ByteArray =
-        ByteBuffer.allocate(8)
-            .putShort(rows.coerceIn(0, 0xffff).toShort())
-            .putShort(cols.coerceIn(0, 0xffff).toShort())
-            .putShort(xPixels.coerceIn(0, 0xffff).toShort())
-            .putShort(yPixels.coerceIn(0, 0xffff).toShort())
-            .array()
+    fun resize(rows: Int, cols: Int, xPixels: Int = 0, yPixels: Int = 0): ByteArray = ByteBuffer.allocate(8)
+        .putShort(rows.coerceIn(0, 0xffff).toShort())
+        .putShort(cols.coerceIn(0, 0xffff).toShort())
+        .putShort(xPixels.coerceIn(0, 0xffff).toShort())
+        .putShort(yPixels.coerceIn(0, 0xffff).toShort())
+        .array()
 
     /** The exit status in an EXIT payload: the code, or minus the signal. */
     fun exitStatus(payload: ByteArray): Int {

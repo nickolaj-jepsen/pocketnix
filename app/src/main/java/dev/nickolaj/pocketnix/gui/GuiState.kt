@@ -126,7 +126,9 @@ class GuiState(private val unpacker: Unpacker) {
                 dialogs.values.removeAll { it.window == id }
                 surfaces.values.filter { it.window == id }
             }
+
             dialogs.remove(id) != null -> surfaces.values.filter { it.toplevel == id }
+
             else -> return emptyList()
         }
         for (s in gone) surfaces.remove(s.id)
@@ -173,6 +175,7 @@ class GuiState(private val unpacker: Unpacker) {
                     s.content.clear()
                     s.damage.record(null)
                 }
+
                 c.buffer -> {
                     s.content.apply(c, unpacker)
                     s.damage.record(if (c.full || c.scrolled) null else c.rects)

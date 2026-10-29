@@ -2,13 +2,13 @@ package dev.nickolaj.pocketnix.forward
 
 import dev.nickolaj.pocketnix.agent.AgentDialer
 import dev.nickolaj.pocketnix.agent.Forward
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
-import org.junit.Test
 import java.io.IOException
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.ServerSocket
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
 
 class PortForwardsTest {
     private val unreachable = AgentDialer { throw IOException("no agent in this test") }

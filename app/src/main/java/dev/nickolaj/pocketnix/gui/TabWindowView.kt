@@ -22,7 +22,7 @@ internal class TabWindowView(context: Context, private val session: GuiSession, 
             focused = attached && view.hasWindowFocus(),
             visible = attached,
             // Tiled into the terminal screen: no shadows or rounded corners to draw.
-            maximized = true,
+            maximized = true
         )
     }
 

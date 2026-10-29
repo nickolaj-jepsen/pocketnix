@@ -23,7 +23,9 @@ class ControlActivity : Activity() {
                     startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 }
             }
+
             ACTION_STOP -> vm.stop()
+
             // Debug builds: what a launcher tap or pin does, for an app-list entry id.
             ACTION_LAUNCH -> if (BuildConfig.DEBUG) {
                 val app = intent.getStringExtra(EXTRA_APP).orEmpty()
@@ -31,6 +33,7 @@ class ControlActivity : Activity() {
                     startActivity(GuiWindowActivity.appIntent(this, app, intent.getStringExtra(EXTRA_ACTION).orEmpty(), intent.getBooleanExtra(EXTRA_NEW, false)))
                 }
             }
+
             else -> Log.w(TAG, "unknown action ${intent?.action}")
         }
         finish()
@@ -67,6 +70,7 @@ class ControlActivity : Activity() {
         const val EXTRA_APP = "app"
         const val EXTRA_ACTION = "action"
         const val EXTRA_NEW = "newWindow"
+
         /** START opens the app afterwards unless false (the Quick Settings tile). */
         const val EXTRA_OPEN = "open"
         const val EXTRA_NETWORK = "network"

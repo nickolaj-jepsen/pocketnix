@@ -68,7 +68,11 @@ class DirectoryFolder(private val root: File) : HostFolderFs {
             }
 
             override fun truncate(size: Long) {
-                if (size < ch.size()) ch.truncate(size) else if (size > ch.size()) ch.write(ByteBuffer.wrap(ByteArray(1)), size - 1)
+                if (size < ch.size()) {
+                    ch.truncate(size)
+                } else if (size > ch.size()) {
+                    ch.write(ByteBuffer.wrap(ByteArray(1)), size - 1)
+                }
             }
 
             override fun sync() = ch.force(true)

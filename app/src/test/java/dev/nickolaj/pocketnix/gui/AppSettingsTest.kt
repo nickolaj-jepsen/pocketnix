@@ -19,8 +19,7 @@ class AppSettingsTest {
     private val calc = "org.gnome.Calculator"
     private val foot = "foot"
 
-    private fun config(defaults: GuiAppSettings = GuiAppSettings(null, null), vararg apps: Pair<String, GuiAppSettings>) =
-        GuiConfig(enable = true, defaults = defaults, appDefaults = apps.toMap())
+    private fun config(defaults: GuiAppSettings = GuiAppSettings(null, null), vararg apps: Pair<String, GuiAppSettings>) = GuiConfig(enable = true, defaults = defaults, appDefaults = apps.toMap())
 
     @Test
     fun withoutConfigOrChangesAnAppIsPhoneAndTouch() {

@@ -23,7 +23,7 @@ class TabAlerts(private val context: Context, private val hostname: () -> String
 
     init {
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL, context.getString(R.string.terminal_channel), NotificationManager.IMPORTANCE_DEFAULT),
+            NotificationChannel(CHANNEL, context.getString(R.string.terminal_channel), NotificationManager.IMPORTANCE_DEFAULT)
         )
     }
 
@@ -34,9 +34,10 @@ class TabAlerts(private val context: Context, private val hostname: () -> String
         if (bell) lastBell[tab.id] = now
         if (context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val open = PendingIntent.getActivity(
-            context, tab.id,
+            context,
+            tab.id,
             Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_TAB, tab.id).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         val where = listOfNotNull(hostname()?.takeIf { it.isNotEmpty() }, tab.title).joinToString(" · ")
         val n = Notification.Builder(context, CHANNEL)
@@ -56,6 +57,7 @@ class TabAlerts(private val context: Context, private val hostname: () -> String
 
     companion object {
         private const val CHANNEL = "terminal"
+
         // Below this the VM service's notification.
         private const val NOTIFICATION_BASE = 1000
         private const val BELL_EVERY_MS = 30_000L

@@ -50,12 +50,14 @@ class ProvisionProvider : ContentProvider() {
                     out.putBoolean("disk", disk.exists())
                     out.putBoolean("running", running())
                 }
+
                 "begin" -> {
                     if (running()) error("the VM is running")
                     val size = arg?.toLongOrNull() ?: error("begin needs the image size")
                     part.delete()
                     RandomAccessFile(part, "rw").use { it.setLength(size) }
                 }
+
                 "commit" -> {
                     if (running()) error("the VM is running")
                     if (!part.exists()) error("nothing to commit; call begin first")
@@ -67,6 +69,7 @@ class ProvisionProvider : ContentProvider() {
                     }
                     if (!part.renameTo(disk)) error("couldn't move the image into place")
                 }
+
                 else -> error("unknown method $method")
             }
             out.putBoolean("ok", true)

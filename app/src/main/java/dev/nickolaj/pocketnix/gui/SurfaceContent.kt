@@ -120,7 +120,7 @@ fun Commit.unpacked(unpacker: Unpacker): Commit {
     unpack(this, unpacker, out, 0)
     return Commit(
         flags, surface, window, seq, z, format, Gui.ENCODING_RAW, transform, x, y, dstWidth, dstHeight, width, height,
-        srcX, srcY, srcWidth, srcHeight, scroll, rects, out, hash,
+        srcX, srcY, srcWidth, srcHeight, scroll, rects, out, hash
     )
 }
 
@@ -184,6 +184,7 @@ class DamageHistory(private val capacity: Int = 16) {
 
     private companion object {
         val WHOLE = IntArray(0)
+
         // Past this, one bounding box copies less overhead than many small rects.
         const val MAX_RECTS = 64
 

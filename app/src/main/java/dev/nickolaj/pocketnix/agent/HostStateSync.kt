@@ -1,13 +1,13 @@
 package dev.nickolaj.pocketnix.agent
 
 import android.util.Log
+import java.io.IOException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filterNotNull
-import java.io.IOException
+import kotlinx.coroutines.withContext
 
 /**
  * Sends the phone's [state] to the agent: on every connect, then each change
@@ -18,7 +18,7 @@ import java.io.IOException
 class HostStateSync(
     private val control: ControlChannel,
     private val state: StateFlow<HostState?>,
-    private val debounceMs: Long = 2_000,
+    private val debounceMs: Long = 2_000
 ) {
     suspend fun run() {
         control.link.collectLatest { link ->

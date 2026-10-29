@@ -32,7 +32,7 @@ object ExtraKeys {
         "LEFT" to KeyEvent.KEYCODE_DPAD_LEFT,
         "RIGHT" to KeyEvent.KEYCODE_DPAD_RIGHT,
         "ENTER" to KeyEvent.KEYCODE_ENTER,
-        "SPACE" to KeyEvent.KEYCODE_SPACE,
+        "SPACE" to KeyEvent.KEYCODE_SPACE
     ) + (1..12).associate { "F$it" to KeyEvent.KEYCODE_F1 + it - 1 }
 
     private val aliases = mapOf(
@@ -50,7 +50,7 @@ object ExtraKeys {
         "RETURN" to "ENTER",
         "LT" to "LEFT",
         "RT" to "RIGHT",
-        "DN" to "DOWN",
+        "DN" to "DOWN"
     )
 
     private val labels = mapOf(
@@ -61,7 +61,7 @@ object ExtraKeys {
         "BKSP" to "⌫",
         "ENTER" to "⏎",
         "TAB" to "⇥",
-        "SPACE" to "␣",
+        "SPACE" to "␣"
     )
 
     private fun canonical(name: String): String = name.uppercase().let { aliases[it] ?: it }
@@ -95,7 +95,7 @@ object FnKeys {
         't' to KeyEvent.KEYCODE_TAB,
         'i' to KeyEvent.KEYCODE_INSERT,
         'e' to KeyEvent.KEYCODE_ESCAPE,
-        '0' to KeyEvent.KEYCODE_F10,
+        '0' to KeyEvent.KEYCODE_F10
     ) + ('1'..'9').associateWith { KeyEvent.KEYCODE_F1 + (it - '1') }
 
     private val text = mapOf(
@@ -107,7 +107,7 @@ object FnKeys {
         // Alt+B/F/X: readline word motion and M-x.
         'b' to "\u001bb",
         'f' to "\u001bf",
-        'x' to "\u001bx",
+        'x' to "\u001bx"
     )
 
     /** The action for [codePoint] typed with fn held, or null to type it unchanged. */

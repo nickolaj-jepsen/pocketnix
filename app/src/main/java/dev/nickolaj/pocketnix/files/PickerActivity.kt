@@ -16,7 +16,9 @@ import org.json.JSONObject
  * [Transfers] push) and hands the result to the guest. Invisible; reports
  * with a toast.
  */
-class PickerActivity : Activity(), Helper {
+class PickerActivity :
+    Activity(),
+    Helper {
     private val ref get() = intent.getStringExtra(EXTRA_REF).orEmpty()
     private val pick get() = intent.getStringExtra(EXTRA_KIND) == "pick"
     private var answered = false
@@ -68,7 +70,7 @@ class PickerActivity : Activity(), Helper {
             runOnUiThread {
                 val msg = result.fold(
                     { if (pick) "Sent ${uris.size} file${if (uris.size == 1) "" else "s"} to the guest" else "Saved" },
-                    { e -> "${if (pick) "Pick" else "Save"} failed: ${e.message}" },
+                    { e -> "${if (pick) "Pick" else "Save"} failed: ${e.message}" }
                 )
                 Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
                 finish()

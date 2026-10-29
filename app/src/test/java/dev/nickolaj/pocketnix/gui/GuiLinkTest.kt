@@ -2,13 +2,13 @@ package dev.nickolaj.pocketnix.gui
 
 import dev.nickolaj.pocketnix.agent.FakeAgent
 import dev.nickolaj.pocketnix.agent.Frames
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.TimeUnit
 
 class GuiLinkTest {
     private val events = LinkedBlockingQueue<Any>()

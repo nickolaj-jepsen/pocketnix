@@ -3,6 +3,11 @@ package dev.nickolaj.pocketnix.hostfs
 import dev.nickolaj.pocketnix.agent.ControlChannel
 import dev.nickolaj.pocketnix.agent.FakeAgent
 import dev.nickolaj.pocketnix.agent.Frames
+import java.io.File
+import java.nio.ByteBuffer
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -18,11 +23,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
-import java.io.File
-import java.nio.ByteBuffer
-import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.TimeUnit
 
 /** Announcing shared folders and keeping their streams, against a stand-in agent. */
 class HostFolderLinksTest {
@@ -55,6 +55,7 @@ class HostFolderLinksTest {
                     announced += req
                     c.send(JSONObject().put("type", "host-folders").put("id", req.getInt("id")))
                 }
+
                 "hostfs" -> {
                     Frames.write(c.output, HostFsServer.REQUEST, HostFsServer.encode(1, JSONObject().put("op", "stat").put("path", "a.txt"), null))
                     val f = Frames.read(c.input) ?: return@FakeAgent
@@ -91,6 +92,7 @@ class HostFolderLinksTest {
                     requests += req.optString("type")
                     c.send(JSONObject().put("type", "error").put("id", req.getInt("id")).put("message", "unknown request \"${req.optString("type")}\""))
                 }
+
                 else -> streams += c.hello.optString("stream")
             }
         }.also { agents += it }

@@ -86,8 +86,7 @@ class Zoom {
         y = axis(y, viewHeight, contentHeight * scale)
     }
 
-    private fun axis(pos: Float, view: Int, extent: Float): Float =
-        if (extent >= view) pos.coerceIn(view - extent, 0f) else (view - extent) / 2
+    private fun axis(pos: Float, view: Int, extent: Float): Float = if (extent >= view) pos.coerceIn(view - extent, 0f) else (view - extent) / 2
 
     companion object {
         const val MAX_SCALE = 5f
@@ -104,7 +103,9 @@ internal class ZoomGestures(private val zoom: Zoom, private val changed: () -> U
     override fun on(t: Touches) {
         when (t.action) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> last = Spread.of(t)
+
             MotionEvent.ACTION_POINTER_UP -> last = Spread.of(t, t.index)
+
             MotionEvent.ACTION_MOVE -> {
                 val now = Spread.of(t)
                 if (last.pinch(zoom, now)) changed()

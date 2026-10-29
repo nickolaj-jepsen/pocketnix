@@ -8,15 +8,17 @@ import android.util.Log
 import android.widget.Toast
 import dev.nickolaj.pocketnix.gui.Helper
 import dev.nickolaj.pocketnix.vm
-import kotlinx.coroutines.runBlocking
 import java.io.File
+import kotlinx.coroutines.runBlocking
 
 /**
  * The share sheet's way into the guest: text and files land in
  * `pocketnix.guest.share.directory` (the module's share command then runs on
  * each). Invisible; reports with a toast.
  */
-class ShareActivity : Activity(), Helper {
+class ShareActivity :
+    Activity(),
+    Helper {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // A rotation recreates the activity: the share already ran.
@@ -47,7 +49,7 @@ class ShareActivity : Activity(), Helper {
             runOnUiThread {
                 val msg = result.fold(
                     { p -> if (uris.size > 1) "Shared ${uris.size} files to ${File(p).parent}" else "Shared to $p" },
-                    { e -> "Share failed: ${e.message}" },
+                    { e -> "Share failed: ${e.message}" }
                 )
                 Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
                 finish()
@@ -72,6 +74,5 @@ class ShareActivity : Activity(), Helper {
         return ok
     }
 
-    private fun share(files: dev.nickolaj.pocketnix.agent.GuestFiles, uri: Uri): String =
-        withSize(this, uri) { name, size, input -> files.share(name, size, input) }
+    private fun share(files: dev.nickolaj.pocketnix.agent.GuestFiles, uri: Uri): String = withSize(this, uri) { name, size, input -> files.share(name, size, input) }
 }

@@ -11,12 +11,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 class PtyBackend(
     private val dialer: AgentDialer,
     private val profile: String?,
-    private val appVersion: String,
+    private val appVersion: String
 ) : TerminalBackend {
     @Volatile private var stream: AgentStream? = null
     private val connected = CountDownLatch(1)
     private val closed = AtomicBoolean(false)
     private val exited = AtomicBoolean(false)
+
     // Resizes come from the main thread, which mustn't block on the socket.
     private val sender = Executors.newSingleThreadExecutor { r -> Thread(r, "pty-resize").apply { isDaemon = true } }
     private lateinit var sink: TerminalBackend.Sink
@@ -39,7 +40,7 @@ class PtyBackend(
                     profile?.let { put("profile", it) }
                     put("rows", rows)
                     put("cols", columns)
-                },
+                }
             )
             stream = s
             agentTab = hello.optString("tab")
@@ -53,6 +54,7 @@ class PtyBackend(
                 val f = Frames.read(s.input) ?: break
                 when (f.type) {
                     Frames.DATA -> if (!sink.onOutput(f.payload, 0, f.payload.size)) break
+
                     Frames.EXIT -> {
                         status = Frames.exitStatus(f.payload)
                         break

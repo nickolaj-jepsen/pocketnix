@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
 sealed interface VmState {
     data object Stopped : VmState
     data object Starting : VmState
+
     /** The hypervisor runs the guest; the agent may not be up yet. */
     data object Running : VmState
     data class Failed(val message: String) : VmState
@@ -19,7 +20,7 @@ data class VmSettings(
     val diskGb: Int,
     val network: Boolean,
     /** A virtio-snd speaker (no microphone), played through AAudio. */
-    val audio: Boolean = false,
+    val audio: Boolean = false
 )
 
 /** What runs the guest: AVF on the phone, or (debug builds) an agent on another machine. */

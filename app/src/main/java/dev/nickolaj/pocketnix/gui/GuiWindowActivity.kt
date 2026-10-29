@@ -50,6 +50,8 @@ import dev.nickolaj.pocketnix.ui.PocketnixTheme
 import dev.nickolaj.pocketnix.ui.extraKeyRows
 import dev.nickolaj.pocketnix.ui.missingRequirements
 import dev.nickolaj.pocketnix.vm
+import java.util.UUID
+import kotlin.math.max
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -58,8 +60,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
-import java.util.UUID
-import kotlin.math.max
 
 /**
  * One guest toplevel as an Android window: its own document task, so it has
@@ -70,7 +70,9 @@ import kotlin.math.max
  * first shows a splash: it boots the VM if needed, launches the app and
  * becomes the window the launch opens.
  */
-class GuiWindowActivity : ComponentActivity(), WindowHost {
+class GuiWindowActivity :
+    ComponentActivity(),
+    WindowHost {
     override var windowId = 0
         private set
     private var bound = false
@@ -97,7 +99,7 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
 
     // A launch's splash, until it's bound to the window.
     private val scope = CoroutineScope(
-        SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, e -> Log.e(TAG, "splash failed", e) },
+        SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, e -> Log.e(TAG, "splash failed", e) }
     )
     private var target: AppTarget? = null
     private var launch: Launch? = null
@@ -140,7 +142,7 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
                 focused = focused && attached,
                 visible = attached && started,
                 maximized = !isInMultiWindowMode,
-                fullscreen = fullscreen,
+                fullscreen = fullscreen
             )
         }
         surface = s
@@ -178,7 +180,7 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
                     modifiers = s.ime.modifiers,
                     revision = modifierRevision,
                     foreground = BAR_TEXT,
-                    onKey = s.ime::extraKey,
+                    onKey = s.ime::extraKey
                 )
             }
         } else {
@@ -197,7 +199,7 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
             Modifier
                 .fillMaxSize()
                 .background(Color.Black)
-                .windowInsetsPadding(insets.union(WindowInsets.ime)),
+                .windowInsetsPadding(insets.union(WindowInsets.ime))
         ) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 AndroidView(factory = { s.root }, modifier = Modifier.fillMaxSize())
@@ -216,10 +218,14 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
             if (fullscreen) add(MenuAction("Leave full screen") { fullscreen(false) })
             // Only a running shell tab has an id the guest knows.
             add(
-                MenuAction(MOVE_TO_TAB, enabled = targets.isNotEmpty(), children = targets.map { t ->
-                    val tab = t.agentId
-                    MenuAction(t.title) { vm.gui.move(id, tab) }
-                }),
+                MenuAction(
+                    MOVE_TO_TAB,
+                    enabled = targets.isNotEmpty(),
+                    children = targets.map { t ->
+                        val tab = t.agentId
+                        MenuAction(t.title) { vm.gui.move(id, tab) }
+                    }
+                )
             )
         }
         return windowMenu(vm.gui, id, extra)
@@ -237,7 +243,6 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
         handler.postDelayed(hideBar, BAR_REVEAL_MS)
     }
 
-
     // --- A launch's splash ---
 
     private fun createLaunch(saved: Bundle?) {
@@ -246,13 +251,16 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
         showSplash()
         when {
             savedWindow != 0 && vm.gui.bindLaunched(this, savedWindow) -> showWindow(savedWindow)
+
             savedLaunch != null -> follow(savedLaunch)
+
             // A card whose VM (and so its window or launch) died with the app: Recents restoring it, or a tap
             // on its pin reusing it, which follows as a new intent.
             saved != null || intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0 -> {
                 Log.i(TAG, "a stale launch card for ${target?.app}; removing it")
                 stale = Runnable { finishAndRemoveTask() }.also { handler.post(it) }
             }
+
             else -> startLaunch()
         }
     }
@@ -348,8 +356,7 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
         launch?.let { outState.putString(KEY_LAUNCH, it.id) }
     }
 
-    private fun iconBitmap(app: AppEntry): Bitmap? =
-        vm.gui.catalog.icon(app.icon, vm.gui.iconSize(large = true))?.let { BitmapFactory.decodeFile(it.path) }
+    private fun iconBitmap(app: AppEntry): Bitmap? = vm.gui.catalog.icon(app.icon, vm.gui.iconSize(large = true))?.let { BitmapFactory.decodeFile(it.path) }
 
     override fun onStart() {
         super.onStart()
@@ -378,8 +385,7 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
         surface?.pushState()
     }
 
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
-        guard("window ${windowId.u}: key", false) { bound && surface?.key(event) == true } || super.dispatchKeyEvent(event)
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean = guard("window ${windowId.u}: key", false) { bound && surface?.key(event) == true } || super.dispatchKeyEvent(event)
 
     override fun onDestroy() {
         scope.cancel()
@@ -482,8 +488,7 @@ class GuiWindowActivity : ComponentActivity(), WindowHost {
         }
 
         /** Whether a task's base intent is a launch's, which shows its window under the app's URI. */
-        internal fun isLaunchTask(t: ActivityManager.AppTask): Boolean =
-            runCatching { t.taskInfo.baseIntent.data?.let(::parseApp) != null }.getOrDefault(false)
+        internal fun isLaunchTask(t: ActivityManager.AppTask): Boolean = runCatching { t.taskInfo.baseIntent.data?.let(::parseApp) != null }.getOrDefault(false)
 
         /** Opens (or brings back) the task of toplevel [id]: one document per window, deduplicated by its URI. */
         fun intent(context: Context, instance: String, id: Int): Intent = Intent(context, GuiWindowActivity::class.java)

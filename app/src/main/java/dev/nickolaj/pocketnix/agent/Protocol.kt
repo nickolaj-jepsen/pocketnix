@@ -1,13 +1,13 @@
 // The app's side of the agent wire protocol; go/internal/protocol is the contract.
 package dev.nickolaj.pocketnix.agent
 
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.EOFException
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import org.json.JSONArray
+import org.json.JSONObject
 
 object Protocol {
     /** The app speaks MIN_VERSION..VERSION; the agent picks one (go/internal/protocol Negotiate). */
@@ -17,15 +17,14 @@ object Protocol {
     private const val MAX_LINE = 1 shl 20
 
     /** The Hello that opens every stream. */
-    fun hello(stream: String, app: String, extra: JSONObject.() -> Unit = {}): JSONObject =
-        JSONObject().apply {
-            put("type", "hello")
-            put("version", VERSION)
-            put("minVersion", MIN_VERSION)
-            put("app", app)
-            put("stream", stream)
-            extra()
-        }
+    fun hello(stream: String, app: String, extra: JSONObject.() -> Unit = {}): JSONObject = JSONObject().apply {
+        put("type", "hello")
+        put("version", VERSION)
+        put("minVersion", MIN_VERSION)
+        put("app", app)
+        put("stream", stream)
+        extra()
+    }
 
     /** Writes one JSON line in a single write. */
     fun writeJson(out: OutputStream, obj: JSONObject) {
@@ -54,7 +53,9 @@ object Protocol {
                 if (v !in MIN_VERSION..VERSION) throw AgentException("the agent chose protocol $v; the app speaks $MIN_VERSION–$VERSION")
                 return msg
             }
+
             "error" -> throw AgentException(msg.optString("message"))
+
             else -> throw IOException("expected hello, got ${msg.optString("type")}")
         }
     }
@@ -90,7 +91,7 @@ data class GuiConfig(val enable: Boolean, val defaults: GuiAppSettings, val appD
             return GuiConfig(
                 enable = o.optBoolean("enable"),
                 defaults = GuiAppSettings.parse(o.optJSONObject("defaults")),
-                appDefaults = apps.keys().asSequence().associateWith { GuiAppSettings.parse(apps.optJSONObject(it)) },
+                appDefaults = apps.keys().asSequence().associateWith { GuiAppSettings.parse(apps.optJSONObject(it)) }
             )
         }
     }
@@ -106,7 +107,7 @@ data class GuestConfig(
     val theme: Theme,
     val snippets: List<Snippet> = emptyList(),
     /** Null from an agent without GUI support. */
-    val gui: GuiConfig? = null,
+    val gui: GuiConfig? = null
 ) {
     companion object {
         fun parse(json: String): GuestConfig = parse(JSONObject(json))
@@ -120,8 +121,11 @@ data class GuestConfig(
                 forwards = o.optJSONArray("forwards").objects().map {
                     val guest = it.getInt("guestPort")
                     Forward(
-                        it.optString("name"), guest, it.optInt("hostPort", guest).takeIf { p -> p > 0 } ?: guest, it.optBoolean("lan"),
-                        udp = it.optString("protocol") == "udp",
+                        it.optString("name"),
+                        guest,
+                        it.optInt("hostPort", guest).takeIf { p -> p > 0 } ?: guest,
+                        it.optBoolean("lan"),
+                        udp = it.optString("protocol") == "udp"
                     )
                 },
                 profiles = t.optJSONArray("profiles").objects().map { Profile(it.getString("name"), it.optStringOrNull("command")) },
@@ -132,12 +136,12 @@ data class GuestConfig(
                 theme = Theme(
                     colors = colors.keys().asSequence().associateWith { colors.getString(it) },
                     font = theme.optStringOrNull("font"),
-                    fontSha256 = theme.optStringOrNull("fontSha256"),
+                    fontSha256 = theme.optStringOrNull("fontSha256")
                 ),
                 snippets = t.optJSONArray("snippets").objects().map {
                     Snippet(it.getString("name"), it.getString("command"), it.optBoolean("submit"))
                 },
-                gui = o.optJSONObject("gui")?.let(GuiConfig::parse),
+                gui = o.optJSONObject("gui")?.let(GuiConfig::parse)
             )
         }
     }
@@ -151,7 +155,7 @@ data class Generation(
     val date: Long,
     val label: String?,
     val current: Boolean,
-    val booted: Boolean,
+    val booted: Boolean
 )
 
 /** The guest's update state, pushed by the agent (go/internal/protocol/updates.go). */
@@ -169,7 +173,7 @@ data class Updates(
     val error: String?,
     val log: List<String>,
     /** Newest first. */
-    val generations: List<Generation>,
+    val generations: List<Generation>
 ) {
     val busy: Boolean get() = state != "idle"
 
@@ -195,21 +199,17 @@ data class Updates(
                     date = it.optLong("date"),
                     label = it.optStringOrNull("label"),
                     current = it.optBoolean("current"),
-                    booted = it.optBoolean("booted"),
+                    booted = it.optBoolean("booted")
                 )
-            },
+            }
         )
     }
 }
 
-private fun JSONArray?.strings(): List<String> =
-    if (this == null) emptyList() else (0 until length()).map { getString(it) }
+private fun JSONArray?.strings(): List<String> = if (this == null) emptyList() else (0 until length()).map { getString(it) }
 
-private fun JSONArray?.objects(): List<JSONObject> =
-    if (this == null) emptyList() else (0 until length()).map { getJSONObject(it) }
+private fun JSONArray?.objects(): List<JSONObject> = if (this == null) emptyList() else (0 until length()).map { getJSONObject(it) }
 
-private fun JSONArray?.arrays(): List<JSONArray> =
-    if (this == null) emptyList() else (0 until length()).map { getJSONArray(it) }
+private fun JSONArray?.arrays(): List<JSONArray> = if (this == null) emptyList() else (0 until length()).map { getJSONArray(it) }
 
-private fun JSONObject.optStringOrNull(key: String): String? =
-    if (has(key) && !isNull(key)) getString(key).takeIf { it.isNotEmpty() } else null
+private fun JSONObject.optStringOrNull(key: String): String? = if (has(key) && !isNull(key)) getString(key).takeIf { it.isNotEmpty() } else null

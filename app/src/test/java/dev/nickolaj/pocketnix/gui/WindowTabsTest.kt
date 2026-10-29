@@ -9,19 +9,18 @@ class WindowTabsTest {
     private val shell = "shell" to "aaaa"
     private val build = "build" to "bbbb"
 
-    private fun strip(terminals: List<Pair<String, String>>, vararg windows: WindowTab): List<String> =
-        tabStrip(terminals, { it.second }, windows.toList()).map {
-            when (it) {
-                is TabStripItem.Terminal -> it.tab.first
-                is TabStripItem.Window -> it.window.title
-            }
+    private fun strip(terminals: List<Pair<String, String>>, vararg windows: WindowTab): List<String> = tabStrip(terminals, { it.second }, windows.toList()).map {
+        when (it) {
+            is TabStripItem.Terminal -> it.tab.first
+            is TabStripItem.Window -> it.window.title
         }
+    }
 
     @Test
     fun aWindowFollowsItsTerminal() {
         assertEquals(
             listOf("console", "shell", "foot", "build", "gtk"),
-            strip(listOf(console, shell, build), WindowTab(1, "aaaa", "foot"), WindowTab(2, "bbbb", "gtk")),
+            strip(listOf(console, shell, build), WindowTab(1, "aaaa", "foot"), WindowTab(2, "bbbb", "gtk"))
         )
     }
 
@@ -29,7 +28,7 @@ class WindowTabsTest {
     fun windowsOfOneTerminalKeepTheirOrder() {
         assertEquals(
             listOf("shell", "second", "first", "build"),
-            strip(listOf(shell, build), WindowTab(9, "aaaa", "second"), WindowTab(3, "aaaa", "first")),
+            strip(listOf(shell, build), WindowTab(9, "aaaa", "second"), WindowTab(3, "aaaa", "first"))
         )
     }
 
@@ -37,7 +36,7 @@ class WindowTabsTest {
     fun aWindowWhoseTerminalIsGoneGoesAtTheEnd() {
         assertEquals(
             listOf("console", "shell", "orphan"),
-            strip(listOf(console, shell), WindowTab(1, "cccc", "orphan")),
+            strip(listOf(console, shell), WindowTab(1, "cccc", "orphan"))
         )
     }
 

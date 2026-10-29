@@ -20,15 +20,15 @@ import dev.nickolaj.pocketnix.MainActivity
 import dev.nickolaj.pocketnix.R
 import dev.nickolaj.pocketnix.agent.AgentDialer
 import dev.nickolaj.pocketnix.agent.GuiConfig
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * The guest's GUI windows: the one GUI stream while the guest has GUI on,
@@ -68,6 +68,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
     private val askedIcons = HashSet<Pair<String, Int>>()
 
     private val _tabWindows = MutableStateFlow<List<WindowTab>>(emptyList())
+
     /** The windows shown as terminal tabs, in the order they mapped. */
     val tabWindows: StateFlow<List<WindowTab>> = _tabWindows.asStateFlow()
 
@@ -78,13 +79,17 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
     private val moving = ConcurrentHashMap.newKeySet<Int>()
 
     private val _ready = MutableStateFlow(false)
+
     /** The GUI stream is connected and its replay done. */
     val ready: StateFlow<Boolean> = _ready.asStateFlow()
     private val main = Handler(Looper.getMainLooper())
+
     // Draws outside the link's thread: a window's first frame, and frames that waited for a buffer.
     private val renderThread = Executors.newSingleThreadExecutor { r -> Thread(r, "gui-render").apply { isDaemon = true } }
+
     // The link thread's commit work, against the display's frame interval as `output` last read it.
     private val hints = FrameHints(app)
+
     @Volatile private var frameNs = 0L
 
     private class View(val id: Int) {
@@ -113,6 +118,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
 
     // Concurrent so the main thread can read a window's fields without waiting for a commit to apply.
     private val views = ConcurrentHashMap<Int, View>()
+
     @Volatile private var started = false
     private var hashesOk = 0L
     private var hashesBad = 0L
@@ -136,7 +142,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                 override fun onDisplayAdded(displayId: Int) {}
                 override fun onDisplayRemoved(displayId: Int) {}
             },
-            main,
+            main
         )
         Foreground.onVisible { launchPending() }
         appSettings.onChange = {
@@ -214,6 +220,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                 }
                 hints.report(System.nanoTime() - start, frameNs)
             }
+
             is GuiMessage.Toplevel -> {
                 var oldTab: String? = null
                 val new = synchronized(lock) {
@@ -237,6 +244,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                     views[msg.id]?.claimed != true -> openWindow(msg.id)
                 }
             }
+
             is GuiMessage.ToplevelRemoved -> {
                 val window = synchronized(lock) {
                     val window = msg.id in state.windows
@@ -252,23 +260,29 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                 }
                 if (window) closeWindow(msg.id)
             }
+
             is GuiMessage.ToplevelRequest -> when (msg.request) {
                 "minimize" -> onMain("window ${msg.id.u}: minimize") { views[msg.id]?.host?.minimize() }
+
                 "fullscreen", "unfullscreen" -> onMain("window ${msg.id.u}: ${msg.request}") {
                     val v = views[msg.id] ?: return@onMain
                     v.fullscreen = msg.request == "fullscreen"
                     v.host?.fullscreen(v.fullscreen)
                 }
             }
+
             is GuiMessage.Surface -> synchronized(lock) {
                 val moved = state.surface(msg) ?: return@synchronized
                 views[moved]?.renderer?.let { r -> SurfaceControl.Transaction().also { r.remove(it, msg.id) }.apply() }
             }
+
             is GuiMessage.SurfaceRemoved -> synchronized(lock) {
                 val s = state.surfaceRemoved(msg.id) ?: return@synchronized
                 views[s.window]?.renderer?.let { r -> SurfaceControl.Transaction().also { r.remove(it, s.id) }.apply() }
             }
+
             is GuiMessage.Cursor -> onMain("window ${msg.window.u}: cursor") { views[msg.window]?.host?.cursor(msg.name) }
+
             GuiMessage.Ready -> {
                 val windows = synchronized(lock) {
                     val (windows, surfaces) = state.ready()
@@ -288,6 +302,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                 launches.ready()
                 launchPending()
             }
+
             is GuiMessage.Apps -> {
                 val change = catalog.update(msg.apps)
                 if (change.changed) Log.i(TAG, "app list: ${msg.apps.size} entries, ${change.added.size} new, ${change.gone.size} gone")
@@ -296,23 +311,30 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                 // A toplevel's icon comes from its entry.
                 onMain("app list: windows") { for (v in views.values) v.host?.toplevelChanged() }
             }
+
             is GuiMessage.Icon -> {
                 catalog.storeIcon(msg.key, msg.size, msg.png)
                 shortcuts.update()
             }
+
             is GuiMessage.LaunchStarted -> launches.started(msg.id)
+
             is GuiMessage.LaunchFailed -> {
                 val l = launches.failed(msg) ?: return
                 Log.i(TAG, "launch ${l.id} of ${l.app} failed: ${msg.reason} ${msg.message}")
                 if (msg.reason == LaunchState.UNKNOWN) shortcuts.disable(l.app)
             }
+
             is GuiMessage.Activate -> {
                 val l = launches.activate(msg)
                 // A launch's splash handles its own activation.
                 if (l == null || !owners.containsKey(l.id)) onMain("window ${msg.window.u}: activate") { raise(msg.window) }
             }
+
             is GuiMessage.TextInput -> textInput(msg.state)
+
             is GuiMessage.Error -> Log.w(TAG, "compositor error: ${msg.message}")
+
             is GuiMessage.Hello -> throw GuiProtocolException("a second hello")
         }
     }
@@ -481,7 +503,11 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
             else -> {}
         }
         v.taskId = -1
-        if (moved) showTab(id) else if (new) selectTab(id)
+        if (moved) {
+            showTab(id)
+        } else if (new) {
+            selectTab(id)
+        }
     }
 
     /** Window [id] left its tab for a task of its own. */
@@ -624,14 +650,17 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         // A compositor that sends no scale leaves the minimum's scale a guess that can be stale: no fit.
         val at = t?.scale ?: 0f
         return WindowFit.scale(
-            density, factor, width, height,
-            WindowFit.logical(t?.minWidth ?: 0, at), WindowFit.logical(t?.minHeight ?: 0, at),
+            density,
+            factor,
+            width,
+            height,
+            WindowFit.logical(t?.minWidth ?: 0, at),
+            WindowFit.logical(t?.minHeight ?: 0, at)
         )
     }
 
     /** Window [id]'s geometry in window pixels, larger than its view when the client's minimum is. */
-    internal fun contentSize(id: Int): Pair<Int, Int> =
-        synchronized(lock) { state.windows[id]?.toplevel }?.let { it.width to it.height } ?: (0 to 0)
+    internal fun contentSize(id: Int): Pair<Int, Int> = synchronized(lock) { state.windows[id]?.toplevel }?.let { it.width to it.height } ?: (0 to 0)
 
     /** The id window [id]'s settings go by: its app-list entry's, else its app id; "" for neither. */
     fun appKey(id: Int): String = appKey(synchronized(lock) { state.windows[id]?.toplevel })
@@ -716,7 +745,11 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         }
         val task = app.getSystemService(ActivityManager::class.java).appTasks
             .firstOrNull { runCatching { it.taskInfo.taskId }.getOrNull() == v.taskId }
-        if (task != null && v.host != null) task.moveToFront() else if (!v.claimed) openWindow(window)
+        if (task != null && v.host != null) {
+            task.moveToFront()
+        } else if (!v.claimed) {
+            openWindow(window)
+        }
     }
 
     /** Starts entry [app] for a splash; it becomes a recent app. */
@@ -763,7 +796,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         listOf(
             "connected=${link.connected} ready=${_ready.value} instance=${state.instance} hashes ok=$hashesOk bad=$hashesBad",
             "apps=${catalog.apps.size} recent=${catalog.recent.map { it.id }} launcher=${shortcuts.launcherEnabled} " +
-                "launches=${owners.keys.map { "$it:${launches[it]?.state?.value}" }}",
+                "launches=${owners.keys.map { "$it:${launches[it]?.state?.value}" }}"
         ) +
             state.windows.values.map { w ->
                 val v = views[w.id]

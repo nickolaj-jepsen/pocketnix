@@ -2,9 +2,9 @@ package dev.nickolaj.pocketnix.gui
 
 import dev.nickolaj.pocketnix.agent.Frames
 import io.airlift.compress.zstd.ZstdCompressor
-import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
+import org.json.JSONObject
 
 /** Compositor → app frames, written the way docs/gui-protocol.md specifies them. */
 class CompositorFrames {
@@ -23,11 +23,11 @@ class CompositorFrames {
     fun toplevel(id: Int, title: String = "", window: Int = id, parent: Int = 0, app: String = "", launch: String = "") = json(
         JSONObject().put("type", "toplevel").put("id", id).put("window", window).put("parent", parent).put("title", title)
             .put("appId", "test").put("app", app).put("launch", launch).put("tab", "")
-            .put("width", 0).put("height", 0).put("decoration", "client"),
+            .put("width", 0).put("height", 0).put("decoration", "client")
     )
 
     fun surface(id: Int, window: Int, role: String = "toplevel", parent: Int = 0, toplevel: Int = if (role == "toplevel") id else window) = json(
-        JSONObject().put("type", "surface").put("id", id).put("window", window).put("toplevel", toplevel).put("role", role).put("parent", parent),
+        JSONObject().put("type", "surface").put("id", id).put("window", window).put("toplevel", toplevel).put("role", role).put("parent", parent)
     )
 
     fun ready() = json(JSONObject().put("type", "ready"))
@@ -55,7 +55,7 @@ class CompositorFrames {
         seq: Int = ++this.seq,
         headerSize: Int = Gui.HEADER_SIZE,
         /** The data as sent, when it isn't [pixels] compressed in one go. */
-        encoded: ByteArray? = null,
+        encoded: ByteArray? = null
     ) = apply {
         val data = encoded ?: if (zstd) compress(pixels) else pixels
         val f = flags or (if (hash != null) Gui.FLAG_HASH else 0)
@@ -78,8 +78,7 @@ class CompositorFrames {
     }
 
     /** A FULL commit of [content] (width × height × 4 bytes). */
-    fun full(surface: Int, window: Int, width: Int, height: Int, content: ByteArray, extra: Int = 0, zstd: Boolean = false) =
-        commit(surface, window, width, height, listOf(intArrayOf(0, 0, width, height)), content, Gui.FLAG_BUFFER or Gui.FLAG_FULL or extra, zstd)
+    fun full(surface: Int, window: Int, width: Int, height: Int, content: ByteArray, extra: Int = 0, zstd: Boolean = false) = commit(surface, window, width, height, listOf(intArrayOf(0, 0, width, height)), content, Gui.FLAG_BUFFER or Gui.FLAG_FULL or extra, zstd)
 
     companion object {
         fun compress(b: ByteArray): ByteArray {

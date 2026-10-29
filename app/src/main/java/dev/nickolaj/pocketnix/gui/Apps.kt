@@ -1,14 +1,14 @@
 package dev.nickolaj.pocketnix.gui
 
 import android.util.Log
+import java.io.File
+import java.io.IOException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
-import java.io.File
-import java.io.IOException
 
 /** One `[Desktop Action]` of an entry. */
 data class AppAction(val id: String, val name: String, val icon: String)
@@ -25,7 +25,7 @@ data class AppEntry(
     /** An icon key, or "" for none. */
     val icon: String = "",
     val noDisplay: Boolean = false,
-    val actions: List<AppAction> = emptyList(),
+    val actions: List<AppAction> = emptyList()
 ) {
     /** The name, falling back to the id for an entry that somehow has none. */
     val label: String get() = name.ifEmpty { id }
@@ -67,15 +67,13 @@ data class AppEntry(
                         val aid = x.optString("id").takeIf { it.isNotEmpty() } ?: return@mapNotNull null
                         AppAction(aid, x.optString("name"), x.optString("icon").takeIf(::validIconKey).orEmpty())
                     }
-                }.orEmpty(),
+                }.orEmpty()
             )
         }
 
-        fun parseList(a: JSONArray?): List<AppEntry> =
-            if (a == null) emptyList() else (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let(::parse) }
+        fun parseList(a: JSONArray?): List<AppEntry> = if (a == null) emptyList() else (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let(::parse) }
 
-        private fun JSONArray?.strings(): List<String> =
-            if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf { s -> s.isNotEmpty() } }
+        private fun JSONArray?.strings(): List<String> = if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf { s -> s.isNotEmpty() } }
     }
 }
 
@@ -96,6 +94,7 @@ class AppCatalog(private val dir: File) {
     private var recentIds: List<String> = emptyList()
 
     private val _revision = MutableStateFlow(0)
+
     /** Bumped on every change to the list, an icon or the recent launches. */
     val revision: StateFlow<Int> = _revision.asStateFlow()
 
@@ -128,13 +127,11 @@ class AppCatalog(private val dir: File) {
     }
 
     /** The cached PNG of [key] at [size], or null when there is none (not fetched yet, or the guest has none). */
-    @Synchronized fun icon(key: String, size: Int): File? =
-        iconFile(key, size)?.takeIf { it.length() > 0 }
+    @Synchronized fun icon(key: String, size: Int): File? = iconFile(key, size)?.takeIf { it.length() > 0 }
 
     /** The icons the listed, shown entries name that aren't cached at one of [sizes]. */
-    @Synchronized fun missingIcons(sizes: Collection<Int>): List<Pair<String, Int>> =
-        entries.values.filter { !it.noDisplay || it.id in recentIds }.map { it.icon }.filter { it.isNotEmpty() }.distinct()
-            .flatMap { key -> sizes.filter { iconFile(key, it)?.exists() == false }.map { key to it } }
+    @Synchronized fun missingIcons(sizes: Collection<Int>): List<Pair<String, Int>> = entries.values.filter { !it.noDisplay || it.id in recentIds }.map { it.icon }.filter { it.isNotEmpty() }.distinct()
+        .flatMap { key -> sizes.filter { iconFile(key, it)?.exists() == false }.map { key to it } }
 
     /** Stores an ICON answer; an empty [png] records that the guest has no icon there. Ignored for a key no entry names. */
     @Synchronized fun storeIcon(key: String, size: Int, png: ByteArray) {

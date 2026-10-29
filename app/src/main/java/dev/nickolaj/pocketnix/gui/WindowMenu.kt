@@ -41,26 +41,34 @@ fun windowMenu(gui: GuiSession, id: Int, extra: List<MenuAction>): List<MenuActi
     val surface = gui.surfaceOf(id)
     return buildList {
         add(
-            MenuAction("Size: ${choice.size.label}", children = SizePreset.entries.map { p ->
-                MenuAction(checked(p == choice.size, p.label)) { gui.appSettings.setSize(app, p) }
-            }),
+            MenuAction(
+                "Size: ${choice.size.label}",
+                children = SizePreset.entries.map { p ->
+                    MenuAction(checked(p == choice.size, p.label)) { gui.appSettings.setSize(app, p) }
+                }
+            )
         )
         add(
-            MenuAction("Input: ${choice.input.label}", children = InputMode.entries.map { m ->
-                // A client without wl_touch gets Pointer mode instead (gui-protocol.md, Touch).
-                val label = if (m == InputMode.TOUCH && !gui.hasTouch(id)) "${m.label} (this app has no touch)" else m.label
-                MenuAction(checked(m == choice.input, label)) { gui.appSettings.setInput(app, m) }
-            }),
+            MenuAction(
+                "Input: ${choice.input.label}",
+                children = InputMode.entries.map { m ->
+                    // A client without wl_touch gets Pointer mode instead (gui-protocol.md, Touch).
+                    val label = if (m == InputMode.TOUCH && !gui.hasTouch(id)) "${m.label} (this app has no touch)" else m.label
+                    MenuAction(checked(m == choice.input, label)) { gui.appSettings.setInput(app, m) }
+                }
+            )
         )
         // Pinch and pan are pocketnix's in the other modes; in Touch mode they're the app's unless this is on.
         if (surface != null && choice.input == InputMode.TOUCH) {
             add(MenuAction(checked(surface.zooming, "Zoom")) { surface.zooming = !surface.zooming })
         }
         if (surface != null && surface.zoom.zoomed) {
-            add(MenuAction("Reset zoom") {
-                surface.zooming = false
-                surface.resetZoom()
-            })
+            add(
+                MenuAction("Reset zoom") {
+                    surface.zooming = false
+                    surface.resetZoom()
+                }
+            )
         }
         if (choice.overridden) add(MenuAction("Reset to config") { gui.appSettings.reset(app) })
         addAll(extra)
@@ -96,7 +104,7 @@ fun WindowMenu(expanded: Boolean, onDismiss: () -> Unit, items: () -> List<MenuA
                         onDismiss()
                         guard("window menu: ${a.label}") { a.run() }
                     }
-                },
+                }
             )
         }
     }
@@ -113,7 +121,7 @@ fun WindowBar(
     onKeyboard: (() -> Unit)?,
     typingRow: (@Composable () -> Unit)?,
     menu: () -> List<MenuAction>,
-    onMenu: (open: Boolean) -> Unit = {},
+    onMenu: (open: Boolean) -> Unit = {}
 ) {
     if (typingRow != null) {
         Box(Modifier.fillMaxWidth().background(BAR_BACKGROUND)) { typingRow() }
@@ -122,7 +130,7 @@ fun WindowBar(
     var open by remember { mutableStateOf(false) }
     Row(
         Modifier.fillMaxWidth().height(BAR_HEIGHT.dp).background(BAR_BACKGROUND),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.CenterVertically
     ) {
         if (onKeyboard != null) BarButton("⌨", "Keyboard") { guard("window bar: keyboard") { onKeyboard() } }
         Text(
@@ -131,14 +139,17 @@ fun WindowBar(
             fontSize = 13.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f).padding(start = if (onKeyboard != null) 2.dp else 16.dp, end = 8.dp),
+            modifier = Modifier.weight(1f).padding(start = if (onKeyboard != null) 2.dp else 16.dp, end = 8.dp)
         )
         Box {
             BarButton("⋮", "Window menu") {
                 open = true
                 onMenu(true)
             }
-            WindowMenu(open, onDismiss = { open = false; onMenu(false) }, items = menu)
+            WindowMenu(open, onDismiss = {
+                open = false
+                onMenu(false)
+            }, items = menu)
         }
     }
 }
@@ -148,7 +159,7 @@ fun WindowBar(
 private fun BarButton(glyph: String, description: String, onClick: () -> Unit) {
     Box(
         Modifier.height(BAR_HEIGHT.dp).semantics { contentDescription = description }.clickable(onClick = onClick).padding(horizontal = 16.dp),
-        contentAlignment = Alignment.Center,
+        contentAlignment = Alignment.Center
     ) {
         Text(glyph, color = BAR_TEXT, fontSize = 18.sp)
     }

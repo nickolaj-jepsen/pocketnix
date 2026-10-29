@@ -2,10 +2,10 @@ package dev.nickolaj.pocketnix.gui
 
 import dev.nickolaj.pocketnix.agent.ControlChannel
 import dev.nickolaj.pocketnix.engine.VmState
+import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.util.UUID
 
 /** What became of a launch (gui-protocol.md, Launching). */
 sealed interface LaunchState {
@@ -125,8 +125,7 @@ class Launches(private val send: (ByteArray) -> Unit, private val newId: () -> S
     }
 
     /** Returns the launch [m] ended, if any. */
-    @Synchronized fun failed(m: GuiMessage.LaunchFailed): Launch? =
-        launches[m.id]?.takeIf { it.set(LaunchState.Failed(m.reason, m.message)) }
+    @Synchronized fun failed(m: GuiMessage.LaunchFailed): Launch? = launches[m.id]?.takeIf { it.set(LaunchState.Failed(m.reason, m.message)) }
 
     private fun sendLaunch(l: Launch) {
         l.sentTo = instance
@@ -153,7 +152,7 @@ fun splashStatus(
     agentLate: Boolean,
     guiEnabled: Boolean?,
     guiReady: Boolean,
-    launch: LaunchState,
+    launch: LaunchState
 ): SplashStatus = when {
     launch is LaunchState.Failed -> when (launch.reason) {
         LaunchState.UNKNOWN -> SplashStatus(appGone(name), failed = true)
@@ -161,14 +160,23 @@ fun splashStatus(
         LaunchState.TIMEOUT -> SplashStatus("$name opened no window. ${launch.message}".trim(), failed = true, canRetry = true)
         else -> SplashStatus("$name couldn't start. ${launch.message}".trim(), failed = true, canRetry = true)
     }
+
     launch.ended -> SplashStatus("Opening $name…")
+
     vm is VmState.Failed -> SplashStatus("The VM failed: ${vm.message}", failed = true, canRetry = true)
+
     vm == VmState.Stopped -> SplashStatus("The VM is stopped.", failed = true, canRetry = true)
+
     link is ControlChannel.Link.Refused -> SplashStatus("The guest's agent refused pocketnix: ${link.reason}", failed = true)
+
     link !is ControlChannel.Link.Up && agentLate ->
         SplashStatus("The guest's agent hasn't answered in two minutes. pocketnix's console tab shows the boot.")
+
     link !is ControlChannel.Link.Up -> SplashStatus("Starting the VM…")
+
     guiEnabled == false -> SplashStatus("GUI apps are off in this guest (pocketnix.guest.gui.enable).", failed = true)
+
     !guiReady -> SplashStatus("Connecting to the guest's display…")
+
     else -> SplashStatus("Starting $name…")
 }

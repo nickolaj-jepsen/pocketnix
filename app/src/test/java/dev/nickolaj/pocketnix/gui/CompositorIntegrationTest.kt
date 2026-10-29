@@ -1,11 +1,5 @@
 package dev.nickolaj.pocketnix.gui
 
-import org.junit.After
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
-import org.junit.Before
-import org.junit.Test
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -17,6 +11,12 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
+import org.junit.Before
+import org.junit.Test
 
 /**
  * The decoder and the reference copy against a real compositor and a real
@@ -142,18 +142,27 @@ class CompositorIntegrationTest {
         fun handle(c: Conn, m: Any) {
             when (m) {
                 is GuiMessage.Toplevel -> if (state.toplevel(m)) newWindows += m.id
+
                 is GuiMessage.ToplevelRemoved -> state.toplevelRemoved(m.id)
+
                 is GuiMessage.Surface -> state.surface(m)
+
                 is GuiMessage.SurfaceRemoved -> state.surfaceRemoved(m.id)
+
                 GuiMessage.Ready -> state.ready()
+
                 is GuiMessage.Group -> {
                     state.apply(m)
                     partial += m.commits.count { it.buffer && !it.full }
                     for (w in m.commits.map { it.window }.distinct()) c.send(Gui.presented(w, state.windows.getValue(w).lastSeq))
                 }
+
                 is GuiMessage.Error -> throw AssertionError("compositor error: ${m.message}")
+
                 is Throwable -> throw AssertionError("connection failed", m)
+
                 EOF -> throw AssertionError("compositor closed the connection; log: ${log()}")
+
                 else -> {}
             }
         }

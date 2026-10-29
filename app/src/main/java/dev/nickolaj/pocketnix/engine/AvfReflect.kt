@@ -36,17 +36,14 @@ object AvfReflect {
     const val DEBUG_LEVEL_FULL = 1
     const val CAPABILITY_NON_PROTECTED_VM = 2
 
-    fun manager(ctx: Context): Any =
-        Context::class.java.getMethod("getSystemService", Class::class.java).invoke(ctx.applicationContext, MGR)
-            ?: error("no VirtualMachineManager on this device")
+    fun manager(ctx: Context): Any = Context::class.java.getMethod("getSystemService", Class::class.java).invoke(ctx.applicationContext, MGR)
+        ?: error("no VirtualMachineManager on this device")
 
     fun capabilities(mgr: Any): Int = runCatching { invoke(mgr, "getCapabilities") as? Int ?: 0 }.getOrDefault(0)
 
-    fun getOrCreate(mgr: Any, name: String, cfg: Any): Any =
-        invoke(mgr, "getOrCreate", String::class.java to name, CFG to cfg) ?: error("getOrCreate returned null")
+    fun getOrCreate(mgr: Any, name: String, cfg: Any): Any = invoke(mgr, "getOrCreate", String::class.java to name, CFG to cfg) ?: error("getOrCreate returned null")
 
-    fun create(mgr: Any, name: String, cfg: Any): Any =
-        invoke(mgr, "create", String::class.java to name, CFG to cfg) ?: error("create returned null")
+    fun create(mgr: Any, name: String, cfg: Any): Any = invoke(mgr, "create", String::class.java to name, CFG to cfg) ?: error("create returned null")
 
     fun delete(mgr: Any, name: String) {
         runCatching { invoke(mgr, "delete", String::class.java to name) }
@@ -61,8 +58,7 @@ object AvfReflect {
         m.invoke(vm, cfg)
     }
 
-    fun newVmConfigBuilder(ctx: Context): Any =
-        CFG_B.getDeclaredConstructor(Context::class.java).apply { isAccessible = true }.newInstance(ctx)
+    fun newVmConfigBuilder(ctx: Context): Any = CFG_B.getDeclaredConstructor(Context::class.java).apply { isAccessible = true }.newInstance(ctx)
 
     fun newCustomBuilder(): Any = CUSTOM_B.getDeclaredConstructor().apply { isAccessible = true }.newInstance()
 
@@ -86,10 +82,9 @@ object AvfReflect {
      * onTrimMemory. virtmgr still drops it unless the device sets
      * `hypervisor.memory_reclaim.supported`. Returns whether the API has it.
      */
-    fun useAutoMemoryBalloon(b: Any, value: Boolean): Boolean =
-        runCatching { invoke(b, "useAutoMemoryBalloon", Boolean::class.javaPrimitiveType!! to value) }
-            .onFailure { Log.w(TAG, "no useAutoMemoryBalloon on this AVF API") }
-            .isSuccess
+    fun useAutoMemoryBalloon(b: Any, value: Boolean): Boolean = runCatching { invoke(b, "useAutoMemoryBalloon", Boolean::class.javaPrimitiveType!! to value) }
+        .onFailure { Log.w(TAG, "no useAutoMemoryBalloon on this AVF API") }
+        .isSuccess
 
     fun setCustomImageConfig(b: Any, cfg: Any) = invoke(b, "setCustomImageConfig", CUSTOM to cfg).let {}
     fun build(b: Any): Any = invoke(b, "build")!!
@@ -155,6 +150,7 @@ object AvfReflect {
             when (method.name) {
                 // onError(vm, errorCode, message)
                 "onError" -> onError(args?.getOrNull(1) as? Int ?: -1, args?.getOrNull(2) as? String)
+
                 // onStopped(vm, reason); onDied has the reason at index 1 too.
                 "onStopped", "onDied" -> onStopped(args?.getOrNull(1) as? Int ?: -1)
             }
@@ -175,9 +171,8 @@ object AvfReflect {
     fun stop(vm: Any) = invoke(vm, "stop").let {}
 
     /** A connected AF_VSOCK socket to [port] on the guest (host → guest only). */
-    fun connectVsock(vm: Any, port: Long): ParcelFileDescriptor =
-        vm.javaClass.getDeclaredMethod("connectVsock", Long::class.javaPrimitiveType!!).apply { isAccessible = true }
-            .invoke(vm, port) as? ParcelFileDescriptor ?: error("connectVsock($port) returned null")
+    fun connectVsock(vm: Any, port: Long): ParcelFileDescriptor = vm.javaClass.getDeclaredMethod("connectVsock", Long::class.javaPrimitiveType!!).apply { isAccessible = true }
+        .invoke(vm, port) as? ParcelFileDescriptor ?: error("connectVsock($port) returned null")
 
     fun consoleOutput(vm: Any): InputStream = invoke(vm, "getConsoleOutput") as? InputStream ?: error("no console output")
     fun consoleInput(vm: Any): OutputStream = invoke(vm, "getConsoleInput") as? OutputStream ?: error("no console input")

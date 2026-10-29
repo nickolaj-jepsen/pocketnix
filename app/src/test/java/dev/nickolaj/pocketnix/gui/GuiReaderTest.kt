@@ -1,5 +1,7 @@
 package dev.nickolaj.pocketnix.gui
 
+import java.io.ByteArrayInputStream
+import java.nio.ByteBuffer
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
@@ -8,8 +10,6 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.io.ByteArrayInputStream
-import java.nio.ByteBuffer
 
 class GuiReaderTest {
     private fun read(f: CompositorFrames): List<GuiMessage> {
@@ -92,11 +92,16 @@ class GuiReaderTest {
         assertEquals(
             listOf(
                 AppEntry(
-                    "org.gnome.Calculator", "Calculator", genericName = "Calculator", keywords = listOf("math", "sum"),
-                    categories = listOf("Utility"), icon = "k1", actions = listOf(AppAction("new-window", "New Window", "")),
-                ),
+                    "org.gnome.Calculator",
+                    "Calculator",
+                    genericName = "Calculator",
+                    keywords = listOf("math", "sum"),
+                    categories = listOf("Utility"),
+                    icon = "k1",
+                    actions = listOf(AppAction("new-window", "New Window", ""))
+                )
             ),
-            (m[3] as GuiMessage.Apps).apps,
+            (m[3] as GuiMessage.Apps).apps
         )
         val icon = m[4] as GuiMessage.Icon
         assertEquals("k1" to 48, icon.key to icon.size)
@@ -108,7 +113,7 @@ class GuiReaderTest {
 
     @Test
     fun anIconKeyNeverNamesAPath() = assertViolation(
-        CompositorFrames().raw(Gui.ICON, byteArrayOf(0, 48, 5) + "../ab".toByteArray()),
+        CompositorFrames().raw(Gui.ICON, byteArrayOf(0, 48, 5) + "../ab".toByteArray())
     )
 
     @Test
@@ -123,7 +128,7 @@ class GuiReaderTest {
         }
         assertEquals(
             mapOf("type" to "launch", "id" to "a-1", "app" to "foot", "action" to "new-window", "tab" to ""),
-            fields(Gui.launch("a-1", "foot", "new-window", "")),
+            fields(Gui.launch("a-1", "foot", "new-window", ""))
         )
         assertEquals(mapOf("type" to "launch-cancel", "id" to "a-1"), fields(Gui.launchCancel("a-1")))
         assertEquals(mapOf("type" to "icon", "icon" to "k1", "size" to 96), fields(Gui.icon("k1", 96)))
@@ -181,14 +186,14 @@ class GuiReaderTest {
         CompositorFrames()
             .commit(1, 1, 1, 1, listOf(intArrayOf(0, 0, 1, 1)), pixels(4), Gui.FLAG_BUFFER or Gui.FLAG_FULL or Gui.FLAG_GROUPED)
             .ready()
-            .commit(2, 1, 1, 1, listOf(intArrayOf(0, 0, 1, 1)), pixels(4), Gui.FLAG_BUFFER or Gui.FLAG_FULL),
+            .commit(2, 1, 1, 1, listOf(intArrayOf(0, 0, 1, 1)), pixels(4), Gui.FLAG_BUFFER or Gui.FLAG_FULL)
     )
 
     @Test
     fun rejectsASurfaceTwiceInAGroup() = assertViolation(
         CompositorFrames()
             .commit(1, 1, 1, 1, listOf(intArrayOf(0, 0, 1, 1)), pixels(4), Gui.FLAG_BUFFER or Gui.FLAG_FULL or Gui.FLAG_GROUPED)
-            .commit(1, 1, 1, 1, listOf(intArrayOf(0, 0, 1, 1)), pixels(4), Gui.FLAG_BUFFER),
+            .commit(1, 1, 1, 1, listOf(intArrayOf(0, 0, 1, 1)), pixels(4), Gui.FLAG_BUFFER)
     )
 
     @Test
@@ -223,29 +228,29 @@ class GuiReaderTest {
 
     @Test
     fun rejectsRawDataOfTheWrongLength() = assertViolation(
-        CompositorFrames().commit(1, 1, 2, 2, listOf(intArrayOf(0, 0, 2, 2)), pixels(12), Gui.FLAG_BUFFER or Gui.FLAG_FULL),
+        CompositorFrames().commit(1, 1, 2, 2, listOf(intArrayOf(0, 0, 2, 2)), pixels(12), Gui.FLAG_BUFFER or Gui.FLAG_FULL)
     )
 
     @Test
     fun rejectsRectsOutsideTheBuffer() = assertViolation(
-        CompositorFrames().commit(1, 1, 2, 2, listOf(intArrayOf(1, 1, 2, 1)), pixels(8), Gui.FLAG_BUFFER),
+        CompositorFrames().commit(1, 1, 2, 2, listOf(intArrayOf(1, 1, 2, 1)), pixels(8), Gui.FLAG_BUFFER)
     )
 
     @Test
     fun rejectsAFullCommitThatIsntWhole() = assertViolation(
-        CompositorFrames().commit(1, 1, 2, 2, listOf(intArrayOf(0, 0, 2, 1)), pixels(8), Gui.FLAG_BUFFER or Gui.FLAG_FULL),
+        CompositorFrames().commit(1, 1, 2, 2, listOf(intArrayOf(0, 0, 2, 1)), pixels(8), Gui.FLAG_BUFFER or Gui.FLAG_FULL)
     )
 
     @Test
     fun rejectsTooManyRects() = assertViolation(
-        CompositorFrames().commit(1, 1, 1, 1, List(Gui.MAX_RECTS + 1) { intArrayOf(0, 0, 1, 1) }, pixels(4 * (Gui.MAX_RECTS + 1)), Gui.FLAG_BUFFER),
+        CompositorFrames().commit(1, 1, 1, 1, List(Gui.MAX_RECTS + 1) { intArrayOf(0, 0, 1, 1) }, pixels(4 * (Gui.MAX_RECTS + 1)), Gui.FLAG_BUFFER)
     )
 
     @Test
     fun rejectsSeqsThatDontIncrease() = assertViolation(
         CompositorFrames()
             .commit(1, 1, 1, 1, emptyList(), ByteArray(0), 0, seq = 5)
-            .commit(1, 1, 1, 1, emptyList(), ByteArray(0), 0, seq = 5),
+            .commit(1, 1, 1, 1, emptyList(), ByteArray(0), 0, seq = 5)
     )
 
     @Test
@@ -299,16 +304,16 @@ class GuiReaderTest {
                     // Bytes: "ø" is 2, "😀" 4; the cursor after the emoji, the anchor inside it.
                     .put("text", "ø😀x").put("cursor", 6).put("anchor", 4).put("cause", "input-method")
                     .put("purpose", "email").put("hints", JSONArray().put("spellcheck").put("multiline"))
-                    .put("cursorRect", JSONObject().put("x", 10).put("y", 20).put("width", 2).put("height", 30)),
+                    .put("cursorRect", JSONObject().put("x", 10).put("y", 20).put("width", 2).put("height", 30))
             )
             .json(
                 JSONObject().put("type", "text-input").put("window", 0).put("session", 0).put("applied", 0)
-                    .put("text", JSONObject.NULL).put("cursor", 0).put("anchor", 0).put("cursorRect", JSONObject.NULL),
+                    .put("text", JSONObject.NULL).put("cursor", 0).put("anchor", 0).put("cursorRect", JSONObject.NULL)
             )
         val m = read(f)
         assertEquals(
             GuiMessage.TextInput(TextInputState(7, 3, 12, "ø😀x", 3, 1, "email", setOf("spellcheck", "multiline"), PixelRect(10, 20, 2, 30))),
-            m[0],
+            m[0]
         )
         val none = (m[1] as GuiMessage.TextInput).state
         assertEquals(false, none.active)

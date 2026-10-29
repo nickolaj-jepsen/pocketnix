@@ -22,7 +22,7 @@ object AvfReasons {
         8 to "PVM_FIRMWARE_INSTANCE_IMAGE_CHANGED",
         9 to "BOOTLOADER_PUBLIC_KEY_MISMATCH",
         10 to "BOOTLOADER_INSTANCE_IMAGE_CHANGED",
-        16 to "HANGUP",
+        16 to "HANGUP"
     )
 
     fun stopReason(code: Int): String = STOP[code]?.let { "$code $it" } ?: "$code"

@@ -1,17 +1,18 @@
 package dev.nickolaj.pocketnix.agent
 
 import android.util.Log
+import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -19,7 +20,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
-import java.io.IOException
 
 /**
  * The control stream, kept connected while started: the agent isn't up until
@@ -30,11 +30,12 @@ class ControlChannel(
     private val scope: CoroutineScope,
     private val appVersion: String,
     /** How long the agent may be quiet before a ping; three times this without a word drops the stream. */
-    private val keepaliveMs: Long = 15_000,
+    private val keepaliveMs: Long = 15_000
 ) {
     sealed interface Link {
         data object Down : Link
         data class Up(val agentVersion: String) : Link
+
         /** The agent refused the Hello (e.g. a protocol mismatch); retrying won't help. */
         data class Refused(val reason: String) : Link
     }
@@ -46,18 +47,22 @@ class ControlChannel(
     val config: StateFlow<GuestConfig?> = _config.asStateFlow()
 
     private val _updates = MutableStateFlow<Updates?>(null)
+
     /** The agent's update state; pushed on connect and on every change. */
     val updates: StateFlow<Updates?> = _updates.asStateFlow()
 
     private val _wake = MutableStateFlow<Wake?>(null)
+
     /** The agent's last wake push; it comes on connect, so a stale one only outlives a dropped stream. */
     val wake: StateFlow<Wake?> = _wake.asStateFlow()
 
     private val _events = MutableSharedFlow<JSONObject>(extraBufferCapacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
     /** The agent's other pushes (go/internal/protocol/integrations.go). */
     val events: SharedFlow<JSONObject> = _events.asSharedFlow()
 
     private var job: Job? = null
+
     @Volatile private var stream: AgentStream? = null
     private val requests = Mutex()
 
@@ -67,6 +72,7 @@ class ControlChannel(
      * answer to a request that timed out mustn't settle the next one.
      */
     private class Pending(val type: String, val id: Int, val answer: CompletableDeferred<Result<JSONObject>>)
+
     @Volatile private var pending: Pending? = null
     private var nextId = 0
 
@@ -141,8 +147,10 @@ class ControlChannel(
                 return
             }
             // No id: whichever pong comes back only shows the agent is alive.
-            if (quiet >= keepaliveMs) scope.launch(Dispatchers.IO) {
-                runCatching { synchronized(s) { Protocol.writeJson(s.output, JSONObject().put("type", "ping")) } }
+            if (quiet >= keepaliveMs) {
+                scope.launch(Dispatchers.IO) {
+                    runCatching { synchronized(s) { Protocol.writeJson(s.output, JSONObject().put("type", "ping")) } }
+                }
             }
         }
     }
@@ -165,16 +173,23 @@ class ControlChannel(
         val p = pending
         when {
             type == "config" -> _config.value = GuestConfig.parse(msg)
+
             // Pushed, and the answer to [refreshUpdates]; never a pending request's reply.
             type == "updates" -> _updates.value = Updates.parse(msg)
+
             type == "wake" -> _wake.value = Wake.parse(msg)
+
             type == "error" -> p?.takeIf { it.answers(msg) }?.answer?.complete(Result.failure(AgentException(msg.optString("message"))))
                 ?: Log.w(TAG, "agent error: ${msg.optString("message")}")
+
             p != null && type == p.type && p.answers(msg) -> p.answer.complete(Result.success(msg))
+
             // The late answer to a request that already timed out.
             msg.has("id") -> Log.w(TAG, "late answer: $type")
+
             // The keepalive's.
             type == "pong" -> {}
+
             else -> _events.tryEmit(msg)
         }
     }
@@ -206,10 +221,9 @@ class ControlChannel(
     }
 
     /** [call] for a request with no fields; false when it failed. */
-    suspend fun request(type: String, timeoutMs: Long = 5_000): Boolean =
-        runCatching { call(JSONObject().put("type", type), timeoutMs) }
-            .onFailure { Log.w(TAG, "$type: ${it.message}") }
-            .isSuccess
+    suspend fun request(type: String, timeoutMs: Long = 5_000): Boolean = runCatching { call(JSONObject().put("type", type), timeoutMs) }
+        .onFailure { Log.w(TAG, "$type: ${it.message}") }
+        .isSuccess
 
     /** Asks for a fresh update state (the generations may have changed under it); it arrives in [updates]. */
     fun refreshUpdates() {

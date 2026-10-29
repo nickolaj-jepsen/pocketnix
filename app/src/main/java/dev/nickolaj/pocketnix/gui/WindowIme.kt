@@ -40,7 +40,7 @@ internal class WindowIme(
     private val window: Int,
     private val session: GuiSession,
     private val input: WindowInput,
-    private val zoom: Zoom,
+    private val zoom: Zoom
 ) {
     private val imm = view.context.getSystemService(InputMethodManager::class.java)
     private val main = Handler(Looper.getMainLooper())
@@ -90,12 +90,15 @@ internal class WindowIme(
                 state = s
                 when (model.client(s)) {
                     TextInputModel.Agreement.AGREES -> main.removeCallbacks(resync)
+
                     TextInputModel.Agreement.CAUGHT_UP -> {
                         main.removeCallbacks(resync)
                         // An open batch flushes as it ends.
                         if (batch == 0) flush()
                     }
+
                     TextInputModel.Agreement.AHEAD -> {}
+
                     TextInputModel.Agreement.DISAGREES -> {
                         main.removeCallbacks(resync)
                         main.postDelayed(resync, RESYNC_MS)
@@ -218,7 +221,9 @@ internal class WindowIme(
     fun extraKey(name: String) = guard("window ${window.u}: extra key $name") {
         when (val a = ExtraKeys.action(name)) {
             is KeyAction.Toggle -> modifiers.tap(a.modifier)
+
             is KeyAction.Code -> press(a.keyCode, consumeModifiers())
+
             is KeyAction.Text -> {
                 val fn = modifiers.consume(Modifier.FN)
                 val cp = a.text.codePointAt(0)
@@ -348,7 +353,9 @@ internal class WindowIme(
                     model.lastSerial = serial
                     session.send(Gui.ime(state.session, serial, op.edit))
                 }
+
                 is TextInputModel.Op.Type -> input.type(op.text)
+
                 is TextInputModel.Op.Key -> input.tap(op.key, op.count, op.mods)
             }
         }
@@ -436,13 +443,14 @@ internal class WindowIme(
                     if (m != 0) onModifiers()
                     press(KeyEvent.KEYCODE_ENTER, m)
                 }
+
                 latched() -> typeLatched(t)
+
                 else -> model.commitText(t, newCursorPosition)
             }
         }
 
-        override fun commitText(text: CharSequence, newCursorPosition: Int, textAttribute: TextAttribute?): Boolean =
-            commitText(text, newCursorPosition)
+        override fun commitText(text: CharSequence, newCursorPosition: Int, textAttribute: TextAttribute?): Boolean = commitText(text, newCursorPosition)
 
         override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean = edit("compose") {
             val t = text?.toString().orEmpty()
@@ -455,8 +463,7 @@ internal class WindowIme(
             }
         }
 
-        override fun setComposingText(text: CharSequence, newCursorPosition: Int, textAttribute: TextAttribute?): Boolean =
-            setComposingText(text, newCursorPosition)
+        override fun setComposingText(text: CharSequence, newCursorPosition: Int, textAttribute: TextAttribute?): Boolean = setComposingText(text, newCursorPosition)
 
         override fun setComposingRegion(start: Int, end: Int): Boolean = edit("region") { model.setComposingRegion(start, end) }
 
@@ -464,11 +471,9 @@ internal class WindowIme(
 
         override fun finishComposingText(): Boolean = edit("finish") { model.finishComposingText() }
 
-        override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean =
-            edit("delete") { model.deleteSurroundingText(beforeLength, afterLength) }
+        override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean = edit("delete") { model.deleteSurroundingText(beforeLength, afterLength) }
 
-        override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean =
-            edit("delete") { model.deleteSurroundingTextInCodePoints(beforeLength, afterLength) }
+        override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean = edit("delete") { model.deleteSurroundingTextInCodePoints(beforeLength, afterLength) }
 
         override fun setSelection(start: Int, end: Int): Boolean {
             var ok = false
@@ -499,8 +504,7 @@ internal class WindowIme(
             }
         }
 
-        override fun getCursorCapsMode(reqModes: Int): Int =
-            if (live) guard("window ${window.u}: caps mode", 0) { TextUtils.getCapsMode(model.text, model.selectionStart, reqModes) } else 0
+        override fun getCursorCapsMode(reqModes: Int): Int = if (live) guard("window ${window.u}: caps mode", 0) { TextUtils.getCapsMode(model.text, model.selectionStart, reqModes) } else 0
 
         override fun getExtractedText(request: ExtractedTextRequest?, flags: Int): ExtractedText? {
             if (!live) return null
@@ -589,18 +593,30 @@ internal class WindowIme(
         fun editorType(purpose: String, hints: Set<String>): Pair<Int, Int> {
             var type = when (purpose) {
                 "digits" -> InputType.TYPE_CLASS_NUMBER
+
                 "number" -> InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+
                 "pin" -> InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+
                 "phone" -> InputType.TYPE_CLASS_PHONE
+
                 "date" -> InputType.TYPE_CLASS_DATETIME or InputType.TYPE_DATETIME_VARIATION_DATE
+
                 "time" -> InputType.TYPE_CLASS_DATETIME or InputType.TYPE_DATETIME_VARIATION_TIME
+
                 "datetime" -> InputType.TYPE_CLASS_DATETIME
+
                 "url" -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+
                 "email" -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+
                 "name" -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PERSON_NAME
+
                 "password" -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+
                 // A terminal takes keys as typed: no suggestions to compose.
                 "terminal" -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+
                 else -> InputType.TYPE_CLASS_TEXT
             }
             var options = EditorInfo.IME_ACTION_NONE or EditorInfo.IME_FLAG_NO_ENTER_ACTION

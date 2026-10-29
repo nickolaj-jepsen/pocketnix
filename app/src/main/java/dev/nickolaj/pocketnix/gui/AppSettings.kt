@@ -4,15 +4,15 @@ import android.content.Context
 import android.util.Log
 import dev.nickolaj.pocketnix.agent.GuiAppSettings
 import dev.nickolaj.pocketnix.agent.GuiConfig
-import org.json.JSONObject
 import kotlin.math.ceil
 import kotlin.math.min
+import org.json.JSONObject
 
 /** A window's size preset: its scale is the display's density times [factor] (docs/gui.md, Size). */
 enum class SizePreset(val id: String, val label: String, val factor: Float) {
     PHONE("phone", "Phone", 1f),
     COMPACT("compact", "Compact", 0.75f),
-    DESKTOP("desktop", "Desktop", 0.5f),
+    DESKTOP("desktop", "Desktop", 0.5f)
     ;
 
     companion object {
@@ -24,7 +24,7 @@ enum class SizePreset(val id: String, val label: String, val factor: Float) {
 enum class InputMode(val id: String, val label: String) {
     TOUCH("touch", "Touch"),
     POINTER("pointer", "Pointer"),
-    TRACKPAD("trackpad", "Trackpad"),
+    TRACKPAD("trackpad", "Trackpad")
     ;
 
     companion object {
@@ -55,6 +55,7 @@ interface OverrideStore {
  */
 class AppSettings(private val store: OverrideStore) {
     @Volatile private var config: GuiConfig? = null
+
     @Volatile private var overrides: Map<String, AppOverride> = runCatching { store.load() }
         .onFailure { Log.w(TAG, "the stored app settings don't load", it) }.getOrDefault(emptyMap())
 
@@ -75,7 +76,7 @@ class AppSettings(private val store: OverrideStore) {
         return AppChoice(
             size = o?.size ?: pick(d, c?.defaults, SizePreset.PHONE) { SizePreset.of(it.size) },
             input = o?.input ?: pick(d, c?.defaults, InputMode.TOUCH) { InputMode.of(it.input) },
-            overridden = o != null,
+            overridden = o != null
         )
     }
 
@@ -106,8 +107,7 @@ class AppSettings(private val store: OverrideStore) {
         onChange()
     }
 
-    private inline fun <T : Any> pick(app: GuiAppSettings?, defaults: GuiAppSettings?, builtin: T, field: (GuiAppSettings) -> T?): T =
-        app?.let(field) ?: defaults?.let(field) ?: builtin
+    private inline fun <T : Any> pick(app: GuiAppSettings?, defaults: GuiAppSettings?, builtin: T, field: (GuiAppSettings) -> T?): T = app?.let(field) ?: defaults?.let(field) ?: builtin
 
     private companion object {
         const val TAG = "AppSettings"
@@ -159,8 +159,7 @@ object WindowFit {
      * are whole logical pixels, and the wire's rounding is undone upwards,
      * so the fit never gives the client less than it asked for.
      */
-    fun logical(pixels: Int, scale: Float): Float =
-        if (pixels <= 0 || scale <= 0f) 0f else ceil(pixels / scale - ROUNDING_SLACK).coerceAtLeast(1f)
+    fun logical(pixels: Int, scale: Float): Float = if (pixels <= 0 || scale <= 0f) 0f else ceil(pixels / scale - ROUNDING_SLACK).coerceAtLeast(1f)
 
     private const val ROUNDING_SLACK = 0.01f
 }

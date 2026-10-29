@@ -1,11 +1,11 @@
 package dev.nickolaj.pocketnix.agent
 
-import org.json.JSONObject
 import java.io.Closeable
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.ServerSocket
 import java.util.concurrent.atomic.AtomicInteger
+import org.json.JSONObject
 
 /** One accepted connection after its Hello: the app's Hello, and the raw streams. */
 class FakeConn(val hello: JSONObject, val input: InputStream, val output: OutputStream) {

@@ -68,7 +68,7 @@ fun SharedFoldersDialog(vm: Vm, onDismiss: () -> Unit) {
             }
         },
         confirmButton = { TextButton(onClick = { pick.launch(null) }) { Text("Share a folder") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Done") } }
     )
 
     picked?.let { uri ->
@@ -94,13 +94,14 @@ private fun NameDialog(store: SharedFolders, initial: String, except: String?, o
         title = { Text("Name in the guest") },
         text = {
             OutlinedTextField(
-                name, { name = it },
+                name,
+                { name = it },
                 singleLine = true,
                 isError = problem != null,
-                supportingText = problem?.let { { Text(it) } },
+                supportingText = problem?.let { { Text(it) } }
             )
         },
         confirmButton = { TextButton(enabled = problem == null, onClick = { onDone(name.trim()) }) { Text("OK") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }

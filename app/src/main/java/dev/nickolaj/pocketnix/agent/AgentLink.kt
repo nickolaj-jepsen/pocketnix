@@ -1,6 +1,5 @@
 package dev.nickolaj.pocketnix.agent
 
-import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.Closeable
 import java.io.FilterInputStream
@@ -8,6 +7,7 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
+import org.json.JSONObject
 
 /** One connection to the agent. [close] must wake a thread blocked reading [input]. */
 interface AgentStream : Closeable {
@@ -45,7 +45,7 @@ private class BufferedStream(s: AgentStream) : AgentStream by s {
         object : FilterInputStream(s.input) {
             override fun available() = 0
         },
-        64 * 1024,
+        64 * 1024
     )
 }
 

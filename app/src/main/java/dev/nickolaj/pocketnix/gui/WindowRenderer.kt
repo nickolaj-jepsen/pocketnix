@@ -22,7 +22,7 @@ internal class WindowRenderer(
     /** The window's commits up to a seq are on screen. */
     private val presented: (window: Int, seq: Int) -> Unit,
     /** A buffer came free while [behind]: render every surface again. */
-    private val onReleased: (WindowRenderer) -> Unit,
+    private val onReleased: (WindowRenderer) -> Unit
 ) {
     private val root = SurfaceControl.Builder().setName("gui-window-${window.u}").setParent(parent).build()
     private val layers = HashMap<Int, Layer>()

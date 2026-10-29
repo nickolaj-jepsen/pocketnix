@@ -7,6 +7,9 @@ import dev.nickolaj.pocketnix.agent.AgentStream
 import dev.nickolaj.pocketnix.agent.ControlChannel
 import dev.nickolaj.pocketnix.agent.Protocol
 import dev.nickolaj.pocketnix.agent.open
+import java.io.IOException
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
@@ -21,9 +24,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.IOException
-import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Shares folders with the agent: announces them with a host-folders request
@@ -35,9 +35,10 @@ import java.util.concurrent.atomic.AtomicInteger
 class HostFolderLinks(
     private val control: ControlChannel,
     private val appVersion: String,
-    private val open: (SharedFolder) -> HostFolderFs,
+    private val open: (SharedFolder) -> HostFolderFs
 ) {
     private val counter = AtomicInteger()
+
     // Shared by every folder's streams; a handful of SAF calls at a time is plenty.
     private val workers = Executors.newFixedThreadPool(WORKERS) { r ->
         Thread(r, "hostfs-${counter.incrementAndGet()}").apply { isDaemon = true }
@@ -48,6 +49,7 @@ class HostFolderLinks(
     private var refusedBy: ControlChannel.Link? = null
 
     private val _error = MutableStateFlow<String?>(null)
+
     /** Why the agent couldn't mount some folders, from the last announcement. */
     val error: StateFlow<String?> = _error.asStateFlow()
 
@@ -65,7 +67,7 @@ class HostFolderLinks(
         if (refusedBy === link) return@coroutineScope
         val req = JSONObject().put("type", "host-folders").put(
             "folders",
-            JSONArray(folders.map { JSONObject().put("name", it.name).put("writable", it.writable) }),
+            JSONArray(folders.map { JSONObject().put("name", it.name).put("writable", it.writable) })
         )
         try {
             control.call(req, ANNOUNCE_TIMEOUT_MS)
@@ -82,8 +84,10 @@ class HostFolderLinks(
             Log.w(TAG, "host-folders: ${e.message}")
             return@coroutineScope
         }
-        for ((folder, server) in current) repeat(STREAMS) {
-            launch(Dispatchers.IO) { keep(dialer, folder, server) }
+        for ((folder, server) in current) {
+            repeat(STREAMS) {
+                launch(Dispatchers.IO) { keep(dialer, folder, server) }
+            }
         }
         awaitCancellation()
     }
@@ -140,6 +144,7 @@ class HostFolderLinks(
         const val TAG = "HostFolderLinks"
         const val STREAMS = 2
         const val WORKERS = 4
+
         // Mounting is quick, but the agent may first wait out a stale mount.
         const val ANNOUNCE_TIMEOUT_MS = 15_000L
         const val MIN_BACKOFF_MS = 250L
