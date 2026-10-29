@@ -1,5 +1,6 @@
 package dev.nickolaj.pocketnix.gui
 
+import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
@@ -385,6 +386,7 @@ class GuiWindowActivity :
         surface?.pushState()
     }
 
+    @SuppressLint("RestrictedApi") // Activity's dispatchKeyEvent is public; lint sees ComponentActivity's @RestrictTo override
     override fun dispatchKeyEvent(event: KeyEvent): Boolean = guard("window ${windowId.u}: key", false) { bound && surface?.key(event) == true } || super.dispatchKeyEvent(event)
 
     override fun onDestroy() {

@@ -35,20 +35,30 @@
         avf-kernel = pkgs.callPackage ./nix/avf-kernel/package.nix {};
       });
 
-    apps = forAll (pkgs: let
-      own = self.packages.${pkgs.stdenv.hostPlatform.system};
-    in {
-      provision = {
-        type = "app";
-        program = "${pkgs.writeShellScript "provision" ''exec ${own.pocketnix-cli}/bin/pocketnix provision "$@"''}";
-        meta.description = "Install the app on a phone over adb and push a guest's disk image";
+    apps =
+      nixpkgs.lib.recursiveUpdate (forAll (pkgs: let
+        own = self.packages.${pkgs.stdenv.hostPlatform.system};
+      in {
+        provision = {
+          type = "app";
+          program = "${pkgs.writeShellScript "provision" ''exec ${own.pocketnix-cli}/bin/pocketnix provision "$@"''}";
+          meta.description = "Install the app on a phone over adb and push a guest's disk image";
+        };
+        boot-example = {
+          type = "app";
+          program = "${pkgs.callPackage ./nix/qemu-boot.nix {image = own.example-image;}}/bin/boot-example";
+          meta.description = "Boot the example guest's disk image under qemu-system-aarch64";
+        };
+      })) {
+        x86_64-linux.gradle = {
+          type = "app";
+          program = nixpkgs.lib.getExe (import ./nix/gradle.nix {
+            pkgs = androidPkgs;
+            inherit (self.packages.x86_64-linux) pocketnix pocketnix-compositor;
+          });
+          meta.description = "Run ./gradlew with the Android SDK and the JVM tests' real agent, compositor and foot";
+        };
       };
-      boot-example = {
-        type = "app";
-        program = "${pkgs.callPackage ./nix/qemu-boot.nix {image = own.example-image;}}/bin/boot-example";
-        meta.description = "Boot the example guest's disk image under qemu-system-aarch64";
-      };
-    });
 
     # For a consumer's own nixpkgs (e.g. `pocketnix.guest.package = pkgs.pocketnix`); needs Go ≥ go.mod's.
     overlays.default = final: _prev: {

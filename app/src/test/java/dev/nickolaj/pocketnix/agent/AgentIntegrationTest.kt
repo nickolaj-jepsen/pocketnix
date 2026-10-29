@@ -37,8 +37,8 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * The app's agent code against the real Go agent over TCP. Opt-in:
- * POCKETNIX_AGENT=$(nix build --print-out-paths .#pocketnix)/bin/pocketnix-agent ./gradlew :app:testDebugUnitTest
+ * The app's agent code against the real Go agent over TCP. Opt-in through
+ * POCKETNIX_AGENT, the agent binary, which `nix run .#gradle` sets.
  */
 class AgentIntegrationTest {
     private lateinit var agent: Process

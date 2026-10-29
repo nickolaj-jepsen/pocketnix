@@ -36,13 +36,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
-      - run: nix build .#pocketnix .#pocketnix-compositor
-      # The JVM tests run against the real agent and compositor; assembleRelease
+      # The JVM tests run against the real agent, compositor and foot; assembleRelease
       # (unsigned here) runs R8, whose rules only a release build exercises.
-      - run: |
-          POCKETNIX_AGENT=$PWD/result/bin/pocketnix-agent \
-          POCKETNIX_COMPOSITOR=$PWD/result-1/bin/pocketnix-compositor \
-          nix develop --command ./gradlew assembleDebug assembleRelease testDebugUnitTest --console=plain
+      - run: nix run .#gradle -- assembleDebug assembleRelease testDebugUnitTest lintDebug --console=plain
       - uses: actions/upload-artifact@v4
         with:
           name: app-debug

@@ -28,16 +28,20 @@ After changing `go/go.mod`, update `vendorHash` in `nix/go.nix`.
 ```bash
 nix flake check                       # every check for this system (avf-boot on x86_64 needs aarch64 builds)
 go -C go vet ./... && go -C go test ./...
-./gradlew testDebugUnitTest
+nix run .#gradle -- testDebugUnitTest lintDebug
 nix fmt                               # Nix, Go and Kotlin (nix/treefmt.nix)
 ```
 
 The checks are `checks` in `flake.nix`; each VM test's file under `nix/`
 opens with what it covers, and the NixOS VM tests run on x86_64 only.
 
-- The JVM tests also run against real binaries when given them:
-  `POCKETNIX_AGENT=<...>/bin/pocketnix-agent` and
-  `POCKETNIX_COMPOSITOR=<...>/bin/pocketnix-compositor` (with foot on PATH).
+- `nix run .#gradle` is `./gradlew` with the Android SDK and the real agent,
+  compositor and foot, which the JVM integration tests opt into
+  (`POCKETNIX_AGENT`, `POCKETNIX_COMPOSITOR`); plain `./gradlew` skips them.
+- Lint fails on errors; `app/lint-baseline.xml` holds the warnings from
+  before it ran in CI.
+- A NixOS VM test runs interactively with
+  `nix run .#checks.x86_64-linux.<test>.driverInteractive`.
 
 ## Run the app without a phone
 

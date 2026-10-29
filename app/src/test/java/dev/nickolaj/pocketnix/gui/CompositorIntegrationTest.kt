@@ -21,10 +21,8 @@ import org.junit.Test
 /**
  * The decoder and the reference copy against a real compositor and a real
  * client: every commit is mirrored on the JVM and its content hash compared
- * with the compositor's. Opt-in:
- *
- *     POCKETNIX_COMPOSITOR=$(nix build --print-out-paths .#pocketnix-compositor)/bin/pocketnix-compositor \
- *       ./gradlew :app:testDebugUnitTest --tests '*CompositorIntegrationTest'
+ * with the compositor's. Opt-in through POCKETNIX_COMPOSITOR, the compositor
+ * binary, which `nix run .#gradle` sets.
  *
  * The client is foot from PATH, or POCKETNIX_GUI_CLIENT (a shell command,
  * e.g. a full path to gtk3-widget-factory).

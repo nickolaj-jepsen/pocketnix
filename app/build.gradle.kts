@@ -85,6 +85,18 @@ android {
         // KeyEvent constants compile inline; android.jar's stubs (Log) return defaults instead of throwing.
         unitTests.isReturnDefaultValues = true
     }
+
+    lint {
+        // Errors fail the build; the baseline holds the warnings from before lint ran in CI.
+        baseline = file("lint-baseline.xml")
+    }
+}
+
+tasks.withType<Test>().configureEach {
+    // The integration tests' opt-ins (nix run .#gradle sets them): inputs, so setting one reruns the tests.
+    for (name in listOf("POCKETNIX_AGENT", "POCKETNIX_COMPOSITOR", "POCKETNIX_GUI_CLIENT")) {
+        inputs.property(name, providers.environmentVariable(name).orElse(""))
+    }
 }
 
 dependencies {

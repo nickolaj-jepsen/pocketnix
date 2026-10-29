@@ -11,6 +11,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,7 +41,8 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
     var tcp by remember { mutableStateOf(s.tcpBackend) }
     var tcpAddress by remember { mutableStateOf(s.tcpAddress) }
     var sharedFolders by remember { mutableStateOf(false) }
-    val stopped = vm.state.value == VmState.Stopped || vm.state.value is VmState.Failed
+    val state by vm.state.collectAsState()
+    val stopped = state == VmState.Stopped || state is VmState.Failed
     val maxDisk = remember { DiskImage.maxGb(context) }
     val memoryError = memory.toIntOrNull().let { if (it == null || it !in MIN_MEMORY_MB..Settings.MAX_MEMORY_MB) "$MIN_MEMORY_MB–${Settings.MAX_MEMORY_MB} MB" else null }
     // The saved value stays valid even when free space has shrunk below it since.
