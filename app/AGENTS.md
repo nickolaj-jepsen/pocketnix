@@ -40,6 +40,10 @@ that cross directories.
 - An app can't `FIONREAD` a vsock fd, so `available()` on its stream throws,
   and a `BufferedInputStream` calls it after every short read: big PTY output
   and forwards died. `AgentLink`'s buffer hides it; TCP tests can't catch it.
+- The app's vsock fds carry virtmgr's label
+  (`untrusted_app_all_virtualizationmanager`), and sepolicy denies the app
+  `setopt` and `shutdown` on them: `SO_VM_SOCKETS_BUFFER_SIZE` can't be
+  raised, so every stream keeps the kernel's 256 KiB window.
 
 ## Traps (verified on the desktop)
 
