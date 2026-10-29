@@ -49,15 +49,15 @@ Debug builds can talk to an agent over TCP instead of booting a VM, so the UI
 runs on the Android emulator against a desktop agent:
 
 ```bash
-nix build .#pocketnix
-./result/bin/pocketnix-agent --config agent.json --listen tcp:0.0.0.0:9100 --no-power
+nix run .#dev-agent
 adb shell am start -n dev.nickolaj.pocketnix.debug/dev.nickolaj.pocketnix.ControlActivity \
   -a dev.nickolaj.pocketnix.action.START --es tcp 10.0.2.2:9100
 ```
 
-`agent.json` is the file the module writes to `/etc/pocketnix/agent.json`;
-copy one from a built guest. Never expose a TCP listener beyond a test: it
-hands a shell to anyone who reaches it.
+`dev-agent` runs the example guest's agent config, evaluated for this
+machine, with sessions as you; `POCKETNIX_PORT` moves it off 9100. It listens
+on loopback, which the emulator reaches as 10.0.2.2. Never listen beyond
+loopback outside a test: the agent hands a shell to anyone who reaches it.
 
 `pocketnix agent --connect <tcp:...|unix:...|vsock:<cid>:9100> <command>`
 talks to an agent the way the app does (`pocketnix agent -h`).

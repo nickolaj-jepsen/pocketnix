@@ -49,6 +49,11 @@
           program = "${pkgs.callPackage ./nix/qemu-boot.nix {image = own.example-image;}}/bin/boot-example";
           meta.description = "Boot the example guest's disk image under qemu-system-aarch64";
         };
+        dev-agent = {
+          type = "app";
+          program = nixpkgs.lib.getExe (import ./nix/dev-agent.nix {inherit pkgs self;});
+          meta.description = "Run the example guest's agent on this machine for the app on the Android emulator";
+        };
       })) {
         x86_64-linux.gradle = {
           type = "app";
