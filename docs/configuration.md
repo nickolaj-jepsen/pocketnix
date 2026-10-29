@@ -4,8 +4,8 @@ Two places hold configuration:
 
 - The NixOS module (`pocketnix.guest.*`) owns what changes with the system.
   The agent sends it to the app on connect, and a `switch` applies it live.
-- The app's Settings own what must be known before boot (RAM, vCPUs, disk
-  size, network) and what only the phone can name (which Android folders to
+- The app's Settings own what must be known before boot (the VM's hardware
+  and network) and what only the phone can name (which Android folders to
   share).
 
 Every option, with its default and description, is in
@@ -62,7 +62,7 @@ pocketnix.guest.forwards = {
 - Forwards share the phone's ports with every other app. One that can't
   listen shows in the app and is retried.
 - A UDP forward keeps one stream per phone-side client, dropped after 2
-  minutes of silence, at most 64.
+  minutes of silence.
 
 ## Android integration
 
@@ -130,20 +130,19 @@ The app tells the guest about the phone:
 
 ## What the module trims on AVF
 
-To keep the image small and idle wake-ups rare, the module sets these with
-`mkDefault`. Override any of them in your config.
+To keep the image small and idle wake-ups rare, the module's AVF settings
+(under `avf.enable` in `nix/module.nix`) change some NixOS defaults with
+`mkDefault`; set them back in your config. The ones you'll notice:
 
-- No flake registry or `NIX_PATH` entry for nixpkgs (its source is ~200 MiB).
+- No flake registry or `NIX_PATH` entry pinning nixpkgs to the system's.
 - No NixOS manual, info or doc outputs (man pages stay), no
   `environment.defaultPackages`.
 - zram swap on, systemd-oomd off.
-- Kernel parameters that let idle vCPUs sleep.
 
 ## Other hypervisors
 
-`pocketnix.guest.avf.enable = false` drops the AVF platform (kernel, image,
-boot loader, first boot, hvc0) and keeps the agent. This is how the NixOS
-tests run the guest under QEMU.
+`pocketnix.guest.avf.enable = false` drops the AVF platform and keeps the
+agent. This is how the NixOS tests run the guest under QEMU.
 
 ## Secrets
 

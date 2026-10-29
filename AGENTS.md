@@ -6,15 +6,11 @@ in `docs/development.md`.
 
 ## Layout
 
-- `app/`: the Android app (`dev.nickolaj.pocketnix`, `.debug` suffix on debug builds).
-- `terminal-emulator/`, `terminal-view/`: Termux's terminal libraries, vendored
-  from Podroid's copy. Edit them freely; there is no upstream sync.
-- `go/`: one Go module, `cmd/pocketnix-agent` (guest), `cmd/pocketnix-guest`
-  (guest programs' CLI) and `cmd/pocketnix` (host CLI), sharing `internal/protocol`.
-- `compositor/`: the guest's Wayland compositor (Rust, from wprs's server
-  half, Apache-2.0), speaking `docs/gui-protocol.md` to the app.
-- `nix/`: the NixOS modules (`module.nix`, `build-host.nix`), the packages,
-  the VM tests and the devshell.
+`docs/architecture.md` maps the directories. Beyond it:
+
+- The app is `dev.nickolaj.pocketnix`; debug builds add `.debug`.
+- `terminal-emulator/`, `terminal-view/` are vendored (Termux, by way of
+  Podroid): edit them freely; there is no upstream sync.
 
 ## Working rules
 
@@ -24,6 +20,26 @@ in `docs/development.md`.
 - Never build anything inside a guest: an unthrottled build pegs the whole phone.
 - Uninstalling the app, clearing its data or `provision --replace` deletes
   the VM's disk: never do it to a phone's working VM without asking.
+
+## Keeping docs and tests from drifting
+
+Copies of code in docs and tests have drifted here repeatedly; keep one source.
+
+- Docs explain why and how to use; they name the source of truth instead of
+  copying it. Module options and their defaults live in `nix/module.nix`'s
+  descriptions, stream kinds and message fields in `go/internal/protocol`,
+  checks and packages in `flake.nix`, `ControlActivity`'s extras in its
+  `EXTRA_*` constants. No timeouts, limits or counts that a constant holds.
+- `docs/gui-protocol.md` is the exception: it is the wire spec, and code
+  matches it. Code cites its headings (and `docs/architecture.md`'s) by name,
+  so grep before renaming one.
+- Traps live in this file only; other docs point here.
+- Tests assert the facet they're named for: an error's type or key token, not
+  its wording; fixture entries by name, not position or count; a condition
+  waited on, not a sleep. Expected values are literal examples, not
+  recomputed the way the code computes them.
+- NixOS tests read expected config from `nodes.<node>.pocketnix.*`, or set
+  their own, instead of copying the module's defaults or `example/configuration.nix`.
 
 ## Traps (verified on a Pixel 8 Pro, GrapheneOS, Android 17)
 
@@ -48,8 +64,7 @@ in `docs/development.md`.
 - The AVF API is `@SystemApi` and `VirtualMachineCustomImageConfig` is `@hide`:
   reach them by reflection with in-process HiddenApiBypass. Its
   `GpuConfig.Builder` takes boxed `Boolean`s on GrapheneOS 17, so a
-  `boolean.class` lookup throws (`AvfReflect.set` tries both). A networked
-  VM asks for `backend=2d` alone.
+  `boolean.class` lookup throws (`AvfReflect.set` tries both).
 - A third-party VM can have the phone's GPU, but nothing yet composites on it.
   `GpuConfig(backend=gfxstream, vulkan=true, egl=false, gles=false, glx=false,
   surfaceless=true, context-types=[gfxstream-vulkan, gfxstream-composer])`

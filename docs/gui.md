@@ -14,10 +14,10 @@ pocketnix.guest.gui = {
 environment.systemPackages = [pkgs.foot pkgs.gnome-calculator];
 ```
 
-`gui.enable` installs the compositor as a socket-activated user service, sets
-`WAYLAND_DISPLAY` and `NIXOS_OZONE_WL=1`, and turns on PipeWire,
-xdg-desktop-portal (with the FileChooser integration), an icon theme and a
-small font set. CJK fonts need `fonts.enableDefaultPackages` or your own.
+`gui.enable` runs the compositor and sets up what Wayland apps expect;
+its description in [`nix/module.nix`](../nix/module.nix) says what it turns
+on. The font set leaves out CJK: add `fonts.enableDefaultPackages` or your
+own.
 
 ## Launching
 
@@ -69,9 +69,8 @@ flowchart LR
 
 ## Window controls
 
-- A slim bar along the bottom of each window: keyboard, title, and a menu
-  (size, input mode, zoom, move, close). Fullscreen apps hide it until a
-  swipe up from the bottom edge.
+- A slim bar along the bottom of each window: keyboard, title, and the
+  window menu. Fullscreen apps hide it until a swipe up from the bottom edge.
 - Docked, Android's own caption bar stays as well. Apps that accept
   server-side decorations get none drawn.
 
@@ -83,8 +82,8 @@ sway, labwc or Plasma can run nested as an ordinary client, in one window.
 
 - Rendering is software in the guest: the phone's GPU is reachable from a
   VM, but nothing can composite on it yet.
-- Sound plays through AVF's virtio-snd only in debug builds for now
-  (`--ez audio true` on a scripted start; see [Development](development.md)).
+- Sound plays through AVF's virtio-snd only in debug builds, turned on from
+  a scripted start (see [Development](development.md)).
 - No X11 apps yet.
 - No clipboard bridge between Wayland apps and Android yet; `pocketnix-guest
   copy` and `paste` work from a terminal.

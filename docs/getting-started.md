@@ -40,8 +40,8 @@ and [Configuration](configuration.md) covers the rest.
 ## 2. Get the app
 
 `provision` installs the release APK matching its own version from this
-repo's GitHub releases. Until a release is published, build a debug APK and
-pass it in:
+repo's GitHub releases. If its version has no release, or to run your own
+build, build a debug APK and pass it in:
 
 ```bash
 git clone https://github.com/nickolaj-jepsen/pocketnix && cd pocketnix
@@ -69,7 +69,7 @@ sequenceDiagram
   CLI->>CLI: build the image with this machine's tools
   CLI->>CLI: copy it, write --inject files into the copy
   CLI->>Phone: install the APK
-  CLI->>Phone: pm grant the two AVF permissions
+  CLI->>Phone: pm grant the AVF permissions
   CLI->>Phone: push the image in compressed chunks
   CLI->>Phone: start the VM
 ```

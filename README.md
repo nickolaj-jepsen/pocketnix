@@ -61,9 +61,9 @@ flowchart LR
 nix run github:nickolaj-jepsen/pocketnix#provision -- --image .#nixosConfigurations.phone
 ```
 
-No release APK is published yet, so for now `provision` needs one you built
-(`--debug --apk ...`). [Getting started](docs/getting-started.md) covers that,
-the requirements, ssh access and the first boot.
+`provision` installs the release APK of its own version, or one you built
+(`--debug --apk ...`). [Getting started](docs/getting-started.md) covers
+building it, the requirements, ssh access and the first boot.
 
 ## Docs
 

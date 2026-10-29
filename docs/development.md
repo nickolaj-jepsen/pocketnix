@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-nix develop   # JDK, Android SDK and NDK, adb, Go, alejandra, e2fsprogs (x86_64-linux only)
+nix develop   # the toolchains for everything below (x86_64-linux only)
 ```
 
 The guest is `aarch64-linux`. On x86_64, building the example image needs
@@ -11,14 +11,11 @@ The guest is `aarch64-linux`. On x86_64, building the example image needs
 
 ## Build
 
-| Command | Builds |
-|---|---|
-| `./gradlew assembleDebug` | `app/build/outputs/apk/debug/app-debug.apk` |
-| `nix build .#pocketnix` | agent, guest CLI and host CLI, with the Go tests |
-| `nix build .#pocketnix-cli` | the host CLI with `adb` and `debugfs` on its PATH |
-| `nix build .#pocketnix-compositor` | the compositor, with its cargo tests |
-| `nix build .#example-image` | the example guest's AVF disk image |
-| `nix run .#boot-example` | that image under `qemu-system-aarch64`, agent on `vsock:4242:9100` |
+`./gradlew assembleDebug` builds `app/build/outputs/apk/debug/app-debug.apk`.
+The flake's packages and apps (`nix flake show`) build the Go binaries and the
+compositor, running their tests, and the example guest's disk image;
+`nix run .#boot-example` boots that image under QEMU and prints the agent's
+vsock address.
 
 After changing `go/go.mod`, update `vendorHash` in `nix/go.nix`.
 
@@ -31,21 +28,12 @@ go -C go vet ./... && go -C go test ./...
 nix fmt .                             # alejandra; Go code is gofmt'ed
 ```
 
-| Check | What it covers |
-|---|---|
-| `format` | alejandra and gofmt |
-| `pocketnix`, `pocketnix-compositor` | the Go and cargo test suites |
-| `agent` (x86_64) | NixOS VM test: the agent over TCP, updates from a build host and a published path, integrations |
-| `gui` (x86_64) | NixOS VM test: `gui.enable`, socket activation, the gui stream, launches, text input |
-| `avf-boot` | the real AVF image booted under QEMU TCG, then switched |
+The checks are `checks` in `flake.nix`; each VM test's file under `nix/`
+opens with what it covers, and the NixOS VM tests run on x86_64 only.
 
 - The JVM tests also run against real binaries when given them:
   `POCKETNIX_AGENT=<...>/bin/pocketnix-agent` and
   `POCKETNIX_COMPOSITOR=<...>/bin/pocketnix-compositor` (with foot on PATH).
-- Anything under `go/` rebuilds the aarch64 agent, and so the example image.
-  Under binfmt that takes a while.
-- The Nix sandbox has no `/dev/vhost-vsock`, so the VM tests reach the agent
-  over TCP. `nix run .#boot-example` covers vsock.
 
 ## Run the app without a phone
 
@@ -73,15 +61,11 @@ which the adb shell has). Send scripted actions there, never to
 `MainActivity`, whose launch intent Android replays when it restores the
 task.
 
-| Action | Extras |
-|---|---|
-| `dev.nickolaj.pocketnix.action.START` | `--ez network`, `--ei memoryMb`, `--ei diskGb`, `--ei cpus 1\|0`, `--ez open false` |
-| `dev.nickolaj.pocketnix.action.STOP` | |
-| debug only: `DEBUG_TAB`, `DEBUG_DUMP`, `DEBUG_LAUNCH` | open and type into a tab, dump tabs to logcat, launch a GUI app |
-
-Debug-only START extras: `--es tcp <host:port>` (`""` for AVF again),
-`--ez audio true` (a virtio-snd speaker from the next start), `--ez
-guiHashes true` (check every GUI commit's content hash).
+The actions are `dev.nickolaj.pocketnix.action.START` and `STOP`, and in debug
+builds `DEBUG_TAB` (open and type into a tab), `DEBUG_DUMP` (dump tabs to
+logcat) and `DEBUG_LAUNCH` (launch a GUI app). Their extras are the `EXTRA_*`
+constants in `ControlActivity`; `start` reads `START`'s and gates the
+debug-only ones on `BuildConfig.DEBUG`.
 
 With the phone locked, an activity started over adb is never laid out, and
 logcat is the only way to see the app; the debug actions exist for that.

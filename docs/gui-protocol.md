@@ -950,20 +950,13 @@ directory, `$XDG_RUNTIME_DIR` (`/run/user/<uid>`).
     fails.
   - On success it sends its Hello and splices raw bytes both ways until either
     side closes. It never parses the GUI protocol.
-- Agent config file (`agent.File`, agent-only): `"guiSocket"`, the GUI socket
-  path, absolute or relative to the session user's runtime directory. Empty
-  means `pocketnix-gui.sock`.
-- Control stream `Config` push (`protocol.Config`): `"gui"`
-  (`GUI *GUI json:"gui,omitempty"`):
-  ```json
-  {"enable": true,
-   "defaults": {"size": "phone", "input": "touch"},
-   "appDefaults": {"org.gnome.Calculator": {"size": "compact"}}}
-  ```
-  - `size` is `phone`, `compact` or `desktop`, and `input` is `touch`,
-    `pointer` or `trackpad`. Every field is optional: an app id inherits what
-    it leaves out from `defaults`.
-  - The app applies them, under the user's own changes per app id; the
+- Agent config file: `guiSocket` (`agent.File.GUISocket`) is the GUI
+  socket it dials.
+- Control stream `Config` push: `gui` (`protocol.GUI`), the module's
+  `gui.enable`, `gui.defaults` and `gui.appDefaults`.
+  - `appDefaults` is keyed by app-list entry `id`, and an entry inherits
+    what it leaves out from `defaults`.
+  - The app applies them, under the user's own changes per entry; the
     compositor gets only the resulting size factors, through `settings`.
   - GUI is on exactly when `gui.enable` is true. The app then keeps one `gui`
     stream open, reconnecting with backoff.
@@ -976,32 +969,19 @@ directory, `$XDG_RUNTIME_DIR` (`/run/user/<uid>`).
 
 ### NixOS module
 
-- `pocketnix.guest.gui.enable` (default false) and `pocketnix.guest.gui.package`
-  (default: this flake's `pocketnix-compositor`).
-- `pocketnix.guest.gui.defaults` (`size`, `input`) and
-  `pocketnix.guest.gui.appDefaults.<desktop-id>` (the same options, null to
-  inherit) go into the agent config's `gui`. They may reach the app before
-  anything uses them.
-- With `gui.enable`, the module installs:
-  - user socket `pocketnix-gui.socket`: `ListenStream=%t/pocketnix-gui.sock`,
-    `FileDescriptorName=gui`, `SocketMode=0600`
-  - user socket `pocketnix-wayland.socket`: `ListenStream=%t/wayland-0`,
-    `FileDescriptorName=wayland`, `SocketMode=0600`
-  - Both are wanted by `sockets.target`, with `Service=pocketnix-compositor.service`.
-  - user service `pocketnix-compositor.service`: `ExecStart=pocketnix-compositor`,
-    `Sockets=` both sockets, and `ExecReload` sending it `SIGHUP`
-  - in the user activation script that every boot and switch runs: reloading
-    `pocketnix-compositor.service` when it's active, so a switch refreshes
-    the app list
-- It also sets:
-  - `WAYLAND_DISPLAY=wayland-0` and `NIXOS_OZONE_WL=1`, both in
-    `environment.sessionVariables` (the tabs' login shells) and in the user
-    manager's environment (user services, D-Bus-activated apps)
-  - `"gui": {"enable": true, …}` in the agent config
-  - with `mkDefault`: `services.pipewire.enable` (with `pulse`),
-    `xdg.portal.enable` (and through it the FileChooser integration), a GTK
-    portal backend as `xdg.portal.config.common.default`, and
-    `fonts.enableDefaultPackages`
+The options and what `gui.enable` turns on besides are in `nix/module.nix`.
+
+- The `gui` options go into the agent config's `gui`. They may reach the app
+  before anything uses them.
+- With `gui.enable`, the user service `pocketnix-compositor.service` is
+  socket-activated by two user-only sockets wanted by `sockets.target`: the
+  GUI socket at `%t/pocketnix-gui.sock`, named `gui`, and the Wayland socket
+  at `%t/wayland-0`, named `wayland`. Reloading it sends `SIGHUP`, and the
+  user activation script that every boot and switch runs reloads it when
+  it's active, so a switch refreshes the app list.
+- `WAYLAND_DISPLAY=wayland-0` and `NIXOS_OZONE_WL=1` are set both in
+  `environment.sessionVariables` (the tabs' login shells) and in the user
+  manager's environment (user services, D-Bus-activated apps).
 - The compositor's `XDG_DATA_DIRS` and `PATH` are the user manager's, which
   pam_env fills from NixOS's profile-relative session variables: both cover
   the user's and the system's profiles. The module adds nothing to them; it

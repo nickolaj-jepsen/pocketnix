@@ -46,20 +46,16 @@ flowchart TB
   answers with its own Hello or an Error. Versions are negotiated there, so
   the app and the module may drift a little.
 
-| Stream | Carries |
-|---|---|
-| `control` | newline-delimited JSON: config, requests, events pushed by the guest |
-| `pty` | one terminal tab, as small binary frames (data, resize, exit) |
-| `forward` / `udp` | one forwarded TCP connection, or one UDP client's datagrams |
-| `font` | the terminal font, cached by the app by hash |
-| `file`, `share`, `save` | one file operation each |
-| `hostfs` | a shared Android folder, served by the app to the guest's FUSE mount |
-| `gui` | the compositor's protocol ([GUI protocol](gui-protocol.md)) |
+- Each job gets a stream of its own: one `control` stream (newline-delimited
+  JSON: config, requests, events pushed by the guest), one `pty` stream per
+  tab, one per forwarded connection or file operation, one per shared folder,
+  and the compositor's ([GUI protocol](gui-protocol.md)). The kinds are the
+  `Stream*` constants in `go/internal/protocol`.
 
 - A tab needs nothing from the control stream, so a stuck control channel
   doesn't freeze terminals.
-- The app pings a quiet control stream every 15 s and drops it after 45 s, so
-  a hung guest shows as "agent absent", never as running.
+- The app pings a quiet control stream and drops one that stays silent, so a
+  hung guest shows as "agent absent", never as running.
 - Guest programs reach the agent on `/run/pocketnix/guest.sock`, which admits
   root and the session user by peer credentials. Requests can pass file
   descriptors, so the root agent never opens a path on a user's behalf.
@@ -83,10 +79,10 @@ stateDiagram-v2
   [*] --> Stopped
   Stopped --> Booting: Start (app, tile, phone boot)
   Booting --> Running: agent connects
-  Booting --> BootMenu: no agent after 2 min, user restarts with menu
+  Booting --> BootMenu: agent late, user restarts with menu
   BootMenu --> Booting
   Running --> Stopping: Stop (agent runs poweroff)
-  Stopping --> Stopped: guest down, or hard stop after 30 s
+  Stopping --> Stopped: guest down, or hard stop after a timeout
   Running --> Booting: guest reboot
   Running --> Stopped: guest poweroff, or the app's process dies
 ```
@@ -94,8 +90,8 @@ stateDiagram-v2
 - A foreground service keeps the app, and so the VM, alive. virtmgr ties the
   VM to the app's process.
 - No wake lock unless the guest holds a logind inhibitor.
-- The app reports phone state (timezone, online, metered, charging, power
-  saving) on connect and on changes, debounced. It belongs to the stream that
+- The app reports the phone's state (`HostState` in `go/internal/protocol`)
+  on connect and on changes, debounced. It belongs to the stream that
   sent it: without an app the guest is offline and on battery.
 
 ## Integrations
@@ -120,10 +116,10 @@ ref. With no app connected, a request fails instead of queueing.
 - Shared folders: FUSE, since the guest kernel has no 9p and AVF's virtiofs
   isn't open to third-party VMs. The app keeps `hostfs` streams open per
   folder and answers file operations from `DocumentsContract`. Entries and
-  attributes are cached 2 s, as SAF listing is slow. A rename over a file
+  attributes are cached briefly, as SAF listing is slow. A rename over a file
   deletes it first; moves need the provider's `moveDocument`, else EXDEV.
-- Pick and save: they wait on the user (10 min at most) and land files like
-  shares. The FileChooser portal is built on them.
+- Pick and save: they wait on the user, up to a time limit, and land files
+  like shares. The FileChooser portal is built on them.
 - Open and share from the background become a notification to tap, as
   Android won't start an activity then.
 
