@@ -122,6 +122,7 @@ Without a release, `provision --apk <file>` installs any APK you built.
 
 ## Pitfalls
 
-`AGENTS.md` lists traps verified on real hardware and on the desktop (pKVM
-quirks, AVF reflection, adb transfer limits, NixOS test details). Read it
-before touching the engine, the image or the module.
+The `AGENTS.md` files list traps verified on real hardware and on the
+desktop: the root's those that cross directories or come from handling a
+device, and each source directory's those that bite there. Read the one for
+what you change.

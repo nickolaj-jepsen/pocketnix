@@ -33,7 +33,7 @@ needs aarch64 builds.
 The example image rebuilds whenever the guest's closure changes: the guest's
 Go source (not its tests, not `cmd/pocketnix`; `nix/go.nix` says what it
 leaves out), the module, the example, or the AVF kernel. On x86_64 the
-aarch64 parts build under binfmt (`AGENTS.md` has the budget), so batch
+aarch64 parts build under binfmt (`go/AGENTS.md` has the budget), so batch
 those changes before building the image or `avf-boot`.
 
 ## A VM test interactively
