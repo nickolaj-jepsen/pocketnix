@@ -529,7 +529,7 @@ class GuiReader(private val input: InputStream) {
         if ((encoding == Gui.ENCODING_RAW && dataLength != most) || dataLength > most) {
             throw GuiProtocolException("commit $seqU has $dataLength data bytes for $pixelBytes pixel bytes")
         }
-        val data = ByteArray(dataLength.toInt())
+        val data = if (encoding == Gui.ENCODING_RAW) SpareArrays.take(dataLength.toInt()) else ByteArray(dataLength.toInt())
         val first = (payload.size - rectsEnd).toInt().coerceAtMost(data.size)
         System.arraycopy(payload, rectsEnd.toInt(), data, 0, first)
         var have = first

@@ -9,6 +9,31 @@ fun interface Unpacker {
 }
 
 /**
+ * Pixel arrays a surface's content let go of, for the next commit's data: a
+ * fresh full-frame array costs its page faults on first touch and the GC's
+ * work, every frame. Thread-safe.
+ */
+object SpareArrays {
+    // One spare per surface that redraws whole; more only holds memory.
+    private const val KEEP = 2
+    private val spare = ArrayDeque<ByteArray>()
+
+    /** An array of [size] bytes, with any content. */
+    @Synchronized
+    fun take(size: Int): ByteArray {
+        val i = spare.indexOfFirst { it.size == size }
+        return if (i >= 0) spare.removeAt(i) else ByteArray(size)
+    }
+
+    /** Hands back [a], which nothing may use again. */
+    @Synchronized
+    fun give(a: ByteArray) {
+        if (spare.size == KEEP) spare.removeFirst()
+        spare.addLast(a)
+    }
+}
+
+/**
  * A surface's reference copy (gui-protocol.md, Applying a commit): its
  * content after every commit so far, `width × 4` bytes per row in wire byte
  * order. Buffers are filled from it; content hashes are computed over it.
@@ -33,13 +58,15 @@ class SurfaceContent {
 
     /**
      * Applies a BUFFER commit; throws [GuiProtocolException] for one that
-     * doesn't fit the content. A raw FULL commit's data becomes the content.
+     * doesn't fit the content. A raw FULL commit's data becomes the content,
+     * and the content it replaces goes to [SpareArrays].
      */
     fun apply(c: Commit, unpacker: Unpacker) {
         require(c.buffer) { "commit without BUFFER" }
         val n = c.pixelBytes.toInt()
         if (c.full) {
             if (c.encoding == Gui.ENCODING_RAW && c.data.size == n) {
+                pixels?.takeIf { it !== c.data }?.let(SpareArrays::give)
                 pixels = c.data
             } else {
                 val p = pixels?.takeIf { it.size == n } ?: ByteArray(n)
@@ -116,7 +143,7 @@ private fun unpack(c: Commit, unpacker: Unpacker, dst: ByteArray, off: Int) {
  */
 fun Commit.unpacked(unpacker: Unpacker): Commit {
     if (!buffer || encoding == Gui.ENCODING_RAW) return this
-    val out = ByteArray(pixelBytes.toInt())
+    val out = SpareArrays.take(pixelBytes.toInt())
     unpack(this, unpacker, out, 0)
     return Commit(
         flags, surface, window, seq, z, format, Gui.ENCODING_RAW, transform, x, y, dstWidth, dstHeight, width, height,
