@@ -17,9 +17,6 @@ jobs:
       - name: The tag names VERSION
         run: test "${GITHUB_REF_NAME}" = "v$(cat VERSION)" || { echo "tag ${GITHUB_REF_NAME} but VERSION is $(cat VERSION)"; exit 1; }
       - uses: cachix/install-nix-action@v31
-      - uses: DeterminateSystems/magic-nix-cache-action@main
-        with:
-          use-flakehub: false
       - name: Release key
         env:
           KEYSTORE: ${{ secrets.POCKETNIX_RELEASE_KEYSTORE }}

@@ -6,18 +6,8 @@ on:
   pull_request:
 
 jobs:
-  go:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v31
-      - uses: DeterminateSystems/magic-nix-cache-action@main
-        with:
-          use-flakehub: false
-      # The package's checkPhase runs the Go tests, the --inject ones included.
-      - run: nix build .#pocketnix .#pocketnix-cli -L
-
-  nixos-test:
+  # Formatting, the Go and cargo tests, and the NixOS VM tests (agent, gui).
+  x86_64:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,58 +19,32 @@ jobs:
       - uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: system-features = nixos-test benchmark big-parallel kvm
-      - uses: DeterminateSystems/magic-nix-cache-action@main
-        with:
-          use-flakehub: false
-      - run: nix build .#checks.x86_64-linux.agent -L
+      # Every system's outputs evaluate, the aarch64 guest's included.
+      - run: nix flake check --no-build --all-systems
+      # checks.x86_64-linux.avf-boot needs an aarch64 builder; the aarch64 job runs it natively.
+      - run: nix build -L .#checks.x86_64-linux.{format,pocketnix,pocketnix-compositor,agent,gui}
+
+  # The guest's own AVF image, booted and switched under QEMU TCG.
+  aarch64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - run: nix build -L .#checks.aarch64-linux.{pocketnix,pocketnix-compositor,avf-boot}
 
   android:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
-      - uses: DeterminateSystems/magic-nix-cache-action@main
-        with:
-          use-flakehub: false
-      - run: nix build .#pocketnix --out-link pocketnix
-      # POCKETNIX_AGENT runs the app's agent client against the real agent.
-      # assembleRelease (unsigned here) runs R8, whose rules only a release build exercises.
-      - run: POCKETNIX_AGENT=$PWD/pocketnix/bin/pocketnix-agent nix develop --command ./gradlew assembleDebug assembleRelease testDebugUnitTest --console=plain
+      - run: nix build .#pocketnix .#pocketnix-compositor
+      # The JVM tests run against the real agent and compositor; assembleRelease
+      # (unsigned here) runs R8, whose rules only a release build exercises.
+      - run: |
+          POCKETNIX_AGENT=$PWD/result/bin/pocketnix-agent \
+          POCKETNIX_COMPOSITOR=$PWD/result-1/bin/pocketnix-compositor \
+          nix develop --command ./gradlew assembleDebug assembleRelease testDebugUnitTest --console=plain
       - uses: actions/upload-artifact@v4
         with:
           name: app-debug
           path: app/build/outputs/apk/debug/app-debug.apk
-
-  # avf.enable on: the guest's own image, booted and switched (bootctl and first boot live here).
-  # An arm runner builds the aarch64 guest natively; QEMU runs it under TCG in the sandbox.
-  avf-boot:
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v31
-      - uses: DeterminateSystems/magic-nix-cache-action@main
-        with:
-          use-flakehub: false
-      - run: nix build .#checks.aarch64-linux.avf-boot -L
-
-  # The x86_64 desktop path: its natively assembled image still evaluates.
-  eval:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v31
-      - uses: DeterminateSystems/magic-nix-cache-action@main
-        with:
-          use-flakehub: false
-      - run: nix flake check --no-build --all-systems
-
-  fmt:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v31
-      - uses: DeterminateSystems/magic-nix-cache-action@main
-        with:
-          use-flakehub: false
-      - run: nix fmt -- --check .
-      - run: test -z "$(nix develop --command gofmt -l go)"
