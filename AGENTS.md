@@ -41,6 +41,19 @@ Copies of code in docs and tests have drifted here repeatedly; keep one source.
 - NixOS tests read expected config from `nodes.<node>.pocketnix.*`, or set
   their own, instead of copying the module's defaults or `example/configuration.nix`.
 
+## Comments
+
+- A comment holds what the code can't: a gotcha, constraint, tradeoff or
+  unit. One line where it fits; never narrate the line below it.
+- Point at other code by symbol (`[TouchMode]`, `RESCAN_DEBOUNCE`), not by
+  file, line, "below" or "above". Name a constant instead of copying its value.
+- No lists of callers, cases or options kept elsewhere; they drift.
+- No history: plans, steps, spikes, "now", "no longer". Git holds it; keep
+  only the lasting why, in the present tense.
+- A value hand-copied across languages names its other side in a comment.
+- Doc comments state the contract (behaviour, errors, invariants), not the
+  steps that implement it.
+
 ## Traps (verified on a Pixel 8 Pro, GrapheneOS, Android 17)
 
 - Stock nixpkgs kernels (6.1, 6.12, 6.18) return corrupted virtio-blk reads
