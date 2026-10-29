@@ -8,6 +8,7 @@
   self,
 }: let
   cli = self.packages.${pkgs.stdenv.hostPlatform.system}.pocketnix-cli;
+  silence = pkgs.runCommand "silence.wav" {} "${pkgs.sox}/bin/sox -n -r 48000 -c 2 -t wav $out trim 0 30";
   # Speaks the app's side of docs/gui-protocol.md through the command it's
   # given (`pocketnix agent … gui`) up to `ready`, and prints what the replay
   # held as JSON. Fails without a toplevel of --want-app. With --launch, it
@@ -259,6 +260,8 @@ in
       with subtest("the user's apps get sound, SVG images and the FileChooser portal"):
           # The user has no seat session: PipeWire finds the card only through the audio group.
           phone.wait_until_succeeds(user("wpctl inspect @DEFAULT_AUDIO_SINK@"), timeout=60)
+          phone.succeed(user("systemd-run --user --unit=silence ${pkgs.pipewire}/bin/pw-play ${silence}"))
+          phone.wait_until_succeeds("grep -x 'format: S16_LE' /proc/asound/card0/pcm0p/sub0/hw_params", timeout=30)
           phone.succeed("printf '<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"/>' >/tmp/dot.svg")
           phone.succeed(user("bash -lc '${pkgs.gdk-pixbuf}/bin/gdk-pixbuf-thumbnailer -s 8 /tmp/dot.svg /tmp/dot.png'"))
           phone.succeed("test -s /tmp/dot.png")

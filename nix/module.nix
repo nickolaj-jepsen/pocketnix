@@ -995,6 +995,14 @@ in {
       services.pipewire = {
         enable = mkDefault true;
         pulse.enable = mkDefault true;
+        # PipeWire picks S32LE, which the phone's crosvm (GrapheneOS 17)
+        # hands AAudio as 24-bit packed: every sample misaligns into static.
+        wireplumber.extraConfig.pocketnix-virtio-snd."monitor.alsa.rules" = [
+          {
+            matches = [{"alsa.driver_name" = "virtio_snd";}];
+            actions.update-props."audio.format" = "S16LE";
+          }
+        ];
       };
       # logind gives /dev/snd only to sessions on a seat, and the user manager
       # PipeWire runs in, tabs and the console have none.
