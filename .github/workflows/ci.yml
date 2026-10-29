@@ -9,7 +9,26 @@ on:
 # download the aarch64 builds instead of emulating them. Fork PRs have no
 # token and only read.
 jobs:
+  # The guest's own AVF image, booted and switched under QEMU TCG.
+  aarch64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v16
+        with:
+          name: pocketnix
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      # Every system's outputs evaluate, the x86_64 ones included.
+      - run: nix flake check --no-build --all-systems
+      - run: nix flake check -L
+      # The compositor package too: it's what GUI guests run, and desktops fetch it from the cache.
+      - run: nix build -L .#pocketnix-compositor
+
+  # After aarch64, whose push gives avf-boot's image here its aarch64 contents. With no
+  # binfmt, a path missing from the cache (a fork PR can't push) fails instead of emulating.
   x86_64:
+    needs: aarch64
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,23 +44,7 @@ jobs:
         with:
           name: pocketnix
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      # Every system's outputs evaluate, the aarch64 guest's included.
-      - run: nix flake check --no-build --all-systems
-      # checks.x86_64-linux.avf-boot needs an aarch64 builder; the aarch64 job runs it natively.
-      - run: nix build -L .#checks.x86_64-linux.{format,go,compositor,agent,gui}
-
-  # The guest's own AVF image, booted and switched under QEMU TCG.
-  aarch64:
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v31
-      - uses: cachix/cachix-action@v16
-        with:
-          name: pocketnix
-          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      # The compositor package too: it's what GUI guests run, and desktops fetch it from the cache.
-      - run: nix build -L .#checks.aarch64-linux.{go,compositor,avf-boot} .#pocketnix-compositor
+      - run: nix flake check -L
 
   android:
     runs-on: ubuntu-latest
