@@ -34,10 +34,12 @@
       provision = {
         type = "app";
         program = "${pkgs.writeShellScript "provision" ''exec ${own.pocketnix-cli}/bin/pocketnix provision "$@"''}";
+        meta.description = "Install the app on a phone over adb and push a guest's disk image";
       };
       boot-example = {
         type = "app";
         program = "${pkgs.callPackage ./nix/qemu-boot.nix {image = own.example-image;}}/bin/boot-example";
+        meta.description = "Boot the example guest's disk image under qemu-system-aarch64";
       };
     });
 
