@@ -50,6 +50,7 @@ building it, the requirements, ssh access and the first boot.
 
 - [Getting started](docs/getting-started.md): requirements, first install, first boot
 - [Configuration](docs/configuration.md): the module, by topic
+- [Options](docs/options.md): every module option, generated from the modules
 - [Updates](docs/updates.md): build host, published path, rollback, recovery
 - [GUI apps](docs/gui.md): Wayland apps as Android windows
 - [Architecture](docs/architecture.md): how the pieces fit, and why

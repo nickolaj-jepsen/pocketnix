@@ -9,7 +9,8 @@ Two places hold configuration:
   share).
 
 Every option, with its default and description, is in
-[`nix/module.nix`](../nix/module.nix). This page shows them by topic.
+[Options](options.md), generated from [`nix/module.nix`](../nix/module.nix).
+This page shows them by topic.
 
 ## Terminal
 

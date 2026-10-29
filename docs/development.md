@@ -25,7 +25,9 @@ own, so editing one doesn't rebuild the image);
 `nix run .#boot-example` boots that image under QEMU and prints the agent's
 vsock address.
 
-After changing `go/go.mod`, update `vendorHash` in `nix/go.nix`.
+After changing `go/go.mod`, update `vendorHash` in `nix/go.nix`. After
+changing an option or bumping `flake.lock` (nixpkgs renders the doc), run
+`nix run .#options-doc` to regenerate `docs/options.md`.
 
 ## Test
 

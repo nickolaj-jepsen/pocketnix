@@ -30,7 +30,9 @@ Copies of code in docs and tests have drifted here repeatedly; keep one source.
 
 - Docs explain why and how to use; they name the source of truth instead of
   copying it. Module options and their defaults live in `nix/module.nix`'s
-  descriptions, stream kinds and message fields in `go/internal/protocol`,
+  descriptions (`docs/options.md` is generated from them by
+  `nix run .#options-doc`; the `options-doc` check fails when it's stale),
+  stream kinds and message fields in `go/internal/protocol`,
   checks and packages in `flake.nix`, `ControlActivity`'s extras in its
   `EXTRA_*` constants. No timeouts, limits or counts that a constant holds.
 - `docs/gui-protocol.md` is the exception: it is the wire spec, and code

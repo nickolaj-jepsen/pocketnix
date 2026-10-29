@@ -30,6 +30,7 @@
         pocketnix-compositor = pkgs.callPackage ./nix/compositor.nix {};
         # The example guest's disk image, assembled by this system's tools.
         example-image = self.nixosConfigurations.example.config.system.build.pocketnixImage.${pkgs.stdenv.hostPlatform.system};
+        options-doc = import ./nix/options-doc.nix {inherit pkgs nixpkgs self;};
       }
       // nixpkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "aarch64-linux") {
         avf-kernel = pkgs.callPackage ./nix/avf-kernel/package.nix {};
@@ -53,6 +54,15 @@
           type = "app";
           program = nixpkgs.lib.getExe (import ./nix/dev-agent.nix {inherit pkgs self;});
           meta.description = "Run the example guest's agent on this machine for the app on the Android emulator";
+        };
+        options-doc = {
+          type = "app";
+          program = nixpkgs.lib.getExe (pkgs.writeShellApplication {
+            name = "options-doc";
+            runtimeInputs = [pkgs.git pkgs.coreutils];
+            text = ''install -m 0644 ${own.options-doc} "$(git rev-parse --show-toplevel)/docs/options.md"'';
+          });
+          meta.description = "Write docs/options.md from the modules' option descriptions";
         };
       })) {
         x86_64-linux.gradle = {
@@ -103,6 +113,10 @@
         compositor = pkgs.callPackage ./nix/compositor.nix {withTests = true;};
         avf-boot = pkgs.callPackage ./nix/avf-boot-test.nix {image = own.example-image;};
         format = (import ./nix/treefmt.nix {inherit pkgs;}).check self;
+        options-doc = pkgs.runCommand "pocketnix-options-doc-check" {} ''
+          diff -u ${./docs/options.md} ${own.options-doc} || { echo "docs/options.md is stale: nix run .#options-doc" >&2; exit 1; }
+          touch $out
+        '';
         # Evaluates the template against this checkout without building it: its systems' drv paths.
         template = let
           template = (import ./templates/default/flake.nix).outputs {
