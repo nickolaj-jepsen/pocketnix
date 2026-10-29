@@ -83,6 +83,9 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
     private val main = Handler(Looper.getMainLooper())
     // Draws outside the link's thread: a window's first frame, and frames that waited for a buffer.
     private val renderThread = Executors.newSingleThreadExecutor { r -> Thread(r, "gui-render").apply { isDaemon = true } }
+    // The link thread's commit work, against the display's frame interval as `output` last read it.
+    private val hints = FrameHints(app)
+    @Volatile private var frameNs = 0L
 
     private class View(val id: Int) {
         @Volatile var host: WindowHost? = null
@@ -202,12 +205,14 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
     override fun message(msg: GuiMessage) {
         when (msg) {
             is GuiMessage.Group -> {
+                val start = System.nanoTime()
                 // Decompressing is the slow part, and needs no state: keep it out of the lock.
                 val g = GuiMessage.Group(msg.commits.map { it.unpacked(GuiNative) })
                 synchronized(lock) {
                     state.apply(g)
                     render(g)
                 }
+                hints.report(System.nanoTime() - start, frameNs)
             }
             is GuiMessage.Toplevel -> {
                 var oldTab: String? = null
@@ -318,6 +323,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         // Sessions are per connection: the IME's edits would go nowhere.
         textInput(TextInputState.NONE)
         launches.disconnected()
+        hints.close()
         // Null is a stop, which forgot them already, and may come after the next link's hello.
         if (error != null) synchronized(lock) { forgetAcks() }
     }
@@ -748,6 +754,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         val dm = app.resources.displayMetrics
         val display = app.getSystemService(DisplayManager::class.java).getDisplay(Display.DEFAULT_DISPLAY)
         val refresh = ((display?.refreshRate ?: 60f) * 1000).roundToInt()
+        frameNs = 1_000_000_000_000L / refresh
         return Gui.output(dm.widthPixels, dm.heightPixels, dm.densityDpi / 160f, refresh)
     }
 
