@@ -292,9 +292,34 @@ impl ContentHash {
     }
 }
 
+/// Data larger than this is sampled before it's compressed: SAMPLES spots of
+/// SAMPLE bytes each, spread across it.
+const SAMPLE_ABOVE: usize = 256 << 10;
+const SAMPLES: usize = 4;
+const SAMPLE: usize = 16 << 10;
+
+/// Samples that compress to more than this fraction of their size send the
+/// data raw: compressing it would cost both ends more time than the few
+/// bytes it saves on the wire.
+const INCOMPRESSIBLE: f64 = 0.9;
+
 /// zstd-compresses `data` as one or more concatenated frames, in parallel
-/// when it is large.
-pub fn compress(data: &[u8]) -> Vec<u8> {
+/// when it is large; None when compressing it isn't worth it.
+pub fn compress(data: &[u8]) -> Option<Vec<u8>> {
+    if data.len() > SAMPLE_ABOVE {
+        let step = data.len() / SAMPLES;
+        let packed: usize = (0..SAMPLES)
+            .map(|i| zstd::bulk::compress(&data[i * step..i * step + SAMPLE], 1).expect("zstd").len())
+            .sum();
+        if packed as f64 > (SAMPLES * SAMPLE) as f64 * INCOMPRESSIBLE {
+            return None;
+        }
+    }
+    let packed = shards(data);
+    (packed.len() < data.len()).then_some(packed)
+}
+
+fn shards(data: &[u8]) -> Vec<u8> {
     const SHARD: usize = 1 << 20;
     if data.len() <= 2 * SHARD {
         return zstd::bulk::compress(data, 1).expect("zstd compression of a slice can't fail");
@@ -367,10 +392,25 @@ mod tests {
     #[test]
     fn sharded_compression_decodes_to_the_input() {
         let data: Vec<u8> = (0..5 * 1024 * 1024u32).map(|i| (i % 251) as u8).collect();
-        let packed = compress(&data);
+        let packed = compress(&data).unwrap();
         let mut out = Vec::new();
         zstd::stream::copy_decode(&packed[..], &mut out).unwrap();
         assert_eq!(out, data);
+    }
+
+    #[test]
+    fn noise_is_not_compressed() {
+        let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+        let noise: Vec<u8> = (0..1024 * 1024)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                x as u8
+            })
+            .collect();
+        assert_eq!(compress(&noise), None);
+        assert_eq!(compress(&noise[..4096]), None);
     }
 
     #[test]

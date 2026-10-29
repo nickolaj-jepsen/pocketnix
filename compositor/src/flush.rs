@@ -597,9 +597,12 @@ fn build_commit(
         let compress_start = std::time::Instant::now();
         let packed = protocol::compress(&data);
         stats.time("compressNs", compress_start.elapsed());
-        if packed.len() < data.len() {
-            commit.encoding = protocol::ENCODING_ZSTD;
-            data = packed;
+        match packed {
+            Some(packed) => {
+                commit.encoding = protocol::ENCODING_ZSTD;
+                data = packed;
+            }
+            None => stats.add("sentRaw", 1),
         }
     }
     s.sent = Some(Sent { content: Some(content), placement });
