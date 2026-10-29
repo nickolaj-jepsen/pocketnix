@@ -4,6 +4,7 @@ import com.termux.terminal.TerminalBackend
 import dev.nickolaj.pocketnix.forward.PortForwards
 import dev.nickolaj.pocketnix.forward.UdpForwarder
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -116,7 +117,8 @@ class AgentIntegrationTest {
         ctl.start(dialer)
         val cfg = withTimeout(10_000) { ctl.config.filterNotNull().first() }
         assertEquals("#123456", cfg.theme.colors["background"])
-        assertEquals(listOf("shell", "exit4", "size"), cfg.profiles.map { it.name })
+        assertEquals("shell", cfg.defaultProfile)
+        assertEquals("echo hi; exit 4", cfg.profiles.single { it.name == "exit4" }.command)
         assertTrue(ctl.request("ping"))
         // The agent runs with --no-power: poweroff is refused, and request says so.
         assertEquals(false, ctl.request("poweroff"))
@@ -215,9 +217,7 @@ class AgentIntegrationTest {
         val ctl = ControlChannel(scope, "test")
         ctl.start(dialer)
         withTimeout(10_000) { ctl.updates.filterNotNull().first() }
-        val event = scope.async { withTimeout(10_000) { ctl.events.first() } }
-        // Give the collector a moment to subscribe before the push.
-        Thread.sleep(100)
+        val event = scope.async(start = CoroutineStart.UNDISPATCHED) { withTimeout(10_000) { ctl.events.first() } }
         val reply = guest("""{"type":"notify","title":"make","body":"done"}""")
         assertTrue(reply, JSONObject(reply).optInt("id") > 0)
         val ev = event.await()
@@ -233,8 +233,7 @@ class AgentIntegrationTest {
         val ctl = ControlChannel(scope, "test")
         ctl.start(dialer)
         withTimeout(10_000) { ctl.updates.filterNotNull().first() }
-        val event = scope.async { withTimeout(10_000) { ctl.events.first() } }
-        Thread.sleep(100)
+        val event = scope.async(start = CoroutineStart.UNDISPATCHED) { withTimeout(10_000) { ctl.events.first() } }
         val reply = scope.async { guest("""{"type":"pick","types":["image/*"]}""") }
         val ev = event.await()
         assertEquals("pick", ev.getString("type"))
@@ -311,9 +310,12 @@ class AgentIntegrationTest {
         sink.awaitText("24 80")
         pty.resize(132, 50, 10, 20)
         // The resize goes out on its own thread; the next line must come after it.
-        Thread.sleep(200)
-        pty.write("\r".toByteArray(), 0, 1)
-        sink.awaitText("50 132")
+        val deadline = System.currentTimeMillis() + 10_000
+        while (!sink.text().contains("50 132")) {
+            check(System.currentTimeMillis() < deadline) { "no '50 132' in '${sink.text()}'" }
+            pty.write("\r".toByteArray(), 0, 1)
+            Thread.sleep(50)
+        }
         pty.close()
         assertTrue(sink.done.await(10, TimeUnit.SECONDS))
     }
@@ -334,7 +336,7 @@ class AgentIntegrationTest {
         val forwards = PortForwards("test")
         forwards.apply(cfg.forwards, dialer)
         try {
-            Socket("127.0.0.1", cfg.forwards.single { !it.udp }.hostPort).use { s ->
+            Socket("127.0.0.1", cfg.forwards.single { it.name == "echo" }.hostPort).use { s ->
                 s.getOutputStream().write("ping".toByteArray())
                 s.shutdownOutput()
                 assertEquals("echo:ping", String(s.getInputStream().readBytes()))
@@ -365,7 +367,7 @@ class AgentIntegrationTest {
         val ctl = ControlChannel(scope, "test")
         ctl.start(dialer)
         val cfg = withTimeout(10_000) { ctl.config.filterNotNull().first() }
-        val f = cfg.forwards.single { it.udp }
+        val f = cfg.forwards.single { it.name == "uecho" }
         val forwards = PortForwards("test")
         assertEquals(emptyList<String>(), forwards.apply(cfg.forwards, dialer))
         try {

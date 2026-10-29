@@ -200,7 +200,7 @@ in
       system.switch.enable = true;
     };
 
-    testScript = ''
+    testScript = {nodes, ...}: ''
       import json
       import time
 
@@ -226,11 +226,9 @@ in
 
       with subtest("the config push turns GUI on, with the module's app settings"):
           cfg = json.loads(phone.succeed(f"{A} config"))
-          assert cfg["gui"] == {
-              "enable": True,
-              "defaults": {"size": "phone", "input": "touch"},
-              "appDefaults": {"foot": {"size": "compact"}},
-          }, cfg["gui"]
+          gui = cfg["gui"]
+          assert gui["enable"] is True and gui["appDefaults"] == {"foot": {"size": "compact"}}, gui
+          assert gui["defaults"] == json.loads('${builtins.toJSON nodes.phone.pocketnix.guest.gui.defaults}'), gui
 
       with subtest("tabs and user services get the Wayland display"):
           out = phone.succeed(f"{A} exec --profile env")

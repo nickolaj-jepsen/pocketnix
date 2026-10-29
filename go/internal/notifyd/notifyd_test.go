@@ -232,8 +232,11 @@ func TestNotifications(t *testing.T) {
 
 	// Without the app, Notify fails rather than queues.
 	ctl.Close()
-	time.Sleep(100 * time.Millisecond)
-	if err := obj.Call(notifyd.Name+".Notify", 0, "make", uint32(0), "", "lost", "", []string{}, map[string]dbus.Variant{}, int32(-1)).Err; err == nil {
-		t.Error("Notify succeeded without the app")
+	deadline := time.Now().Add(5 * time.Second)
+	for obj.Call(notifyd.Name+".Notify", 0, "make", uint32(0), "", "lost", "", []string{}, map[string]dbus.Variant{}, int32(-1)).Err == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("Notify still succeeds 5s after the app left")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

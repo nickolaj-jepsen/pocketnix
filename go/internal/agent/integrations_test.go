@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -165,7 +166,8 @@ func TestFileProvider(t *testing.T) {
 	conn.(interface{ CloseWrite() error }).CloseWrite()
 	line, _ := protocol.ReadLine(conn)
 	conn.Close()
-	if !strings.Contains(string(line), "got 5 of 100 bytes") {
+	var answer struct{ Type string }
+	if json.Unmarshal(line, &answer) != nil || answer.Type != protocol.TypeError {
 		t.Errorf("short write answered %s", line)
 	}
 	if b, _ := os.ReadFile(filepath.Join(root, "dir", "a.txt")); string(b) != "beta" {

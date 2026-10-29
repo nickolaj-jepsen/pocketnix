@@ -214,10 +214,30 @@ func TestProvision(t *testing.T) {
 		"install app-debug.apk",
 		"grant dev.nickolaj.pocketnix.debug android.permission.MANAGE_VIRTUAL_MACHINE",
 		"grant dev.nickolaj.pocketnix.debug android.permission.USE_CUSTOM_VIRTUAL_MACHINE",
-		"am start -n dev.nickolaj.pocketnix.debug/dev.nickolaj.pocketnix.ControlActivity -a dev.nickolaj.pocketnix.action.START --ez network false --ei memoryMb 1024 --ei cpus 1 --ei diskGb 8 --ei minDiskGb 1",
 	} {
 		if !strings.Contains(ev, line+"\n") {
 			t.Errorf("device never saw %q; events:\n%s", line, ev)
+		}
+	}
+	extras := map[string]string{}
+	for _, line := range strings.Split(ev, "\n") {
+		rest, ok := strings.CutPrefix(line, "am start -n dev.nickolaj.pocketnix.debug/dev.nickolaj.pocketnix.ControlActivity -a dev.nickolaj.pocketnix.action.START ")
+		if !ok {
+			continue
+		}
+		f := strings.Fields(rest)
+		if len(f)%3 != 0 {
+			t.Fatalf("start extras aren't flag, name, value: %q", rest)
+		}
+		for i := 0; i < len(f); i += 3 {
+			extras[f[i+1]] = f[i] + " " + f[i+2]
+		}
+	}
+	for name, want := range map[string]string{
+		"network": "--ez false", "memoryMb": "--ei 1024", "cpus": "--ei 1", "diskGb": "--ei 8", "minDiskGb": "--ei 1",
+	} {
+		if extras[name] != want {
+			t.Errorf("start extra %s = %q, want %q; events:\n%s", name, extras[name], want, ev)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(d.state, "device", deviceChunk)); err == nil {

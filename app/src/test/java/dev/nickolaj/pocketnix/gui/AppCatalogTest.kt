@@ -22,12 +22,12 @@ class AppCatalogTest {
     @Test
     fun keepsTheListAndRecentAppsAcrossRestarts() {
         catalog().apply {
-            update(listOf(foot, calc))
+            update(listOf(calc, foot))
             launched("foot")
             launched("org.gnome.Calculator")
         }
         val again = catalog()
-        assertEquals(listOf(foot, calc).sortedBy { it.id }, again.apps)
+        assertEquals(listOf(foot, calc), again.apps)
         assertEquals(listOf(calc, foot), again.recent)
         assertEquals(calc, again.app("org.gnome.Calculator"))
     }

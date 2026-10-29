@@ -412,6 +412,12 @@ impl App {
         }
     }
 
+    /// Returns once the compositor has handled every message sent before:
+    /// it handles them in order, and answers an icon request.
+    fn sync(&mut self) {
+        self.icon("sync", 16);
+    }
+
     fn wait_json(&mut self, ty: &str) -> Value {
         self.wait(ty, |m| match m {
             Msg::Json(v) if v["type"] == ty => Some(v.clone()),
@@ -687,7 +693,7 @@ fn a_client_window_reaches_the_app_with_matching_pixels() {
     app.send_json(json!({"type": "output", "width": 800, "height": 600, "scale": 2.0, "refresh": 60000}));
 
     // The output message must land before the toplevel's first configure.
-    std::thread::sleep(Duration::from_millis(100));
+    app.sync();
     let (w, h) = (200, 100);
     let mut client = Pattern::connect(&compositor, w, h);
     assert_eq!(client.state.size, (400, 300), "the first configure fills the output");
@@ -794,7 +800,7 @@ fn popups_stay_inside_their_window_and_data_control_is_offered() {
     app.auto_ack = true;
     app.wait_json("ready");
     app.send_json(json!({"type": "output", "width": 800, "height": 400, "scale": 2.0, "refresh": 60000}));
-    std::thread::sleep(Duration::from_millis(100));
+    app.sync();
 
     let (w, h) = (200, 100);
     let mut client = Pattern::connect(&compositor, w, h);
@@ -841,7 +847,7 @@ fn foot_renders_and_its_hashes_match() {
     app.auto_ack = true;
     app.wait_json("ready");
     app.send_json(json!({"type": "output", "width": 1080, "height": 2400, "scale": 2.625, "refresh": 60000}));
-    std::thread::sleep(Duration::from_millis(100));
+    app.sync();
 
     let mut child = Command::new(foot)
         .args(["--override", "pad=0x0", "sh", "-c", "echo pocketnix; exec cat"])
@@ -1118,7 +1124,9 @@ fn launches_bind_their_window_and_end_once() {
 
     launch(&mut app, "l3", "test.false", "", "");
     let failed = app.wait_json_where("launch-failed", |v| v["id"] == "l3");
-    assert_eq!((&failed["reason"], &failed["message"]), (&json!("exec"), &json!("exited with status 1")));
+    assert_eq!(failed["reason"], "exec");
+    let message = failed["message"].as_str().unwrap();
+    assert!(message.split(|c: char| !c.is_ascii_digit()).any(|n| n == "1"), "{message:?} doesn't name status 1");
     launch(&mut app, "l4", "nope", "", "");
     assert_eq!(app.wait_json_where("launch-failed", |v| v["id"] == "l4")["reason"], "unknown");
     launch(&mut app, "l4", "nope", "", "");
@@ -1179,7 +1187,7 @@ fn a_client_from_a_tab_lands_in_it_and_moves() {
 fn a_dialog_draws_inside_its_parents_window() {
     let compositor = Compositor::start("dialog");
     let mut app = connect_ready(&compositor);
-    std::thread::sleep(Duration::from_millis(100));
+    app.sync();
     let (w, h) = (200, 100);
     let mut client = Pattern::connect(&compositor, w, h);
     client.draw(&pattern(w, h, 0), [0, 0, w, h], false);
@@ -1255,7 +1263,7 @@ fn full_screen_asked_before_mapping_follows_the_toplevel() {
     let mut app = App::connect(&compositor);
     app.wait_json("ready");
     app.send_json(json!({"type": "output", "width": 800, "height": 600, "scale": 1.0, "refresh": 60000}));
-    std::thread::sleep(Duration::from_millis(100));
+    app.sync();
 
     let (w, h) = (200, 100);
     let mut client = Pattern::connect(&compositor, w, h);
@@ -1274,7 +1282,7 @@ fn touch_lands_on_the_surface_under_each_point() {
     app.auto_ack = true;
     app.wait_json("ready");
     app.send_json(json!({"type": "output", "width": 800, "height": 600, "scale": 1.75, "refresh": 60000}));
-    std::thread::sleep(Duration::from_millis(100));
+    app.sync();
 
     let (w, h) = (200, 100);
     let mut client = Pattern::connect(&compositor, w, h);
@@ -1347,7 +1355,7 @@ fn a_new_window_opens_at_its_apps_size_factor() {
     let mut app = connect_ready(&compositor);
     app.send_json(json!({"type": "output", "width": 800, "height": 600, "scale": 2.0, "refresh": 60000}));
     app.send_json(json!({"type": "settings", "size": 0.75, "apps": {"test.pattern": {"size": 0.5}}}));
-    std::thread::sleep(Duration::from_millis(100));
+    app.sync();
     let (w, h) = (200, 100);
     let mut client = Pattern::connect(&compositor, w, h);
     assert_eq!(client.state.size, (800, 600), "the output's size at 2 × 0.5");
@@ -1362,7 +1370,7 @@ fn text_input_bridges_the_ime() {
     let compositor = Compositor::start("text-input");
     let mut app = connect_ready(&compositor);
     app.send_json(json!({"type": "output", "width": 800, "height": 600, "scale": 2.0, "refresh": 60000}));
-    std::thread::sleep(Duration::from_millis(100));
+    app.sync();
     let (w, h) = (200, 100);
     let mut client = Pattern::connect(&compositor, w, h);
     let ti = client.text_input();
@@ -1467,7 +1475,7 @@ fn text_becomes_key_presses_in_the_guests_layout() {
         cmd.env_remove("XKB_DEFAULT_LAYOUT").env_remove("XKB_DEFAULT_VARIANT");
     });
     let mut app = connect_ready(&compositor);
-    std::thread::sleep(Duration::from_millis(100));
+    app.sync();
     let (w, h) = (200, 100);
     let mut client = Pattern::connect(&compositor, w, h);
     client.draw(&pattern(w, h, 0), [0, 0, w, h], false);

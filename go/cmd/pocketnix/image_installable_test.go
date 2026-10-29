@@ -6,20 +6,20 @@ import (
 )
 
 func TestImageInstallable(t *testing.T) {
-	arch := map[string]string{"amd64": "x86_64", "arm64": "aarch64"}[runtime.GOARCH]
 	pinned := ".#nixosConfigurations.phone.config.system.build.pocketnixImage.aarch64-linux"
-	for in, want := range map[string]string{
-		".#nixosConfigurations.phone":      ".#nixosConfigurations.phone.config.system.build.pocketnixImage." + arch + "-linux",
-		`.#nixosConfigurations."phone-vm"`: `.#nixosConfigurations."phone-vm".config.system.build.pocketnixImage.` + arch + "-linux",
-		".#example-image":                  ".#example-image",
-		pinned:                             pinned,
+	for _, c := range []struct{ in, goos, goarch, want string }{
+		{".#nixosConfigurations.phone", "linux", "amd64", ".#nixosConfigurations.phone.config.system.build.pocketnixImage.x86_64-linux"},
+		{`.#nixosConfigurations."phone-vm"`, "linux", "arm64", `.#nixosConfigurations."phone-vm".config.system.build.pocketnixImage.aarch64-linux`},
+		{".#example-image", "linux", "amd64", ".#example-image"},
+		{pinned, "linux", "amd64", pinned},
+		// No pocketnixImage.aarch64-darwin exists; a Mac's Linux builder assembles it.
+		{".#nixosConfigurations.phone", "darwin", "arm64", ".#nixosConfigurations.phone.config.system.build.pocketnixImage.aarch64-linux"},
 	} {
-		if got := imageInstallable(in); got != want {
-			t.Errorf("%s → %s, want %s", in, got, want)
+		if got := imageInstallableOn(c.in, c.goos, c.goarch); got != c.want {
+			t.Errorf("%s on %s/%s → %s, want %s", c.in, c.goos, c.goarch, got, c.want)
 		}
 	}
-	// No pocketnixImage.aarch64-darwin exists; a Mac's Linux builder assembles it.
-	if got, want := imageInstallableOn(".#nixosConfigurations.phone", "darwin", "arm64"), ".#nixosConfigurations.phone.config.system.build.pocketnixImage.aarch64-linux"; got != want {
-		t.Errorf("on a Mac: %s, want %s", got, want)
+	if got, want := imageInstallable(".#nixosConfigurations.phone"), imageInstallableOn(".#nixosConfigurations.phone", runtime.GOOS, runtime.GOARCH); got != want {
+		t.Errorf("on this host: %s, want %s", got, want)
 	}
 }

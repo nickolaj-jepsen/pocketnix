@@ -33,7 +33,7 @@ class WindowFitTest {
 
     @Test
     fun theScaleNeverGoesBelowTheDesktopPresetsFactor() {
-        assertEquals(density * 0.5f, fit(1f, 1080, 2000, 1200f), 0f)
+        assertEquals(density * SizePreset.DESKTOP.factor, fit(1f, 1080, 2000, 1200f), 0f)
     }
 
     @Test

@@ -204,12 +204,16 @@ func TestControlOpensDuringPushes(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i, ctl := range ctls {
+		// The reader queues each config before it answers the ping behind it.
+		if err := ctl.Ping(); err != nil {
+			t.Fatalf("stream %d: ping: %v", i, err)
+		}
 		var last protocol.Config
-		for quiet := false; !quiet; {
+		for drained := false; !drained; {
 			select {
 			case last = <-ctl.Configs():
-			case <-time.After(50 * time.Millisecond):
-				quiet = true
+			default:
+				drained = true
 			}
 		}
 		if got := last.Terminal.Theme.Colors["background"]; got != "#123456" {

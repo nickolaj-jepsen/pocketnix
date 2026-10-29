@@ -91,14 +91,16 @@ func TestUnreadConfigsDontStallTheStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	var last protocol.Config
-	for {
+	for drained := false; !drained; {
 		select {
-		case cfg := <-ctl.Configs():
+		case cfg, ok := <-ctl.Configs():
+			if !ok {
+				t.Fatal("the stream ended")
+			}
 			last = cfg
-			continue
-		case <-time.After(100 * time.Millisecond):
+		default:
+			drained = true
 		}
-		break
 	}
 	if last.Hostname != "h99" {
 		t.Errorf("latest config %q, want h99", last.Hostname)

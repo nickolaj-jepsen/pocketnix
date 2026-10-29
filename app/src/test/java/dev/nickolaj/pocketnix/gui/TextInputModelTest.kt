@@ -3,6 +3,7 @@ package dev.nickolaj.pocketnix.gui
 import dev.nickolaj.pocketnix.gui.TextInputModel.Op
 import dev.nickolaj.pocketnix.gui.TextInputModel.Target
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -326,7 +327,7 @@ class TextInputModelTest {
         c.apply(ops)
         assertEquals("", c.preedit)
         assertEquals(false, changed)
-        assertEquals(-1, m.composeStart)
+        assertFalse(m.composing)
         assertEquals(1, m.cursor)
     }
 

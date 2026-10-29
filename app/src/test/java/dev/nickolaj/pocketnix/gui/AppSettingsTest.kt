@@ -97,10 +97,10 @@ class AppSettingsTest {
         val s = AppSettings(MemoryStore())
         s.config(config(GuiAppSettings("compact", null), calc to GuiAppSettings("desktop", null), "same" to GuiAppSettings("compact", "pointer")))
         s.setSize(foot, SizePreset.PHONE)
-        assertEquals(0.75f to mapOf(calc to 0.5f, foot to 1f), s.factors())
+        assertEquals(SizePreset.COMPACT.factor to mapOf(calc to SizePreset.DESKTOP.factor, foot to SizePreset.PHONE.factor), s.factors())
         s.reset(foot)
         s.setSize(calc, SizePreset.COMPACT)
-        assertEquals(0.75f to emptyMap<String, Float>(), s.factors())
+        assertEquals(SizePreset.COMPACT.factor to emptyMap<String, Float>(), s.factors())
     }
 
     @Test
