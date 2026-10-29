@@ -402,34 +402,45 @@ class Vm(private val app: Context) {
     }
 
     /** A new terminal tab running [profile], or null while the agent can't be reached. */
-    fun openTab(profile: String? = null) {
-        val dialer = _engine.value.dialer ?: return
+    fun openTab(profile: String? = null): Tab? {
+        val dialer = _engine.value.dialer ?: return null
         val cfg = control.config.value
         val name = profile ?: cfg?.defaultProfile?.takeIf { it.isNotEmpty() } ?: "shell"
         val backend = PtyBackend(dialer, name, appVersion)
-        tabs.open(name, backend) { backend.agentTab }
+        return tabs.open(name, backend) { backend.agentTab }
     }
 
     val config: StateFlow<GuestConfig?> get() = control.config
 
-    /** Debug builds, over adb: opens a tab once the agent is up, and types [input] into it. */
-    fun debugOpenTab(profile: String?, input: String?) {
-        scope.launch {
-            control.link.first { it is ControlChannel.Link.Up }
-            openTab(profile?.takeIf { it.isNotEmpty() })
-            if (!input.isNullOrEmpty()) tabs.current().session.write(input.replace("\\r", "\r"))
-        }
+    /** Debug builds, over adb: opens a tab once the agent is up and types [input] into it; returns its id. */
+    suspend fun debugOpenTab(profile: String?, input: String?): Int = withContext(Dispatchers.Main) {
+        control.link.first { it is ControlChannel.Link.Up }
+        val tab = openTab(profile?.takeIf { it.isNotEmpty() }) ?: error("the VM stopped")
+        debugType(tab.id, input)
+        tab.id
     }
 
-    /** Debug builds, over adb: logs every tab's transcript, for checks on a locked phone. */
-    fun debugDumpTabs() {
-        Log.i(TAG, "dump: state=${state.value} link=${control.link.value} host=${control.config.value?.hostname}")
-        for (tab in tabs.all()) {
+    /** Debug builds, over adb, on the main thread: types [input] into tab [id], a literal `\r` as Enter. */
+    fun debugType(id: Int, input: String?) {
+        val tab = tabs.all().firstOrNull { it.id == id } ?: error("no tab $id")
+        if (!input.isNullOrEmpty()) tab.session.write(input.replace("\\r", "\r"))
+    }
+
+    /**
+     * Debug builds, over adb, on the main thread: the VM's state, the last
+     * [lines] of every tab's transcript (only tab [only]'s if given) and,
+     * for all tabs, the GUI windows.
+     */
+    fun debugDump(only: Int?, lines: Int): List<String> = buildList {
+        add("state=${state.value} link=${control.link.value} host=${control.config.value?.hostname}")
+        val shown = tabs.all().filter { only == null || it.id == only }
+        if (shown.isEmpty()) error("no tab $only")
+        for (tab in shown) {
+            add("tab ${tab.id} ${tab.kind} '${tab.title}' running=${tab.session.isRunning}")
             val text = tab.session.emulator?.screen?.transcriptText ?: "(no emulator yet)"
-            Log.i(TAG, "dump: tab ${tab.id} ${tab.kind} '${tab.title}' running=${tab.session.isRunning}")
-            for (line in text.lines().takeLast(40)) Log.i(TAG, "dump|${tab.id}| $line")
+            for (line in text.lines().takeLast(lines)) add("|${tab.id}| $line")
         }
-        for (line in gui.dump()) Log.i(TAG, "dump: gui $line")
+        if (only == null) for (line in gui.dump()) add("gui $line")
     }
 
     private fun applyColors(colors: Map<String, String>) {

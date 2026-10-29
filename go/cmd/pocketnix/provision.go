@@ -257,7 +257,7 @@ func (o *provisionOpts) run() error {
 		return err
 	}
 	o.logf("verifying the image on the phone")
-	if _, err := prov.call("commit", commitArg, "sha256", sum); err != nil {
+	if _, err := prov.call("commit", commitArg, "sha256:s:"+sum); err != nil {
 		return err
 	}
 	o.logf("disk image in place")
@@ -459,8 +459,8 @@ func (o *provisionOpts) upload(dev adb.Device, prov provider, img string) error 
 	return nil
 }
 
-// provider is the app's provisioning ContentProvider, which only the adb
-// shell user may call.
+// provider is one of the app's ContentProviders that only the adb shell user
+// may call.
 type provider struct {
 	dev       adb.Device
 	authority string
@@ -469,15 +469,15 @@ type provider struct {
 var bundleField = regexp.MustCompile(`(\w+)=([^,}]*)`)
 
 // call runs a provider method and returns its result bundle; a bundle with
-// an "error" key is returned as an error.
+// an "error" key is returned as an error. Each extra is `content`'s
+// <key>:<type>:<value>, e.g. "input:s:ls".
 func (p provider) call(method, arg string, extras ...string) (map[string]string, error) {
 	cmd := fmt.Sprintf("content call --uri content://%s --method %s", p.authority, method)
 	if arg != "" {
 		cmd += " --arg " + adb.ShellQuote(arg)
 	}
-	// extras are key, value pairs of strings.
-	for i := 0; i+1 < len(extras); i += 2 {
-		cmd += " --extra " + adb.ShellQuote(extras[i]+":s:"+extras[i+1])
+	for _, e := range extras {
+		cmd += " --extra " + adb.ShellQuote(e)
 	}
 	out, err := p.dev.Shell(cmd)
 	if err != nil {

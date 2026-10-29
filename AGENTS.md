@@ -129,8 +129,10 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
   action, sent to the main activity, gets replayed (it booted the VM after an
   app update). Scripted actions go to `ControlActivity`, which has no history.
 - With the phone locked, an activity started over adb is never laid out, so a
-  TerminalView never sizes its session; and logcat (`-c` too) is the only way to
-  see the app. Debug builds' `DEBUG_TAB` / `DEBUG_DUMP` actions are for this.
+  TerminalView never sizes its session, and nothing on screen shows the app.
+  `pocketnix control` (debug builds' `ControlProvider`; how to use it:
+  `.agents/skills/pocketnix-control/SKILL.md`) opens tabs, types into them and
+  reads back their transcripts and the GUI state.
 - Termux's `ByteQueue` throws on a zero-length write; keep empty writes out.
 - Google's kernel has no efivarfs but has `/sys/firmware/efi`: `bootctl status`
   (the version check of a plain `switch`) exits 1 without a word, while

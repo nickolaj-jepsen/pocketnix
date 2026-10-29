@@ -189,5 +189,12 @@
             android:authorities="${applicationId}.provision"
             android:exported="true"
             tools:ignore="ExportedContentProvider" />
+
+        <!-- Debug builds' `adb shell content call` checks; admits only the shell user too. -->
+        <provider
+            android:name=".ControlProvider"
+            android:authorities="${applicationId}.control"
+            android:exported="true"
+            tools:ignore="ExportedContentProvider" />
     </application>
 </manifest>

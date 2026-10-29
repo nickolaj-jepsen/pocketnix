@@ -18,6 +18,7 @@ commands:
   provision   install the app, grant AVF permissions, push and boot an image
   agent       talk to a guest agent directly (debugging; see pocketnix agent -h)
   ssh-proxy   an ssh ProxyCommand to the guest's sshd over adb
+  control     drive a debug build's tabs over adb and read them back
   version     print the CLI and protocol versions
 `
 
@@ -38,6 +39,8 @@ func main() {
 		err = runAgent(os.Args[2:])
 	case "ssh-proxy":
 		err = runSSHProxy(os.Args[2:])
+	case "control":
+		err = runControl(os.Args[2:])
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)

@@ -33,11 +33,6 @@ import java.io.RandomAccessFile
 class ProvisionProvider : ContentProvider() {
     override fun onCreate() = true
 
-    private fun checkCaller() {
-        val uid = Binder.getCallingUid()
-        if (uid != Process.SHELL_UID && uid != Process.ROOT_UID) throw SecurityException("only adb may provision")
-    }
-
     private val disk: File get() = DiskImage.file(context!!)
     private val part: File get() = File(disk.path + ".part")
 
@@ -47,7 +42,7 @@ class ProvisionProvider : ContentProvider() {
     }
 
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle {
-        checkCaller()
+        requireAdbCaller("provision")
         val out = Bundle()
         try {
             when (method) {
@@ -82,7 +77,7 @@ class ProvisionProvider : ContentProvider() {
     }
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
-        checkCaller()
+        requireAdbCaller("provision")
         if (uri.path != "/disk") throw FileNotFoundException(uri.toString())
         if (running()) throw IllegalStateException("the VM is running")
         if (!part.exists()) throw FileNotFoundException("call begin first")
@@ -99,6 +94,12 @@ class ProvisionProvider : ContentProvider() {
     override fun insert(uri: Uri, values: ContentValues?): Uri? = null
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
     override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
+}
+
+/** Throws unless the binder call in progress comes from the adb shell (or root); [what] names the refused action. */
+fun requireAdbCaller(what: String) {
+    val uid = Binder.getCallingUid()
+    if (uid != Process.SHELL_UID && uid != Process.ROOT_UID) throw SecurityException("only adb may $what")
 }
 
 private fun sha256(f: File): String {

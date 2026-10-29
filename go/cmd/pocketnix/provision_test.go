@@ -78,6 +78,8 @@ func fakeShell(state, line string, logEvent func(string, ...any)) (string, int) 
 	disk, part := filepath.Join(files, "disk.img"), filepath.Join(files, "disk.img.part")
 	unquote := func(s string) string { return strings.Trim(s, "'") }
 	switch {
+	case strings.Contains(line, ".control"):
+		return fakeControl(state, line)
 	case len(f) == 4 && f[0] == "pm" && f[1] == "grant":
 		logEvent("grant %s %s", f[2], f[3])
 	case len(f) == 3 && f[0] == "pm" && f[1] == "path":

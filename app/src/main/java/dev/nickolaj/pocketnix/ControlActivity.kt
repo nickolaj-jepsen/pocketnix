@@ -26,9 +26,6 @@ class ControlActivity : Activity() {
                 }
             }
             ACTION_STOP -> vm.stop()
-            // Debug builds: drive tabs from adb while the phone stays locked.
-            ACTION_TAB -> if (BuildConfig.DEBUG) vm.debugOpenTab(intent.getStringExtra(EXTRA_PROFILE), intent.getStringExtra(EXTRA_INPUT))
-            ACTION_DUMP -> if (BuildConfig.DEBUG) vm.debugDumpTabs()
             // Debug builds: what a launcher tap or pin does, for an app-list entry id.
             ACTION_LAUNCH -> if (BuildConfig.DEBUG) {
                 val app = intent.getStringExtra(EXTRA_APP).orEmpty()
@@ -72,8 +69,6 @@ class ControlActivity : Activity() {
         private const val TAG = "ControlActivity"
         const val ACTION_START = "dev.nickolaj.pocketnix.action.START"
         const val ACTION_STOP = "dev.nickolaj.pocketnix.action.STOP"
-        const val ACTION_TAB = "dev.nickolaj.pocketnix.action.DEBUG_TAB"
-        const val ACTION_DUMP = "dev.nickolaj.pocketnix.action.DEBUG_DUMP"
         const val ACTION_LAUNCH = "dev.nickolaj.pocketnix.action.DEBUG_LAUNCH"
         const val EXTRA_APP = "app"
         const val EXTRA_ACTION = "action"
@@ -89,7 +84,5 @@ class ControlActivity : Activity() {
         const val EXTRA_GPU = "gpu"
         const val EXTRA_GUI_HASHES = "guiHashes"
         const val EXTRA_AUDIO = "audio"
-        const val EXTRA_PROFILE = "profile"
-        const val EXTRA_INPUT = "input"
     }
 }
