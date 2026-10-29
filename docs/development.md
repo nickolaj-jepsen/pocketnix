@@ -82,6 +82,47 @@ debug-only ones on `BuildConfig.DEBUG`.
 In debug builds, `pocketnix control` opens tabs, types into them and reads
 them back (`pocketnix control -h`; `.agents/skills/pocketnix-control/SKILL.md`).
 
+## Benchmarks
+
+`pocketnix bench` measures the GUI pipeline: frame rate, latency, and what
+each stage costs in CPU and bytes. Its flags and workloads are in
+`pocketnix bench -h` and `pocketnix-gui-bench --help`.
+
+```mermaid
+flowchart LR
+  client[pocketnix-gui-bench client] -- Wayland --> compositor
+  compositor -- GUI protocol --> app[app, or the sink]
+  compositor -. stats socket .-> client
+  app -. pocketnix control stats .-> bench[pocketnix bench]
+  client -. JSON .-> bench
+```
+
+- The client draws synthetic content in one window, at a cost to itself near
+  zero, and times each commit to its frame callback. It snapshots the
+  compositor's stats socket (`--stats-socket`) and the guest's `/proc` at
+  both ends of the measured window.
+- On a phone, `pocketnix bench run` starts the client in the guest over
+  `--ssh` (a route like `pocketnix ssh-proxy`'s), and samples the phone over
+  adb: the app's own stats, its threads, the VM's processes, SurfaceFlinger,
+  CPU clocks, heat and the battery. The phone must be unlocked, with a debug
+  build's VM running and GUI on; the client comes from the guest's running
+  compositor's package.
+- `--local` runs the desktop tier: a compositor and `pocketnix-gui-bench
+  sink`, which decodes like the app and acknowledges at a display clock. It
+  measures the guest's side on the desktop's CPU, without a phone.
+- `pocketnix bench report <dir> <baseline>` compares two runs' directories.
+
+```bash
+nix run .#bench -- run --ssh "ssh phone-usb" noise gradient scroll "scroll --res 0.5" rect touch
+nix run .#bench -- run --local noise scroll
+nix run .#bench -- run --quick --ssh "ssh phone-usb" scroll    # one short run, to iterate
+```
+
+Compare runs made in the same conditions: a warm phone throttles, and the
+battery's figures are the charger's while plugged in (the report says when).
+On a phone, `touch` runs tap after tap on the middle of the screen; the
+report's input latencies are its.
+
 ## Permissions by hand
 
 `provision` grants these:

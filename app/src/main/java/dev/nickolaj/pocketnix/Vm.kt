@@ -447,6 +447,9 @@ class Vm(private val app: Context) {
         if (only == null) for (line in gui.dump()) add("gui $line")
     }
 
+    /** Debug builds, over adb: the GUI link's [GuiSession.stats] as JSON. */
+    fun debugStats(): String = gui.stats().toString()
+
     private fun applyColors(colors: Map<String, String>) {
         TerminalTheme.apply(colors)
         for (tab in tabs.all()) tab.session.emulator?.mColors?.reset()

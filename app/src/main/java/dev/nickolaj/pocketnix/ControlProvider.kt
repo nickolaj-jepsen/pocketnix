@@ -29,6 +29,8 @@ import kotlinx.coroutines.withTimeoutOrNull
  *   types `input` and, with `enter`, Enter into it, and answers its id as `tab`
  * - `--method type --arg <tab id> --extra input:s:<text> [--extra enter:b:true]`:
  *   types into an open tab
+ * - `content read --uri content://<package>.control/stats`: the GUI link's
+ *   counters and histograms as one line of JSON (`GuiSession.stats`)
  *
  * `content` takes a backslash in a value as escaping the next character, and
  * splits at unescaped colons: send `\\` for each backslash in `input` and
@@ -68,12 +70,16 @@ class ControlProvider : ContentProvider() {
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
         requireAdbCaller("control the app")
-        if (uri.path != "/dump") throw FileNotFoundException(uri.toString())
+        if (uri.path != "/dump" && uri.path != "/stats") throw FileNotFoundException(uri.toString())
         val text = try {
             if (!BuildConfig.DEBUG) error("debug builds only")
-            val tab = uri.getQueryParameter("tab")?.let(::tabId)
-            val lines = uri.getQueryParameter("lines")?.toIntOrNull() ?: DUMP_LINES
-            onMain { context!!.vm.debugDump(tab, lines) }.joinToString("\n")
+            if (uri.path == "/stats") {
+                context!!.vm.debugStats()
+            } else {
+                val tab = uri.getQueryParameter("tab")?.let(::tabId)
+                val lines = uri.getQueryParameter("lines")?.toIntOrNull() ?: DUMP_LINES
+                onMain { context!!.vm.debugDump(tab, lines) }.joinToString("\n")
+            }
         } catch (e: Exception) {
             "error: ${e.message ?: e.javaClass.simpleName}"
         }

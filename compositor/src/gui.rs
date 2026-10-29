@@ -156,7 +156,7 @@ fn random_id() -> String {
 }
 
 /// Whether the peer is our own user or root (the agent).
-fn peer_allowed(stream: &UnixStream) -> bool {
+pub fn peer_allowed(stream: &UnixStream) -> bool {
     let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
     let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
     // SAFETY: SO_PEERCRED writes a ucred of at most `len` bytes.
@@ -556,6 +556,8 @@ impl State {
         })));
         self.gui.active = Some(id);
         self.gui.generation = generation;
+        self.stats.connection_changed();
+        self.stats.add("connections", 1);
         info!("app connected");
 
         // Callbacks sent on the old connection wait for the replay instead.
@@ -696,16 +698,20 @@ impl State {
 
     fn presented(&mut self, window: u32, seq: u32) {
         let time = self.time_ms();
+        self.stats.presented(window, seq);
+        let mut fired = 0;
         if let Some(held) = self.held.get_mut(&window) {
             held.retain(|(s, cb)| {
                 if *s <= seq {
                     cb.done(time);
+                    fired += 1;
                     false
                 } else {
                     true
                 }
             });
         }
+        self.stats.add("callbacksFired", fired);
     }
 
     /// The topmost surface of `window` that takes input at `p` (window

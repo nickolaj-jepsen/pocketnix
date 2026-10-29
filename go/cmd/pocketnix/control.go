@@ -34,6 +34,9 @@ commands:
   logcat [--follow]
         the log of every process running as the app's uid, which keeps
         its lines across the app's crashes and restarts; --follow streams it
+  stats
+        the GUI link's counters and latency histograms, as JSON (see
+        pocketnix bench -h)
 
 global flags:
   --serial <serial>   adb device to use (default: adb's only device)
@@ -98,6 +101,15 @@ func runControl(args []string) error {
 		}
 		_, err := c.call("type", strconv.Itoa(*tab), inputExtras(strings.Join(sub.Args(), " "), !*noEnter)...)
 		return err
+	case "stats":
+		if err := parseArgs(sub, rest, 0); err != nil {
+			return err
+		}
+		out, err := c.stats()
+		if err != nil {
+			return err
+		}
+		fmt.Println(out)
 	case "wait":
 		tab := sub.Int("tab", -1, "")
 		timeout := sub.Duration("timeout", 30*time.Second, "")
@@ -203,6 +215,22 @@ func (c control) dump(tab, lines int) (string, error) {
 	// Anything else that isn't a dump is `content` reporting a failure (no such provider, a refusal).
 	if !strings.HasPrefix(out, "state=") {
 		return "", fmt.Errorf("dump: %s", strings.TrimSpace(out))
+	}
+	return out, nil
+}
+
+// stats reads the app's GuiStats snapshot, one line of JSON.
+func (c control) stats() (string, error) {
+	out, err := c.dev.Shell("content read --uri " + adb.ShellQuote("content://"+c.authority+"/stats"))
+	if err != nil {
+		return "", err
+	}
+	out = strings.TrimSpace(out)
+	if msg, ok := strings.CutPrefix(out, "error: "); ok {
+		return "", fmt.Errorf("stats: %s", msg)
+	}
+	if !strings.HasPrefix(out, "{") {
+		return "", fmt.Errorf("stats: %s", out)
 	}
 	return out, nil
 }

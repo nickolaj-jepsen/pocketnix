@@ -62,6 +62,7 @@ fn to_px(v: i32, scale: f64) -> i32 {
 
 impl State {
     pub fn flush(&mut self) {
+        let start = std::time::Instant::now();
         self.grabs.retain(|p| p.alive());
         self.update_tree();
         self.touch_unmapped();
@@ -81,14 +82,45 @@ impl State {
         }
         self.layouts = layouts;
 
-        if self.gui.active_conn().is_some() && !self.gui.backlogged() {
-            self.emit_removals();
-            for (window, members) in &windows {
-                self.emit_window(*window, members);
+        if self.gui.active_conn().is_some() {
+            if self.gui.backlogged() {
+                self.stats.add("backlogged", 1);
+            } else {
+                self.emit_removals();
+                for (window, members) in &windows {
+                    self.emit_window(*window, members);
+                }
             }
         }
         self.windowless_callbacks();
         self.sync_text_input();
+        self.stats.add("flushes", 1);
+        self.stats.time("flushNs", start.elapsed());
+    }
+
+    /// The windows as the last flush laid them out, for the stats socket:
+    /// each layer's buffer size and where it shows.
+    pub fn stats_windows(&self) -> Value {
+        let mut ids: Vec<&u32> = self.layouts.keys().collect();
+        ids.sort();
+        let windows: Vec<Value> = ids
+            .into_iter()
+            .map(|id| {
+                let layers: Vec<Value> = self.layouts[id]
+                    .iter()
+                    .map(|l| {
+                        let buffer = compositor::with_states(&l.surface, |d| {
+                            with_surf(d, |s| s.mirror.as_ref().map(|m| (m.width, m.height))).flatten()
+                        });
+                        let (width, height) = buffer.unwrap_or_default();
+                        json!({"id": l.id, "role": l.role, "width": width, "height": height,
+                               "logicalWidth": l.size.w, "logicalHeight": l.size.h})
+                    })
+                    .collect();
+                json!({"id": id, "scale": self.window_scale(*id), "layers": layers})
+            })
+            .collect();
+        json!(windows)
     }
 
     /// Tells the app about toplevels it knows that went away or now draw
@@ -236,12 +268,14 @@ impl State {
     }
 
     fn emit_window(&mut self, window: u32, members: &[Member]) {
+        let start = std::time::Instant::now();
         let infos: Vec<(u32, Value)> = members.iter().map(|m| (m.id, self.toplevel_json(window, m))).collect();
         let scale = self.window_scale(window);
         let generation = self.gui.generation;
         let log_hashes = self.gui.log_hashes;
         let Some(layers) = self.layouts.get(&window) else { return };
         let Some(conn) = self.gui.active.and_then(|id| self.gui.conns.get_mut(&id)) else { return };
+        let stats = &mut self.stats;
         let want_hash = conn.hashes;
 
         for (id, info) in infos {
@@ -283,8 +317,17 @@ impl State {
                         s.sent = None;
                     }
                     let mut mine = std::mem::take(&mut s.callbacks);
-                    let built =
-                        build_commit(s, layer, window, z as u16, scale, generation, want_hash || log_hashes, !mine.is_empty());
+                    let built = build_commit(
+                        s,
+                        layer,
+                        window,
+                        z as u16,
+                        scale,
+                        generation,
+                        want_hash || log_hashes,
+                        !mine.is_empty(),
+                        stats,
+                    );
                     callbacks.append(&mut mine);
                     built
                 })
@@ -317,9 +360,13 @@ impl State {
                 );
             }
             for frame in commit.encode(&data) {
+                stats.add("bytesSent", frame.len() as u64);
                 conn.send(frame);
             }
         }
+        stats.add("groupsSent", 1);
+        stats.sent(window, seq);
+        stats.record("groupBuild", start.elapsed());
         if !callbacks.is_empty() {
             self.held.entry(window).or_default().extend(callbacks.into_iter().map(|cb| (seq, cb)));
         }
@@ -414,6 +461,7 @@ fn build_commit(
     generation: u64,
     hash: bool,
     force: bool,
+    stats: &mut crate::stats::Stats,
 ) -> Option<(Commit, Vec<u8>, Option<u64>)> {
     let x = to_px(layer.loc.x, scale);
     let y = to_px(layer.loc.y, scale);
@@ -441,6 +489,7 @@ fn build_commit(
             return None;
         }
         commit.flags = protocol::FLAG_HIDDEN;
+        stats.add("commitsHidden", 1);
         s.sent = Some(Sent { content: None, placement });
         s.sent_gen = generation;
         return Some((commit, Vec::new(), None));
@@ -456,6 +505,7 @@ fn build_commit(
     let content = (m.width, m.height, m.format);
     let app_has = sent.as_ref().is_some_and(|p| p.content == Some(content));
     let mut data = Vec::new();
+    let pack_start = std::time::Instant::now();
     if !app_has || s.pending.full {
         commit.flags = protocol::FLAG_BUFFER | protocol::FLAG_FULL;
         commit.rects = vec![Rect { x: 0, y: 0, w: m.width, h: m.height }];
@@ -472,6 +522,14 @@ fn build_commit(
         return None;
     }
     s.pending = Default::default();
+    let kind = match commit.flags {
+        f if f & protocol::FLAG_FULL != 0 => "commitsFull",
+        f if f & protocol::FLAG_SCROLL != 0 => "commitsScroll",
+        f if f & protocol::FLAG_BUFFER != 0 => "commitsDamage",
+        _ => "commitsPlacement",
+    };
+    stats.add(kind, 1);
+    stats.time("packNs", pack_start.elapsed());
     let mut content_hash = None;
     if commit.flags & protocol::FLAG_BUFFER != 0 && hash {
         let h = m.hash();
@@ -481,7 +539,10 @@ fn build_commit(
     }
     commit.encoding = protocol::ENCODING_RAW;
     if !data.is_empty() {
+        stats.add("pixelBytes", data.len() as u64);
+        let compress_start = std::time::Instant::now();
         let packed = protocol::compress(&data);
+        stats.time("compressNs", compress_start.elapsed());
         if packed.len() < data.len() {
             commit.encoding = protocol::ENCODING_ZSTD;
             data = packed;

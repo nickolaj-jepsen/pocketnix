@@ -329,8 +329,10 @@ class GuiReader(private val input: InputStream) {
     /** The next message, or null at a clean end of stream. */
     fun next(): GuiMessage? {
         val group = ArrayList<Commit>()
+        var groupStart = 0L
         while (true) {
             val f = Frames.read(input) ?: return null
+            GuiStats.add("bytesRead", f.payload.size + 5L)
             when (f.type) {
                 Gui.JSON -> {
                     if (group.isNotEmpty()) throw GuiProtocolException("JSON inside a commit group")
@@ -338,10 +340,15 @@ class GuiReader(private val input: InputStream) {
                 }
 
                 Gui.COMMIT -> {
+                    if (group.isEmpty()) groupStart = System.nanoTime()
                     val c = readCommit(f.payload)
                     if (group.any { it.surface == c.surface }) throw GuiProtocolException("surface ${c.surface.u} twice in a group")
                     group += c
-                    if (!c.grouped) return GuiMessage.Group(group)
+                    if (!c.grouped) {
+                        // From the end of its first frame: the wait for that frame is idle time too.
+                        GuiStats.record("groupRead", System.nanoTime() - groupStart)
+                        return GuiMessage.Group(group)
+                    }
                 }
 
                 Gui.COMMIT_DATA -> throw GuiProtocolException("COMMIT_DATA outside a commit")
@@ -528,6 +535,7 @@ class GuiReader(private val input: InputStream) {
         var have = first
         while (have < data.size) {
             val f = Frames.read(input) ?: throw GuiProtocolException("stream ended inside commit $seqU")
+            GuiStats.add("bytesRead", f.payload.size + 5L)
             if (f.type != Gui.COMMIT_DATA) throw GuiProtocolException("frame 0x${f.type.toString(16)} inside commit $seqU")
             if (f.payload.size < 4) throw GuiProtocolException("COMMIT_DATA ${f.payload.size} bytes")
             val dseq = ByteBuffer.wrap(f.payload).getInt(0)

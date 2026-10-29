@@ -188,6 +188,7 @@ pub struct State {
     next_surface_id: u32,
 
     pub gui: Gui,
+    pub stats: crate::stats::Stats,
     /// Per window id, from the app.
     pub windows: HashMap<u32, WindowCfg>,
     /// Per toplevel id, the scale it was first configured at, until the
@@ -310,6 +311,7 @@ impl State {
             keyboard_layout: Default::default(),
             next_surface_id: 1,
             gui,
+            stats: Default::default(),
             windows: HashMap::new(),
             initial_scales: HashMap::new(),
             layouts: HashMap::new(),
@@ -622,6 +624,7 @@ impl CompositorHandler for State {
         }
 
         let generation = self.gui.generation;
+        let mut took = None;
         let (removed, has_callbacks, entered, refused) = compositor::with_states(surface, |data| {
             let mut guard = data.cached_state.get::<SurfaceAttributes>();
             let attrs = guard.current();
@@ -647,8 +650,10 @@ impl CompositorHandler for State {
                 let mut refused = None;
                 match buffer {
                     Some(BufferAssignment::NewBuffer(buffer)) => {
+                        let start = Instant::now();
                         refused = take_buffer(s, &buffer, &damage, generation).err();
                         buffer.release();
+                        took = Some(start.elapsed());
                     }
                     Some(BufferAssignment::Removed) => {
                         s.remove_buffer();
@@ -662,6 +667,10 @@ impl CompositorHandler for State {
             })
             .unwrap_or((false, false, true, None))
         });
+        if let Some(d) = took {
+            self.stats.add("buffersTaken", 1);
+            self.stats.time("takeBufferNs", d);
+        }
         if let Some(why) = refused {
             surface.post_error(wl_surface::Error::InvalidSize, why);
             return;

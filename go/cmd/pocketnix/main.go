@@ -19,6 +19,7 @@ commands:
   agent       talk to a guest agent directly (debugging; see pocketnix agent -h)
   ssh-proxy   an ssh ProxyCommand to the guest's sshd over adb
   control     drive a debug build's tabs over adb and read them back
+  bench       benchmark the GUI pipeline on a phone or the desktop
   version     print the CLI and protocol versions
 `
 
@@ -41,6 +42,8 @@ func main() {
 		err = runSSHProxy(os.Args[2:])
 	case "control":
 		err = runControl(os.Args[2:])
+	case "bench":
+		err = runBench(os.Args[2:])
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)

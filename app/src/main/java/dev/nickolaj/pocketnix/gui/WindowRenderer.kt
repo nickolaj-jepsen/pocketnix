@@ -34,6 +34,9 @@ internal class WindowRenderer(
     /** The seq to acknowledge once no surface is starved. */
     private var deferred = 0
 
+    /** When the oldest group [deferred] covers was received; 0 for unknown. */
+    private var deferredReceived = 0L
+
     /** Bumped by [forgetAcks]; an ack committed under an older one is dropped. */
     private var epoch = 0
 
@@ -77,11 +80,15 @@ internal class WindowRenderer(
      * touched) into [t], and acknowledges [seq] once SurfaceFlinger has
      * committed it; 0 acknowledges nothing. While any surface of the window
      * is starved, nothing is acknowledged: an ack covers every surface.
+     * [receivedNs] is when the group arrived, for [GuiStats]; 0 for unknown.
      */
-    fun render(t: SurfaceControl.Transaction, surfaces: Collection<GuiState.Surface>, seq: Int) {
+    fun render(t: SurfaceControl.Transaction, surfaces: Collection<GuiState.Surface>, seq: Int, receivedNs: Long = 0L) {
         if (destroyed) return
         for (s in surfaces) if (update(t, s)) starved -= s.id else starved += s.id
-        if (seq != 0) deferred = seq
+        if (seq != 0) {
+            deferred = seq
+            if (deferredReceived == 0L) deferredReceived = receivedNs
+        }
         acknowledge(t)
     }
 
@@ -98,6 +105,7 @@ internal class WindowRenderer(
     /** Drops the seq it holds back and the acks still on their way: seqs belong to a connection that ended. */
     fun forgetAcks() {
         deferred = 0
+        deferredReceived = 0L
         epoch++
     }
 
@@ -105,10 +113,19 @@ internal class WindowRenderer(
         val ack = deferred
         if (ack == 0 || starved.isNotEmpty()) return
         deferred = 0
+        val received = deferredReceived
+        deferredReceived = 0L
         val e = epoch
         // A change of its own, so the transaction is never empty and always reports its commit.
         t.setVisibility(root, true)
+        val applied = System.nanoTime()
         t.addTransactionCommittedListener(Runnable::run) {
+            val now = System.nanoTime()
+            GuiStats.record("applyToCommitted", now - applied)
+            if (received != 0L) {
+                GuiStats.record("receivedToCommitted", now - received)
+                GuiStats.shown(window, received)
+            }
             synchronized(lock) { if (epoch == e) presented(window, ack) }
         }
     }
@@ -132,15 +149,20 @@ internal class WindowRenderer(
         val l = layers.getOrPut(s.id) { Layer(SurfaceControl.Builder().setName("gui-surface-${s.id.u}").setParent(root).build()) }
         val current = s.damage.serial
         if (l.shown != current) {
-            val slot = freeSlot(l, s.content) ?: return false
+            val slot = freeSlot(l, s.content) ?: return false.also { GuiStats.add("starved") }
             val copy = s.damage.since(slot.serial)
             slot.fence?.let {
+                val waiting = System.nanoTime()
                 // Released means SurfaceFlinger is done with it once this signals.
                 if (!it.await(Duration.ofMillis(FENCE_WAIT_MS))) Log.w(TAG, "surface ${s.id.u}: release fence still pending")
                 it.close()
+                GuiStats.add("fenceWaitNs", System.nanoTime() - waiting)
             }
             slot.fence = null
+            val copying = System.nanoTime()
             val err = GuiNative.copyRects(slot.buffer, pixels, s.content.width, copy, (copy?.size ?: 0) / 4)
+            GuiStats.add("copyNs", System.nanoTime() - copying)
+            GuiStats.add("copiedBytes", copiedBytes(copy, s.content.width, s.content.height))
             if (err != 0) {
                 Log.w(TAG, "surface ${s.id.u}: copy into its buffer failed ($err)")
                 return true
@@ -164,6 +186,14 @@ internal class WindowRenderer(
         t.setPosition(l.sc, s.x - s.srcX * sx, s.y - s.srcY * sy)
         t.setVisibility(l.sc, true)
         return true
+    }
+
+    /** The bytes `copyRects` copies for [rects] (null: the whole buffer). */
+    private fun copiedBytes(rects: IntArray?, width: Int, height: Int): Long {
+        if (rects == null) return width.toLong() * height * 4
+        var n = 0L
+        for (i in 0 until rects.size / 4) n += rects[i * 4 + 2].toLong() * rects[i * 4 + 3] * 4
+        return n
     }
 
     /** A free buffer of the content's size and format, the one needing the least copying; null when all are with SurfaceFlinger. */

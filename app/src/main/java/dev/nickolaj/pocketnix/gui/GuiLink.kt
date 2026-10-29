@@ -7,6 +7,7 @@ import dev.nickolaj.pocketnix.agent.Protocol
 import dev.nickolaj.pocketnix.agent.open
 import java.io.EOFException
 import java.io.IOException
+import java.nio.ByteBuffer
 import java.util.concurrent.LinkedBlockingQueue
 
 /**
@@ -56,7 +57,12 @@ class GuiLink(
 
     /** Queues one frame for the compositor; dropped while not connected. */
     fun send(frame: ByteArray) {
-        writer?.send(frame)
+        val w = writer ?: return
+        // Pointer, key and touch frames start with their window.
+        if (frame.size >= 9 && frame[0] >= Gui.POINTER_MOTION && frame[0] <= Gui.TOUCH_FRAME) {
+            GuiStats.input(ByteBuffer.wrap(frame, 5, 4).int)
+        }
+        w.send(frame)
     }
 
     private fun run(dialer: AgentDialer, hashes: Boolean) {

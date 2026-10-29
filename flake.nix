@@ -71,6 +71,15 @@
           });
           meta.description = "Write docs/options.md from the modules' option descriptions";
         };
+        # --local finds this system's compositor and pocketnix-gui-bench on PATH.
+        bench = {
+          type = "app";
+          program = "${pkgs.writeShellScript "bench" ''
+            PATH=${own.pocketnix-compositor}/bin:$PATH
+            exec ${own.pocketnix-cli}/bin/pocketnix bench "$@"
+          ''}";
+          meta.description = "Benchmark the GUI pipeline on a phone, or on the desktop with --local";
+        };
       })) {
         x86_64-linux.gradle = {
           type = "app";

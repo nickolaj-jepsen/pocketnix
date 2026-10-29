@@ -29,6 +29,8 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * The guest's GUI windows: the one GUI stream while the guest has GUI on,
@@ -214,11 +216,24 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                 val start = System.nanoTime()
                 // Decompressing is the slow part, and needs no state: keep it out of the lock.
                 val g = GuiMessage.Group(msg.commits.map { it.unpacked(GuiNative) })
+                val unpacked = System.nanoTime()
                 synchronized(lock) {
+                    val locked = System.nanoTime()
                     state.apply(g)
-                    render(g)
+                    val applied = System.nanoTime()
+                    render(g, start)
+                    GuiStats.add("lockWaitNs", locked - unpacked)
+                    GuiStats.add("applyNs", applied - locked)
+                    GuiStats.add("renderNs", System.nanoTime() - applied)
                 }
-                hints.report(System.nanoTime() - start, frameNs)
+                val work = System.nanoTime() - start
+                GuiStats.add("groups")
+                GuiStats.add("commits", msg.commits.size.toLong())
+                GuiStats.add("decodeNs", unpacked - start)
+                GuiStats.add("wireBytes", msg.commits.sumOf { it.data.size.toLong() })
+                GuiStats.add("pixelBytes", msg.commits.filter { it.buffer }.sumOf { it.pixelBytes })
+                GuiStats.record("groupWork", work)
+                hints.report(work, frameNs)
             }
 
             is GuiMessage.Toplevel -> {
@@ -366,20 +381,23 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         for (v in views.values) v.renderer?.forgetAcks()
     }
 
-    /** Under [lock]: one group into one transaction, acknowledged per window once shown. */
-    private fun render(group: GuiMessage.Group) {
+    /** Under [lock]: one group, received at [receivedNs], into one transaction, acknowledged per window once shown. */
+    private fun render(group: GuiMessage.Group, receivedNs: Long) {
         var t: SurfaceControl.Transaction? = null
         for (window in group.commits.map { it.window }.distinct()) {
             val r = views[window]?.renderer ?: continue
             val tx = t ?: SurfaceControl.Transaction().also { t = it }
             val surfaces = group.commits.filter { it.window == window }.mapNotNull { state.surfaces[it.surface] }
             // A renderer failing is no reason to drop the connection, and so every window's content.
-            guard("window ${window.u}: render") { r.render(tx, surfaces, state.windows[window]?.lastSeq ?: 0) }
+            guard("window ${window.u}: render") { r.render(tx, surfaces, state.windows[window]?.lastSeq ?: 0, receivedNs) }
         }
         t?.apply()
     }
 
-    private fun presented(window: Int, seq: Int) = link.send(Gui.presented(window, seq))
+    private fun presented(window: Int, seq: Int) {
+        GuiStats.add("presentedSent")
+        link.send(Gui.presented(window, seq))
+    }
 
     /**
      * Draws every surface of the window [r] shows, on the render thread:
@@ -789,6 +807,22 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         val refresh = ((display?.refreshRate ?: 60f) * 1000).roundToInt()
         frameNs = 1_000_000_000_000L / refresh
         return Gui.output(dm.widthPixels, dm.heightPixels, dm.densityDpi / 160f, refresh)
+    }
+
+    /** For `pocketnix control stats`: [GuiStats], the display's frame interval and each window's surfaces. */
+    fun stats(): JSONObject = synchronized(lock) {
+        val windows = JSONArray()
+        for (w in state.windows.values) {
+            val surfaces = JSONArray()
+            for (s in state.surfaces.values.filter { it.window == w.id }) {
+                surfaces.put(JSONObject().put("id", s.id.u).put("role", s.role).put("width", s.content.width).put("height", s.content.height))
+            }
+            windows.put(
+                JSONObject().put("id", w.id.u).put("width", w.toplevel.width).put("height", w.toplevel.height)
+                    .put("scale", w.toplevel.scale).put("sent", views[w.id]?.sent?.toString()).put("surfaces", surfaces)
+            )
+        }
+        GuiStats.json().put("frameNs", frameNs).put("connected", link.connected).put("windows", windows)
     }
 
     /** Debug dumps: the connection, every window, the hash checks, the app list and the launches waited on. */

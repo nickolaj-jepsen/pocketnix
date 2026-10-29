@@ -13,6 +13,7 @@ mod launcher;
 mod popup;
 mod protocol;
 mod state;
+mod stats;
 mod surface;
 mod text_input;
 mod touch;
@@ -50,10 +51,12 @@ use crate::state::Channels;
 use crate::state::ClientState;
 use crate::state::State;
 
-const USAGE: &str = "usage: pocketnix-compositor [--gui-socket PATH] [--wayland-display NAME] [--log-hashes]";
+const USAGE: &str =
+    "usage: pocketnix-compositor [--gui-socket PATH] [--wayland-display NAME] [--stats-socket PATH] [--log-hashes]";
 
 struct Args {
     gui_socket: Option<PathBuf>,
+    stats_socket: Option<PathBuf>,
     wayland_display: String,
     log_hashes: bool,
 }
@@ -61,6 +64,7 @@ struct Args {
 fn parse_args() -> Result<Args> {
     let mut args = Args {
         gui_socket: None,
+        stats_socket: None,
         wayland_display: "wayland-0".into(),
         log_hashes: std::env::var("POCKETNIX_COMPOSITOR_LOG_HASHES").is_ok_and(|v| v == "1"),
     };
@@ -69,6 +73,7 @@ fn parse_args() -> Result<Args> {
         let mut value = |name: &str| it.next().with_context(|| format!("{name} needs a value\n{USAGE}"));
         match arg.to_str() {
             Some("--gui-socket") => args.gui_socket = Some(value("--gui-socket")?.into()),
+            Some("--stats-socket") => args.stats_socket = Some(value("--stats-socket")?.into()),
             Some("--wayland-display") => {
                 args.wayland_display = value("--wayland-display")?
                     .into_string()
@@ -139,18 +144,37 @@ fn gui_listener(fd: Option<OwnedFd>, path: Option<PathBuf>) -> Result<UnixListen
                 Some(path) => path,
                 None => runtime_dir()?.join("pocketnix-gui.sock"),
             };
-            // A socket left by a compositor that died; nothing listens on it.
-            if std::os::unix::net::UnixStream::connect(&path).is_err() {
-                let _ = std::fs::remove_file(&path);
-            }
-            let listener = UnixListener::bind(&path).with_context(|| format!("binding {}", path.display()))?;
-            std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+            let listener = bind_private(&path)?;
             info!("GUI socket {}", path.display());
             listener
         }
     };
     listener.set_nonblocking(true)?;
     Ok(listener)
+}
+
+/// A listening socket at `path` only its owner may connect to.
+fn bind_private(path: &Path) -> Result<UnixListener> {
+    // A socket left by a compositor that died; nothing listens on it.
+    if std::os::unix::net::UnixStream::connect(path).is_err() {
+        let _ = std::fs::remove_file(path);
+    }
+    let listener = UnixListener::bind(path).with_context(|| format!("binding {}", path.display()))?;
+    std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    Ok(listener)
+}
+
+/// Answers each connection with one line of the stats' JSON (see `stats`).
+fn serve_stats(listener: &UnixListener, state: &State) {
+    while let Ok((mut stream, _)) = listener.accept() {
+        if !gui::peer_allowed(&stream) {
+            continue;
+        }
+        let mut line = state.stats.to_json("compositor", state.stats_windows()).to_string();
+        line.push('\n');
+        let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(1)));
+        let _ = std::io::Write::write_all(&mut stream, line.as_bytes());
+    }
 }
 
 fn main() -> Result<()> {
@@ -221,6 +245,17 @@ fn main() -> Result<()> {
             Ok(PostAction::Continue)
         })
         .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let stats_path = match args.stats_socket {
+        Some(path) => path,
+        None => runtime_dir()?.join("pocketnix-compositor-stats.sock"),
+    };
+    let stats_listener = bind_private(&stats_path)?;
+    stats_listener.set_nonblocking(true)?;
+    insert(&event_loop, Generic::new(stats_listener, Interest::READ, Mode::Level), |_, listener, state: &mut State| {
+        serve_stats(listener, state);
+        Ok(PostAction::Continue)
+    })?;
 
     let new_client = |dh: &mut smithay::reexports::wayland_server::DisplayHandle, stream| {
         let data = Arc::new(ClientState {
