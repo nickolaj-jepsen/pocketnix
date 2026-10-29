@@ -56,6 +56,12 @@ func fakeADB(args []string) int {
 		}
 		os.MkdirAll(filepath.Dir(devPath(remote)), 0o755)
 		os.WriteFile(devPath(remote), b, 0o644)
+	case "logcat":
+		for _, a := range args[1:] {
+			if uid, ok := strings.CutPrefix(a, "--uid="); ok {
+				fmt.Printf("I Vm: a line from uid %s\n", uid)
+			}
+		}
 	case "shell":
 		line, ok := strings.CutSuffix(args[1], "; echo pocketnix-exit=$?")
 		if !ok {
@@ -133,6 +139,15 @@ func fakeShell(state, line string, logEvent func(string, ...any)) (string, int) 
 		w, _ := os.OpenFile(part, os.O_WRONLY, 0)
 		w.WriteAt(b, n)
 		w.Close()
+	case len(f) == 5 && f[0] == "pm" && f[1] == "list" && f[2] == "packages" && f[3] == "-U":
+		// pm's filter matches substrings, so the release app's name lists both.
+		var out strings.Builder
+		for _, p := range []string{releasePackage + " uid:10100", debugPackage + " uid:10200"} {
+			if strings.Contains(p, unquote(f[4])) {
+				out.WriteString("package:" + p + "\n")
+			}
+		}
+		return out.String(), 0
 	case len(f) >= 1 && f[0] == "am":
 		logEvent("%s", line)
 	case len(f) == 3 && f[0] == "rm":

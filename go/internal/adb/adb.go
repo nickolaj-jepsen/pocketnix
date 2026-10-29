@@ -4,6 +4,7 @@ package adb
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 )
@@ -29,6 +30,18 @@ func (d Device) Run(args ...string) (string, error) {
 		return out.String(), fmt.Errorf("adb %s: %w\n%s%s", strings.Join(args, " "), err, out.String(), errb.String())
 	}
 	return out.String(), nil
+}
+
+// Stream runs an adb command with its stdout going to w as it comes, until
+// it exits.
+func (d Device) Stream(w io.Writer, args ...string) error {
+	var errb bytes.Buffer
+	c := d.cmd(args...)
+	c.Stdout, c.Stderr = w, &errb
+	if err := c.Run(); err != nil {
+		return fmt.Errorf("adb %s: %w\n%s", strings.Join(args, " "), err, errb.String())
+	}
+	return nil
 }
 
 // Shell runs a command line in the device's shell. adb itself doesn't report

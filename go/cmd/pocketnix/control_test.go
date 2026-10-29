@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -121,5 +122,21 @@ func TestControlDumpErrors(t *testing.T) {
 	d.setDump("error: no tab 9\n")
 	if _, err := c.dump(9, 0); err == nil || !strings.Contains(err.Error(), "no tab 9") {
 		t.Errorf("missing tab: got %v", err)
+	}
+}
+
+func TestControlLogcatReadsTheAppsUid(t *testing.T) {
+	newFakeDevice(t)
+	for pkg, uid := range map[string]string{releasePackage: "10100", debugPackage: "10200"} {
+		var out strings.Builder
+		if err := logcat(adb.Device{}, pkg, false, &out); err != nil {
+			t.Fatal(err)
+		}
+		if want := "from uid " + uid + "\n"; !strings.HasSuffix(out.String(), want) {
+			t.Errorf("%s: logcat printed %q, want the lines of uid %s", pkg, out.String(), uid)
+		}
+	}
+	if err := logcat(adb.Device{}, "dev.nickolaj.missing", false, io.Discard); err == nil || !strings.Contains(err.Error(), "dev.nickolaj.missing") {
+		t.Errorf("a package that isn't installed: got %v", err)
 	}
 }

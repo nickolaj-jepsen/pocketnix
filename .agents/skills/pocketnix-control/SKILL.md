@@ -33,6 +33,7 @@ attached (`adb devices`). `pocketnix control -h` lists the commands.
 | `tab [--profile <name>] [--timeout <dur>] [<text>]` | Waits for the agent, opens a terminal tab, types `<text>` and Enter, and prints the new tab's id. |
 | `type --tab <id> <text>` | Types `<text>` and Enter into an open tab. |
 | `wait --tab <id> [--timeout <dur>] [--lines <n>] <regexp>` | Polls the tab until one of its transcript lines matches, then prints the tab's dump. Exits 1 with the last dump if nothing matches in time. |
+| `logcat [--follow]` | Prints the log (main, system and crash buffers) of every process running as the app's uid, so it keeps lines from before a crash or restart. `--follow` streams it. Works on release builds too (`--package`). |
 
 `tab` and `type` take `--no-enter` to type without pressing Enter. Tab 0 is
 the hvc0 console: it always exists and shows boot and login output.
@@ -90,6 +91,13 @@ adb shell "content call --uri content://dev.nickolaj.pocketnix.debug.control --m
 
 A call answers `Result: Bundle[{…}]`, carrying an `error` key when it failed.
 A failed dump reads `error: <message>`.
+
+## Reading the app's log
+
+`pocketnix control logcat` is the app's side: engine and VM state changes,
+the agent link, and the stack trace when the app dies (which also kills the
+VM). Pipe it through `grep` for a tag (`Vm`, `PortForwards`, …) rather than
+reading it all.
 
 ## When it fails
 

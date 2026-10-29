@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"regexp"
@@ -30,6 +31,9 @@ commands:
   wait --tab <id> [--timeout <dur>] [--lines <n>] <regexp>
         poll the tab's last lines until <regexp> matches one of them,
         then print them; exit 1 if it doesn't within the timeout (30s)
+  logcat [--follow]
+        the log of every process running as the app's uid, which keeps
+        its lines across the app's crashes and restarts; --follow streams it
 
 global flags:
   --serial <serial>   adb device to use (default: adb's only device)
@@ -112,11 +116,42 @@ func runControl(args []string) error {
 		out, err := c.wait(*tab, *lines, re, *timeout)
 		fmt.Print(out)
 		return err
+	case "logcat":
+		follow := sub.Bool("follow", false, "")
+		if err := parseArgs(sub, rest, 0); err != nil {
+			return err
+		}
+		return logcat(c.dev, *pkg, *follow, os.Stdout)
 	default:
 		fs.Usage()
 		return errUsage
 	}
 	return nil
+}
+
+// logcat writes the main, system and crash logs of pkg's uid to w: what
+// the buffers hold, or with follow, everything until adb exits.
+func logcat(dev adb.Device, pkg string, follow bool, w io.Writer) error {
+	out, err := dev.Shell("pm list packages -U " + adb.ShellQuote(pkg))
+	if err != nil {
+		return err
+	}
+	// The filter is a substring match: "package:<name> uid:<uid>" for each match.
+	uid := ""
+	for _, l := range strings.Split(out, "\n") {
+		f := strings.Fields(l)
+		if len(f) == 2 && f[0] == "package:"+pkg {
+			uid, _ = strings.CutPrefix(f[1], "uid:")
+		}
+	}
+	if uid == "" {
+		return fmt.Errorf("%s isn't installed", pkg)
+	}
+	args := []string{"logcat", "-b", "main,system,crash", "--uid=" + uid}
+	if !follow {
+		args = append(args, "-d")
+	}
+	return dev.Stream(w, args...)
 }
 
 // parseArgs parses a command's flags and checks it got n arguments (-1: any).
