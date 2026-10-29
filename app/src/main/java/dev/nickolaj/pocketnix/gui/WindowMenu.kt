@@ -31,7 +31,7 @@ const val MOVE_TO_TAB = "Move to a terminal tab"
 const val MOVE_OUT = "Move to its own window"
 
 /**
- * Window [id]'s menu (gui-apps.md, Window controls), for its bar and for its
+ * Window [id]'s menu (docs/gui.md, Window controls), for its bar and for its
  * tab: its app's size and input mode, zoom while something shows the
  * window, "Reset to config" when the user changed the app's settings, then
  * [extra] (moving it, leaving full screen) and Close. Read when the menu

@@ -24,7 +24,7 @@ import (
 const logLines = 60
 
 // Updater pulls finished systems from the configured sources and switches
-// to them, one operation at a time (design.md, Updates and recovery). The
+// to them, one operation at a time (docs/updates.md). The
 // guest never evaluates: every source yields a toplevel store path.
 type Updater struct {
 	// Commands and paths, which tests replace with fakes.

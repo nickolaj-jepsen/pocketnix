@@ -1,92 +1,79 @@
 # pocketnix
 
-NixOS as a real host on your Android phone. pocketnix boots a NixOS disk image
-under the Android Virtualization Framework (pKVM), with no root: an Android app
-to run it and use its terminal, a NixOS module for the guest side, and a CLI
-that provisions a phone over adb.
+Run NixOS on an Android phone as a real virtual machine, without root.
 
-Early work in progress. See [docs/design.md](docs/design.md) for what it will
-be, and [example/configuration.nix](example/configuration.nix) for a guest.
+pocketnix boots a NixOS disk image under the Android Virtualization Framework
+(AVF, pKVM) and gives you a terminal app for it. The guest is an ordinary
+`nixosConfiguration` in your own flake, updated from your desktop or CI.
 
-## Use
+- An Android app that runs the VM in the background, with terminal tabs, extra
+  keys, a command palette and a Quick Settings tile.
+- A NixOS module that builds the bootable image and the guest agent.
+- A CLI that provisions a phone over adb and injects secrets into the image.
+- Integration with Android: notifications, `xdg-open`, the clipboard, the share
+  sheet, the Files app, shared Android folders, and port forwards.
+- Updates and rollbacks from the app. The phone never evaluates or builds Nix.
+- Optional Wayland apps shown as Android windows.
 
-Add `pocketnix.nixosModules.default` to an `aarch64-linux` NixOS configuration
-and set `pocketnix.guest.enable = true` (see the module for the terminal's
-profiles, extra keys, theme and port forwards, TCP or UDP). Then, with the phone on adb:
+> [!WARNING]
+> Early work. It is tested on one phone (Pixel 8 Pro, GrapheneOS, Android 17).
+> Uninstalling the app deletes the VM's disk.
 
-```bash
-nix run github:nickolaj-jepsen/pocketnix#provision -- \
-  --image .#nixosConfigurations.<host> \
-  --inject /etc/ssh/ssh_host_ed25519_key=./host_key
+```mermaid
+flowchart LR
+  subgraph desktop[Your machine]
+    flake[your flake] --> image[disk image]
+    cli[pocketnix provision]
+  end
+  subgraph phone[Android phone]
+    app[pocketnix app] -- vsock --> agent
+    subgraph vm[NixOS VM]
+      agent[pocketnix-agent]
+    end
+  end
+  image --> cli -- adb --> app
 ```
 
-`provision` installs the release APK matching its own version, builds the
-host's disk image with this machine's tools, and pushes it. The guest is
-`aarch64-linux`: on an x86_64 desktop, build it through
-`boot.binfmt.emulatedSystems = ["aarch64-linux"]` or an aarch64 remote
-builder. Most of the closure comes from cache.nixos.org; the agent itself
-builds under emulation.
-
-On the AVF platform the module trims what a phone terminal doesn't use, all
-as `mkDefault`: no flake registry or `NIX_PATH` entry for nixpkgs (its source
-is ~200 MiB, re-copied on every nixpkgs bump), no NixOS/info/doc manuals (man
-pages stay), no `environment.defaultPackages`, no systemd-oomd, and zram swap
-on. Override any of them in the host's config.
-
-The phone never evaluates or builds. Updates come finished, from a build host
-over ssh, or from a store path your CI publishes, and the app's System menu
-updates, rolls back and lists generations:
+## Quick start
 
 ```nix
-pocketnix.guest.updates = {
-  # Builds `<flake>#nixosConfigurations.<hostName>`; trusts the guest's host key.
-  buildHost = { host = "pocketnix-build@desktop"; flake = "github:alice/nixos"; };
-  # Fallback: a URL whose body is the toplevel path, in a cache the guest trusts.
-  published.url = "https://ci.example.com/phone/toplevel";
-};
-programs.ssh.knownHosts.desktop.publicKey = "ssh-ed25519 …";
-```
+# flake.nix
+{
+  inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
+  inputs.pocketnix.url = "github:nickolaj-jepsen/pocketnix";
 
-On the desktop, `nixosModules.buildHost` gives the guest a user whose key does
-nothing but build that system and serve the copy, so a stolen phone gets no
-shell there:
-
-```nix
-imports = [pocketnix.nixosModules.buildHost];
-pocketnix.buildHost = {
-  enable = true;
-  guests.phone = {
-    publicKey = "ssh-ed25519 …"; # the guest's /etc/ssh/ssh_host_ed25519_key.pub
-    installable = "github:alice/nixos#nixosConfigurations.phone.config.system.build.toplevel";
+  outputs = {nixpkgs, pocketnix, ...}: {
+    nixosConfigurations.phone = nixpkgs.lib.nixosSystem {
+      modules = [
+        pocketnix.nixosModules.default
+        {
+          nixpkgs.hostPlatform = "aarch64-linux";
+          pocketnix.guest.enable = true;
+          system.stateVersion = "26.05";
+        }
+      ];
+    };
   };
-};
+}
 ```
-
-To push from a desktop over USB instead, use `pocketnix ssh-proxy` as an ssh
-ProxyCommand (`pocketnix ssh-proxy -h`).
-
-In the guest, desktop notifications (`notify-send`, with actions), `xdg-open`
-and `gio open` reach Android, `pocketnix-guest copy`/`paste` the clipboard; Android's share sheet drops into `~/Inbox`
-(`pocketnix.guest.share`), and the Files app shows the user's home
-(`pocketnix.guest.files.root`). A Quick Settings tile starts and stops the VM.
-
-## Requirements
-
-- A phone with AVF and non-protected VM support (tested on a Pixel 8 Pro running
-  GrapheneOS, Android 17).
-- adb, once, to grant the app the two AVF permissions.
-
-## Building
 
 ```bash
-nix develop
-./gradlew assembleDebug
-nix build .#pocketnix
-nix build .#checks.x86_64-linux.avf-boot   # the example image, booted and switched under QEMU
+nix run github:nickolaj-jepsen/pocketnix#provision -- --image .#nixosConfigurations.phone
 ```
 
-Releases: bump `VERSION`, tag `v<VERSION>`; the release workflow signs the APK
-and publishes `pocketnix-<VERSION>.apk`, which `provision` and Obtainium fetch.
+No release APK is published yet, so for now `provision` needs one you built
+(`--debug --apk ...`). [Getting started](docs/getting-started.md) covers that,
+the requirements, ssh access and the first boot.
+
+## Docs
+
+- [Getting started](docs/getting-started.md): requirements, first install, first boot
+- [Configuration](docs/configuration.md): the module, by topic
+- [Updates](docs/updates.md): build host, published path, rollback, recovery
+- [GUI apps](docs/gui.md): Wayland apps as Android windows
+- [Architecture](docs/architecture.md): how the pieces fit, and why
+- [Development](docs/development.md): building, testing, releasing
+- [GUI protocol](docs/gui-protocol.md): the compositor-to-app wire format
 
 ## License
 

@@ -5,7 +5,7 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * A window's visual zoom (gui-apps.md, Scale): its layers magnified by
+ * A window's visual zoom (docs/gui.md, Size): its layers magnified by
  * [scale] and moved so the window's origin shows at ([x], [y]) in the view.
  * The client's layout never changes; input maps back through [windowX] and
  * [windowY]. The content may be larger than the view (a window clipped at

@@ -1,78 +1,35 @@
 # Agent notes
 
-Read `docs/design.md` first: the decisions there are settled.
+Read `docs/architecture.md` first: its design rules are settled. The docs
+index is in `README.md`; building, testing and the app's scripted control are
+in `docs/development.md`.
 
 ## Layout
 
 - `app/`: the Android app (`dev.nickolaj.pocketnix`, `.debug` suffix on debug builds).
 - `terminal-emulator/`, `terminal-view/`: Termux's terminal libraries, vendored
   from Podroid's copy. Edit them freely; there is no upstream sync.
-- `go/`: one Go module, `cmd/pocketnix-agent` (guest) and `cmd/pocketnix`
-  (host CLI), sharing `internal/protocol`.
+- `go/`: one Go module, `cmd/pocketnix-agent` (guest), `cmd/pocketnix-guest`
+  (guest programs' CLI) and `cmd/pocketnix` (host CLI), sharing `internal/protocol`.
 - `compositor/`: the guest's Wayland compositor (Rust, from wprs's server
   half, Apache-2.0), speaking `docs/gui-protocol.md` to the app.
-- `nix/`: the NixOS module (`module.nix`), the Go and compositor packages, the devshell.
+- `nix/`: the NixOS modules (`module.nix`, `build-host.nix`), the packages,
+  the VM tests and the devshell.
 
-## Commands
+## Working rules
 
-```bash
-nix develop                      # JDK, Android SDK/NDK, adb, Go, e2fsprogs
-./gradlew assembleDebug          # → app/build/outputs/apk/debug/app-debug.apk
-./gradlew testDebugUnitTest      # JVM tests; POCKETNIX_AGENT=<…/bin/pocketnix-agent> adds the ones against a real agent,
-                                 # POCKETNIX_COMPOSITOR=<…/bin/pocketnix-compositor> the GUI decoder against a real compositor and foot
-nix build .#pocketnix            # agent + CLI; bump vendorHash in nix/go.nix after go.mod changes
-nix build .#pocketnix-compositor # the compositor, with its cargo tests
-nix build .#checks.x86_64-linux.gui     # NixOS VM test: gui.enable, socket activation, the agent's gui stream
-go -C go vet ./... && go -C go test ./...
-nix build .#checks.x86_64-linux.agent   # NixOS VM test: the example guest's agent, over TCP
-nix build .#checks.x86_64-linux.avf-boot  # the example image (avf.enable on) booted and switched under QEMU TCG
-nix build .#example-image        # the AVF disk image (aarch64 through binfmt, assembled natively)
-nix run .#boot-example           # that image under qemu-system-aarch64, agent on vsock:4242:9100
-nix fmt .                        # alejandra, before committing Nix
-```
+- CI builds the flake's checks, per system (`.github/workflows/ci.yml`); `nix flake check` runs them all.
+- Run `nix fmt .` before committing Nix; Go is gofmt'ed. The compositor isn't
+  rustfmt'ed, so don't reformat it wholesale.
+- Never build anything inside a guest: an unthrottled build pegs the whole phone.
+- Uninstalling the app, clearing its data or `provision --replace` deletes
+  the VM's disk: never do it to a phone's working VM without asking.
 
-`pocketnix agent --connect <tcp:…|unix:…|vsock:<cid>:9100> config|exec|forward|udp|update|switch-generation|history|…`
-talks to an agent the way the app does; the update commands wait for the
-operation and print its log and final state. A desktop agent for the app's debug TCP
-backend: `pocketnix-agent --config <file> --listen tcp:0.0.0.0:9100 --no-power`,
-then start the app with `--es tcp 10.0.2.2:9100` (the emulator's host).
-
-Grant a debug install its AVF permissions (`provision` will do this):
-`adb shell pm grant dev.nickolaj.pocketnix.debug android.permission.MANAGE_VIRTUAL_MACHINE`
-and the same for `android.permission.USE_CUSTOM_VIRTUAL_MACHINE`.
-
-## The test phone
-
-Pixel 8 Pro, GrapheneOS, Android 17. Its real NixOS host (phone-vm) lives in
-pocketnix's own debug app (`dev.nickolaj.pocketnix.debug`), running the
-`wayland-poc` build: never uninstall it, clear its data or provision over it,
-as that deletes the VM's disk. To test a build there, back up the installed
-APK (`pm path` + `adb pull`), stop the VM through `ControlActivity`, `adb
-install -r -d` (`-d`: versionCode now comes from VERSION), and reinstall the
-backup the same way afterwards.
-
-Never build anything inside a guest: an unthrottled build pegs the whole phone.
-
-## Where M0 code comes from
-
-- AVF engine: Podroid fork, checkout `~/worktrees/Podroid/nixos-image`
-  (github.com/nickolaj-jepsen/Podroid, branch `nixos-image`; the disk-image mode
-  is its top commit). Port from `app/src/main/java/com/excp/podroid/engine/avf/`
-  (`AvfReflect`, `AvfEngine` config building, `VsockControlChannel`,
-  `VsockPortForwarder`, `AvfTcpRelay`, `VsockUdpForwarder`, `ConsoleFanout`) and
-  `service/PodroidService`. Leave its QEMU, X11, 9p and setup-wizard code behind.
-- Image, kernel, first boot: the nixos repo's PR #475 (github.com/nickolaj-jepsen/nixos,
-  branch `feat/phone-vm`, checkout `~/worktrees/nixos/phone-vm-nixos`):
-  `modules/system/avf.nix` and `pkgs/avf-kernel/`. They move here; the nixos
-  repo will consume this flake instead.
-- Research behind the decisions, including AOSP/GrapheneOS internals:
-  `~/.local/share/agents/phone-vm/termux-avf-fork-research.md`.
-
-## Traps (all verified on the test phone)
+## Traps (verified on a Pixel 8 Pro, GrapheneOS, Android 17)
 
 - Stock nixpkgs kernels (6.1, 6.12, 6.18) return corrupted virtio-blk reads
   under Pixel pKVM (ext4 checksum errors, random SEGVs). Use Google's prebuilt
-  guest kernel (`pkgs/avf-kernel` in the nixos repo).
+  guest kernel (`nix/avf-kernel`).
 - Multi-vCPU (`match_host`) guests panic on MPAM without `arm64.nompam` on the
   kernel command line.
 - u-boot looks for `/EFI/BOOT/BOOTAA64.EFI`, but `bootctl` (and so every
@@ -85,20 +42,18 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
 - Taking a guest vCPU offline works, but bringing it back can fail under pKVM
   ("CPU4: died during early boot") until the VM restarts.
 - The balloon needs `useAutoMemoryBalloon` in the custom-image config;
-  virtmgr also requires `hypervisor.memory_reclaim.supported` (the test
-  phone has it), and logs "Memory balloon not enabled" otherwise.
+  virtmgr also requires `hypervisor.memory_reclaim.supported` (the Pixel 8
+  Pro has it), and logs "Memory balloon not enabled" otherwise.
 - The `pm grant`s are per Android user and lost on uninstall.
 - The AVF API is `@SystemApi` and `VirtualMachineCustomImageConfig` is `@hide`:
   reach them by reflection with in-process HiddenApiBypass. Its
   `GpuConfig.Builder` takes boxed `Boolean`s on GrapheneOS 17, so a
-  `boolean.class` lookup throws (`AvfReflect.set` tries both). Before that
-  fix the networked default's surfaceless setter never applied, so the
-  default stays `backend=2d` alone, the config the phone ran.
+  `boolean.class` lookup throws (`AvfReflect.set` tries both). A networked
+  VM asks for `backend=2d` alone.
 - A third-party VM can have the phone's GPU, but nothing yet composites on it.
   `GpuConfig(backend=gfxstream, vulkan=true, egl=false, gles=false, glx=false,
   surfaceless=true, context-types=[gfxstream-vulkan, gfxstream-composer])`
-  (the Terminal app's own config, the debug build's `--es gpu gfxstream`)
-  reaches crosvm as `--gpu=…`, and the guest's Mesa gfxstream ICD then runs
+  (the Terminal app's own config) reaches crosvm as `--gpu=…`, and the guest's Mesa gfxstream ICD then runs
   `vulkaninfo` against the real GPU ("Virtio-GPU GFXStream (Mali-G715)").
   Leaving `egl`/`gles` unset is not equivalent: virtmgr defaults them true and
   the guest's ASG stream then dies on `mmap64: Invalid argument`. Two blockers
@@ -116,15 +71,15 @@ Never build anything inside a guest: an unthrottled build pegs the whole phone.
 - Building the image on x86_64 with the guest's own repart tools fails; assemble
   it with the build host's tools but keep the guest's `systemdRepartFlags`
   (`--architecture`). Host-tool repart dereferences top-level symlink store
-  paths, so rewrite those `CopyFiles=` lines to `MakeSymlinks=` (see `avf.nix`).
+  paths, so rewrite those `CopyFiles=` lines to `MakeSymlinks=` (see `nix/module.nix`).
 - First-boot setup must order like sd-image (`DefaultDependencies=false`, before
   `sysinit.target`), or it cycles with `nix-daemon.socket`.
 - A guest `reboot` stops crosvm with `STOP_REASON_REBOOT`; the app must start the
   VM again then, and leave it stopped on `poweroff`.
 - The VM dies with the app's process (virtmgr ties it to the app): an app crash
   is a hard power-off of the guest.
-- Podroid's ssh forward holds `[::]:2222`, so a pocketnix forward on 2222 can't
-  listen, and `adb forward … tcp:2222` reaches phone-vm instead.
+- Forwards share the phone's ports with other apps: another app holding
+  `[::]:<port>` makes ours fail to listen, and `adb forward` reaches theirs.
 - Restoring a task relaunches it from its base intent: an adb `am start` with an
   action, sent to the main activity, gets replayed (it booted the VM after an
   app update). Scripted actions go to `ControlActivity`, which has no history.

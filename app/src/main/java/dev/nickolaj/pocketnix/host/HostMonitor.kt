@@ -19,8 +19,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.util.TimeZone
 
 /**
- * The phone's timezone, network and power, for the guest (design.md,
- * Configuration). Only state changes count: no battery level, which would
+ * The phone's timezone, network and power, for the guest (docs/configuration.md,
+ * Phone state). Only state changes count: no battery level, which would
  * wake the guest every percent. Callbacks run on the main thread, where an
  * exception would take the VM down with the app, so each one catches.
  */

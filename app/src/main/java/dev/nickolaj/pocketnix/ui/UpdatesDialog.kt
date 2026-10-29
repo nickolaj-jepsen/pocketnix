@@ -36,7 +36,7 @@ import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
 
-/** Update available, Update, Roll back and the generation list (design.md, Updates and recovery). */
+/** Update available, Update, Roll back and the generation list (docs/updates.md). */
 @Composable
 fun UpdatesDialog(vm: Vm, onDismiss: () -> Unit) {
     val updates by vm.updates.collectAsState()

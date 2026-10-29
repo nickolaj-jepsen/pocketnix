@@ -1,6 +1,6 @@
 package protocol
 
-// Integrations (design.md, Integrations and UX): guest programs reach Android
+// Integrations (docs/architecture.md, Integrations): guest programs reach Android
 // through the agent, and Android shares and files reach the guest.
 
 // Agent → app pushes on the control stream, sent as an [Event].

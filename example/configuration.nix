@@ -4,7 +4,7 @@
   pocketnix.guest = {
     enable = true;
     user = "nixos";
-    # Not 2222: forwards share the phone's ports with other apps' (Podroid's ssh takes 2222).
+    # Forwards share the phone's ports with other apps; 2222 is a popular one.
     forwards.ssh = {
       guestPort = 22;
       hostPort = 2022;

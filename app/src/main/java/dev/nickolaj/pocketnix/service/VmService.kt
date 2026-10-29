@@ -78,7 +78,7 @@ class VmService : Service() {
         return START_NOT_STICKY
     }
 
-    /** Holds the wake lock while the guest asks for it (design.md, Lifecycle), and says so. */
+    /** Holds the wake lock while the guest asks for it (docs/configuration.md, Power), and says so. */
     @SuppressLint("WakelockTimeout") // held exactly as long as the guest's inhibitor; released on every way out
     private fun holdWake(holders: List<WakeHolder>?) {
         val lock = wakeLock ?: getSystemService(PowerManager::class.java)

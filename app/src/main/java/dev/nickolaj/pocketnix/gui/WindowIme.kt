@@ -28,7 +28,7 @@ import dev.nickolaj.pocketnix.terminal.Modifier
 import dev.nickolaj.pocketnix.terminal.Modifiers
 
 /**
- * A window's phone keyboard (gui-apps.md, Input): the InputConnection
+ * A window's phone keyboard (docs/gui.md, Input): the InputConnection
  * Android's IME types into. While the window's client has a text input
  * focused, it follows that text input's state and sends `ime` edits;
  * otherwise committed text is typed as keys. It also takes the keyboard

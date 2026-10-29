@@ -17,7 +17,7 @@ data class SharedFolder(val name: String, val uri: String, val writable: Boolean
 
 /**
  * The folders the user shares with the guest: device state, so the app owns
- * it (design.md, Configuration). Each holds a persisted tree permission.
+ * it (docs/configuration.md, Shared Android folders). Each holds a persisted tree permission.
  */
 class SharedFolders(private val context: Context) {
     private val prefs = context.getSharedPreferences("host-folders", Context.MODE_PRIVATE)

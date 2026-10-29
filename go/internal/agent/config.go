@@ -76,8 +76,7 @@ type ShareConfig struct {
 	Command   string `json:"command,omitempty"`
 }
 
-// UpdatesConfig names where updated systems come from (design.md, Updates
-// and recovery). A check tries BuildHost, then Published.
+// UpdatesConfig names where updated systems come from (docs/updates.md). A check tries BuildHost, then Published.
 type UpdatesConfig struct {
 	BuildHost *BuildHost `json:"buildHost,omitempty"`
 	Published *Published `json:"published,omitempty"`

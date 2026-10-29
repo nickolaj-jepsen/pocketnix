@@ -11,7 +11,7 @@ sealed interface VmState {
     data class Failed(val message: String) : VmState
 }
 
-/** The set-once hardware the app UI owns (design.md, Configuration). */
+/** The set-once hardware the app UI owns (docs/configuration.md). */
 data class VmSettings(
     val memoryMb: Int,
     /** 1, or 0 for one vCPU per host core. */

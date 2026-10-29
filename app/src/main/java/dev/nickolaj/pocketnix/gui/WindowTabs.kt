@@ -41,7 +41,7 @@ interface WindowHost {
     /** The toplevel changed: its title, app id, app-list entry, size or minimum. */
     fun toplevelChanged()
 
-    /** The app's settings changed (gui-apps.md, Per-app settings): they apply at once. */
+    /** The app's settings changed (docs/gui.md, Size): they apply at once. */
     fun settingsChanged()
 
     fun cursor(name: String)

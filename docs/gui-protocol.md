@@ -1,10 +1,10 @@
 # GUI protocol
 
-The wire between the guest compositor (`pocketnix-compositor`) and the app,
-for the decisions in `gui-apps.md`. The agent only carries it. This page
-specifies what steps 1 to 3 need and reserves names for later steps, so that
-those steps only add things. The last section is the contract between the
-compositor, the agent, the NixOS module and the app.
+The wire between the guest compositor (`pocketnix-compositor`) and the app
+(see [GUI apps](gui.md) for the user-facing side). The agent only carries it.
+Names for features not built yet are reserved at the end, so adding them only
+adds things. The last section is the contract between the compositor, the
+agent, the NixOS module and the app.
 
 ## Transport
 
@@ -23,7 +23,7 @@ compositor, the agent, the NixOS module and the app.
   type is binary.
 - A receiver skips frame types it doesn't know, ignores JSON messages with an
   unknown `type`, and ignores unknown JSON fields and trailing bytes after the
-  binary fields it knows. That is how later steps extend the protocol. A type
+  binary fields it knows. That is how the protocol is extended. A type
   number or message name never changes meaning; an incompatible change bumps
   the version.
 - Any other violation (bad length, malformed JSON, a commit that doesn't
@@ -33,26 +33,26 @@ compositor, the agent, the NixOS module and the app.
 
 ### Frame types
 
-| type | name | direction | step |
-|---|---|---|---|
-| `0x00` | JSON | both | 1 |
-| `0x01` | COMMIT | compositor → app | 1 |
-| `0x02` | COMMIT_DATA | compositor → app | 1 |
-| `0x03` | ICON | compositor → app | 2 |
-| `0x04` | CURSOR_IMAGE | compositor → app | reserved, 4 |
-| `0x10` | PRESENTED | app → compositor | 1 |
-| `0x20` | POINTER_MOTION | app → compositor | 1 |
-| `0x21` | POINTER_BUTTON | app → compositor | 1 |
-| `0x22` | POINTER_AXIS | app → compositor | 1 |
-| `0x23` | POINTER_LEAVE | app → compositor | 1 |
-| `0x24` | POINTER_RELATIVE | app → compositor | reserved |
-| `0x30` | KEY | app → compositor | 1 |
-| `0x31` | MODIFIERS | app → compositor | 1 |
-| `0x40` | TOUCH_DOWN | app → compositor | 3 |
-| `0x41` | TOUCH_UP | app → compositor | 3 |
-| `0x42` | TOUCH_MOTION | app → compositor | 3 |
-| `0x43` | TOUCH_CANCEL | app → compositor | 3 |
-| `0x44` | TOUCH_FRAME | app → compositor | 3 |
+| type | name | direction |
+|---|---|---|
+| `0x00` | JSON | both |
+| `0x01` | COMMIT | compositor → app |
+| `0x02` | COMMIT_DATA | compositor → app |
+| `0x03` | ICON | compositor → app |
+| `0x04` | CURSOR_IMAGE (reserved) | compositor → app |
+| `0x10` | PRESENTED | app → compositor |
+| `0x20` | POINTER_MOTION | app → compositor |
+| `0x21` | POINTER_BUTTON | app → compositor |
+| `0x22` | POINTER_AXIS | app → compositor |
+| `0x23` | POINTER_LEAVE | app → compositor |
+| `0x24` | POINTER_RELATIVE (reserved) | app → compositor |
+| `0x30` | KEY | app → compositor |
+| `0x31` | MODIFIERS | app → compositor |
+| `0x40` | TOUCH_DOWN | app → compositor |
+| `0x41` | TOUCH_UP | app → compositor |
+| `0x42` | TOUCH_MOTION | app → compositor |
+| `0x43` | TOUCH_CANCEL | app → compositor |
+| `0x44` | TOUCH_FRAME | app → compositor |
 
 ## Session
 
@@ -81,9 +81,9 @@ dialogs included, as a window of its own; version 2 draws a child toplevel
 inside its parent's window (see Dialogs), which changes what `toplevel` and a
 commit's `window` mean for it. Version 1 was never released, so neither side
 speaks it: both send `minVersion` 2. Everything else version 2 adds to
-version 1 is new messages, fields and frame types, and so is everything step
-3 adds: a side that lacks them behaves as in step 2 (a `toplevel` without
-`touch` has none, so the app uses Pointer mode).
+version 1 is new messages, fields and frame types. A side that lacks one
+behaves as if it were absent (a `toplevel` without `touch` has none, so the
+app uses Pointer mode).
 
 ### Replay
 
@@ -130,20 +130,20 @@ other than frame callbacks pausing while no app is connected.
   window's `scale`: an edge at logical `l` is at `round(l × scale)`, and a
   size is the difference of its rounded edges. The app does no scale
   arithmetic for placement.
-- Cursor surfaces aren't sent before step 4 (see `cursor`).
+- Cursor surfaces aren't sent (see `cursor`).
 
 ### Scale
 
 - A window's `scale` (from `window`) is the display's density times the
   app's size factor for it, which the app lowers when the window's minimum
-  size doesn't fit (`gui-apps.md`, Scale). Every surface drawn in the window
+  size doesn't fit ([GUI apps](gui.md#size)). Every surface drawn in the window
   renders at it, whichever toplevel or client it belongs to: the compositor
   gives each the window's preferred fractional scale and `ceil` of it as
   `wl_surface.preferred_buffer_scale`.
 - Everything a client places is in its window's logical space and becomes
   window pixels through that one scale: subsurface offsets, popup
   positions, dialog placement, input regions, the text input's cursor
-  rectangle and, from step 4, the cursor hotspot. Popup positioners are
+  rectangle and, once CURSOR_IMAGE exists, the cursor hotspot. Popup positioners are
   solved against the window's logical size (`width / scale` ×
   `height / scale`). Input goes the other way: pointer and touch positions
   are divided by the window's scale before hit-testing.
@@ -169,7 +169,7 @@ other than frame callbacks pausing while no app is connected.
 | `toplevel-request` | `id`, `request` | The client asked for `minimize`, `maximize`, `unmaximize`, `fullscreen`, `unfullscreen`, `move` or `resize`. Advisory; the app may ignore any of them. Never sent for a dialog. A full screen or maximize request (or its undoing) made before the app knew the toplevel, as a client starting full screen makes before its first commit, follows its first `toplevel` message on a connection; only the last of each pair is kept. The app remembers full screen for a window it has no activity for yet. |
 | `surface` | `id`, `window`, `toplevel`, `role`, `parent` | A surface joined a window, before its first commit. `toplevel`: the toplevel whose tree it's in (its own id for a toplevel's root surface; a popup belongs to the toplevel it was opened from). `role`: `"toplevel"`, `"subsurface"` or `"popup"`. `parent`: the parent surface's id (0 for a toplevel's root surface, a dialog's included). |
 | `surface-removed` | `id` | Drop the layer and its content. |
-| `cursor` | `window`, `name` | The pointer's cursor over `window`. `name` is a cursor-shape-v1 name (`"default"`, `"text"`, `"pointer"`, `"grab"`, `"ew-resize"`, …) or `"hidden"`. A client-drawn cursor surface comes as `"default"` until CURSOR_IMAGE (step 4). |
+| `cursor` | `window`, `name` | The pointer's cursor over `window`. `name` is a cursor-shape-v1 name (`"default"`, `"text"`, `"pointer"`, `"grab"`, `"ew-resize"`, …) or `"hidden"`. A client-drawn cursor surface comes as `"default"` (CURSOR_IMAGE is reserved). |
 | `apps` | `apps` | The app list (see The app list). |
 | `launch-started` | `id` | A launch's process started (see Launching). |
 | `launch-failed` | `id`, `reason`, `message` | A launch ended without a window (see Launching). |
@@ -313,7 +313,7 @@ applying that surface's commits in order. For a BUFFER commit:
 3. The rects' pixels are written over the result.
 
 The reference copy is what hashes are computed over. The app may keep it as
-a CPU copy (the spike did) or rebuild it from its buffers.
+a CPU copy or rebuild it from its buffers.
 
 ### Groups
 
@@ -406,7 +406,7 @@ its zoom transform before sending it.
 
 ### Touch
 
-The app sends TOUCH_* in Touch mode (`gui-apps.md`, Input), for a window
+The app sends TOUCH_* in Touch mode ([GUI apps](gui.md#input)), for a window
 whose `toplevel` has `touch: true`. A window whose client has no `wl_touch`
 gets Pointer mode instead.
 
@@ -455,7 +455,7 @@ above, and need nothing else on the wire.
 - Android draws no pointer for a touchscreen, so in Trackpad mode the app
   draws its own cursor at that position, picking the image by `cursor`'s
   `name` and drawing none for `"hidden"`. A client-drawn cursor surface
-  comes as `"default"` until CURSOR_IMAGE (step 4).
+  comes as `"default"` (CURSOR_IMAGE is reserved).
 
 ### Keyboard layout
 
@@ -885,27 +885,27 @@ for each remaining byte b:
     h = (h ^ b) × 0x100000001b3
 ```
 
-All arithmetic wraps at 64 bits. This is the spikes' `row_hash`, with rows
+All arithmetic wraps at 64 bits. Rows are
 packed so stride padding doesn't count. JVM tests run the decoder against a
 real compositor with `hashes: true` and compare every hash.
 
-## Reserved for later steps
+## Reserved
 
-Names only. Each step specifies its own when it lands, and none of these
-change earlier steps' messages.
+Names only, specified when they're built. None of them changes an existing
+message.
 
-- **Step 4, docked polish:** CURSOR_IMAGE `0x04`, the client's cursor
+- Docked polish: CURSOR_IMAGE `0x04`, the client's cursor
   surface at its window's scale with the hotspot in window pixels; toplevel
   icons (xdg-toplevel-icon) as an `icon` key in `toplevel`, rendered
   through `icon` and ICON; a `decoration` field in `window`.
-- **Later:** POINTER_RELATIVE `0x24`, for relative-pointer and pointer
+- POINTER_RELATIVE `0x24`, for relative-pointer and pointer
   constraints with Android's pointer capture.
 
-No clipboard, ever: the data-control bridge handles it (`gui-apps.md`).
+No clipboard: the compositor offers data-control, for a guest-side bridge to the clipboard integration.
 
 ## Contract
 
-Normative for steps 1 to 3. Paths are under the session user's runtime
+Normative. Paths are under the session user's runtime
 directory, `$XDG_RUNTIME_DIR` (`/run/user/<uid>`).
 
 ### Compositor
@@ -927,9 +927,9 @@ directory, `$XDG_RUNTIME_DIR` (`/run/user/<uid>`).
 - `--log-hashes`, or `POCKETNIX_COMPOSITOR_LOG_HASHES=1`, logs one stderr line
   per BUFFER commit: `hash surface=<id> seq=<seq> <width>x<height> <hash as %016x>`.
 - Logging follows `RUST_LOG`.
-- It offers xdg-activation-v1, xdg-dialog-v1 and xdg-foreign-v2 (step 2).
+- It offers xdg-activation-v1, xdg-dialog-v1 and xdg-foreign-v2.
 - Its seat has the touch capability, and it offers `zwp_text_input_manager_v3`
-  with its own dispatch and no input-method-v2 (step 3).
+  with its own dispatch and no input-method-v2.
 - Its keymap comes from its environment's `XKB_DEFAULT_*` (`us` without
   them) until the app sends a `keyboard-layout`; the processes it launches
   get that layout as `XKB_DEFAULT_LAYOUT` and `XKB_DEFAULT_VARIANT`.

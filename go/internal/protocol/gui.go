@@ -1,6 +1,6 @@
 package protocol
 
-// GUI apps (docs/gui-apps.md). The GUI protocol itself is the compositor's
+// GUI apps (docs/gui.md). The GUI protocol itself is the compositor's
 // and the app's (docs/gui-protocol.md); the agent only carries it.
 
 // StreamGUI is spliced byte for byte to the guest compositor's GUI socket

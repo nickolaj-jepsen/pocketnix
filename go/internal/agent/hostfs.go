@@ -22,7 +22,7 @@ import (
 )
 
 // Android folders the app shares, mounted with FUSE under the mount point
-// (design.md, Integrations and UX). The agent can't dial the app, so the app
+// (docs/architecture.md, Integrations). The agent can't dial the app, so the app
 // keeps hostfs streams open per folder and answers the file operations the
 // agent sends on them; without one, operations fail with EIO and the mount
 // stays, so a shell inside it keeps its cwd.

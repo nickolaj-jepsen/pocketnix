@@ -1,7 +1,7 @@
 package protocol
 
-// The phone and the guest's power and network (design.md, Lifecycle and
-// Configuration): the guest asks the phone to stay awake, and the phone
+// The phone and the guest's power and network (docs/configuration.md,
+// Power and Phone state): the guest asks the phone to stay awake, and the phone
 // tells the guest what it's on.
 
 // TypeWake is the agent's push of [Wake], on connect and on every change.

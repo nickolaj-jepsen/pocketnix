@@ -7,7 +7,7 @@ import (
 	"io"
 )
 
-// Android folders mounted in the guest (design.md, Integrations and UX). The
+// Android folders mounted in the guest (docs/architecture.md, Integrations). The
 // app grants folders and announces them with a host-folders request; the
 // agent mounts each with FUSE and asks the app for its files over hostfs
 // streams, which only the app can dial.

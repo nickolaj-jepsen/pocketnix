@@ -1,6 +1,6 @@
 package protocol
 
-// Transfers (design.md, Integrations and UX): guest requests the app carries
+// Transfers (docs/architecture.md, Integrations): guest requests the app carries
 // out with Android's pickers, share sheet or clipboard, and the bytes that
 // cross for them. The agent can't dial the app, so each is an [Event] with a
 // Ref; the app answers on streams whose Hello carries that Ref, and ends the

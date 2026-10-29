@@ -91,7 +91,7 @@ internal class TouchPoints(private val window: Int, private val send: (ByteArray
 
 /**
  * Two or more fingers in Pointer and Trackpad modes: a drag scrolls the
- * window at [scrollAt], a pinch zooms and pans the view (gui-apps.md,
+ * window at [scrollAt], a pinch zooms and pans the view (docs/gui.md,
  * Input). Which one is settled by the first movement past the slop.
  */
 internal class TwoFingers(

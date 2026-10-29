@@ -18,7 +18,7 @@ import dev.nickolaj.pocketnix.files.GuestDocumentsProvider
 import org.json.JSONObject
 
 /**
- * Guest programs reaching Android (design.md, Integrations and UX):
+ * Guest programs reaching Android (docs/architecture.md, Integrations):
  * a notification becomes one (with ids and actions: [GuestNotifications]), `xdg-open` opens a URL or a file
  * (through the file provider), a share goes to the share sheet, and a guest
  * copy sets the clipboard.

@@ -8,7 +8,7 @@ import org.json.JSONObject
 import kotlin.math.ceil
 import kotlin.math.min
 
-/** A window's size preset: its scale is the display's density times [factor] (gui-apps.md, Scale). */
+/** A window's size preset: its scale is the display's density times [factor] (docs/gui.md, Size). */
 enum class SizePreset(val id: String, val label: String, val factor: Float) {
     PHONE("phone", "Phone", 1f),
     COMPACT("compact", "Compact", 0.75f),
@@ -20,7 +20,7 @@ enum class SizePreset(val id: String, val label: String, val factor: Float) {
     }
 }
 
-/** How touches reach a window (gui-apps.md, Input). */
+/** How touches reach a window (docs/gui.md, Input). */
 enum class InputMode(val id: String, val label: String) {
     TOUCH("touch", "Touch"),
     POINTER("pointer", "Pointer"),
@@ -137,7 +137,7 @@ class PrefsOverrideStore(context: Context) : OverrideStore {
     }
 }
 
-/** The automatic fit (gui-apps.md, Scale). */
+/** The automatic fit (docs/gui.md, Size). */
 object WindowFit {
     /**
      * The scale for a [width] × [height] window: [density] × [factor],
