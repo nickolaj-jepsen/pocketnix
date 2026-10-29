@@ -1,6 +1,13 @@
 {
   description = "pocketnix: NixOS as a real host on Android, under AVF (pKVM)";
 
+  # CI's builds: the aarch64 agent, compositor and kernel. templates/default/flake.nix has a copy,
+  # since Nix ignores an input's nixConfig.
+  nixConfig = {
+    extra-substituters = ["https://pocketnix.cachix.org"];
+    extra-trusted-public-keys = ["pocketnix.cachix.org-1:KklXzNwjpGzopowh99lwsL3IeaidLtH+Fw7wniLw9Nw="];
+  };
+
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
 
   outputs = {

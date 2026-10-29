@@ -11,8 +11,8 @@ on each run.
 
 The guest is `aarch64-linux`. On x86_64, building the example image needs
 `boot.binfmt.emulatedSystems = ["aarch64-linux"]` or an aarch64 builder.
-CI pushes what it builds to the `pocketnix` Cachix cache (`cachix use
-pocketnix`), so a commit CI has built downloads its aarch64 agent, kernel and
+CI pushes what it builds to the `pocketnix` Cachix cache, which the flake's
+`nixConfig` offers ([Getting started](getting-started.md#requirements)), so a commit CI has built downloads its aarch64 agent, kernel and
 compositor instead of emulating them; a guest whose nixpkgs differs from this
 flake's builds its own.
 

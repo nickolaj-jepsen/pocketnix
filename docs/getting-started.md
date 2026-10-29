@@ -9,7 +9,15 @@
 - Nix with flakes, on a machine that can build `aarch64-linux`:
   - an aarch64 Linux machine or remote builder, or
   - x86_64 with `boot.binfmt.emulatedSystems = ["aarch64-linux"];`. Most of the
-    closure comes from cache.nixos.org; the agent builds under emulation.
+    closure comes from cache.nixos.org, and the agent, compositor and kernel
+    from the pocketnix cache; without it they build under emulation.
+- The pocketnix cache: the template's flake offers it, and Nix asks once to
+  accept it (or pass `--accept-flake-config`). Unless you're a trusted Nix user,
+  Nix uses it only if `https://pocketnix.cachix.org` is in your
+  `nix.settings.trusted-substituters`; you can also add it, with the key from
+  pocketnix's `flake.nix`, to `nix.settings.substituters` and
+  `trusted-public-keys`. A flake whose pocketnix input `follows` its own
+  nixpkgs builds the agent and compositor itself.
 - Free space on the phone for the disk (`--disk`, or set in the app).
 
 ## 1. Describe the guest
