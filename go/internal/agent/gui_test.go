@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/agent"
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/protocol"
 )
@@ -25,10 +27,11 @@ func guiConfig(socket string) map[string]any {
 	return cfg
 }
 
-// fakeCompositor accepts GUI connections on path and hands them over.
+// fakeCompositor accepts GUI connections on path and passes on the streams
+// the agent hands over on them.
 func fakeCompositor(t *testing.T, path string) <-chan net.Conn {
 	t.Helper()
-	l, err := net.Listen("unix", path)
+	l, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,14 +39,43 @@ func fakeCompositor(t *testing.T, path string) <-chan net.Conn {
 	conns := make(chan net.Conn, 4)
 	go func() {
 		for {
-			c, err := l.Accept()
+			c, err := l.AcceptUnix()
 			if err != nil {
 				return
 			}
-			conns <- c
+			conns <- handedOver(t, c)
 		}
 	}()
 	return conns
+}
+
+// handedOver reads the agent's handover from c and returns the stream it
+// carries; c itself on anything else, which the test then sees.
+func handedOver(t *testing.T, c *net.UnixConn) net.Conn {
+	buf, oob := make([]byte, 16), make([]byte, unix.CmsgSpace(4))
+	c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	n, oobn, _, _, err := c.ReadMsgUnix(buf, oob)
+	c.SetReadDeadline(time.Time{})
+	if err != nil || n != 1 || buf[0] != 0 {
+		return c
+	}
+	msgs, err := unix.ParseSocketControlMessage(oob[:oobn])
+	if err != nil || len(msgs) != 1 {
+		return c
+	}
+	fds, err := unix.ParseUnixRights(&msgs[0])
+	if err != nil || len(fds) != 1 {
+		return c
+	}
+	c.Close()
+	f := os.NewFile(uintptr(fds[0]), "handed over")
+	defer f.Close()
+	stream, err := net.FileConn(f)
+	if err != nil {
+		t.Errorf("the handed-over descriptor: %v", err)
+		return c
+	}
+	return stream
 }
 
 func accepted(t *testing.T, conns <-chan net.Conn) net.Conn {
@@ -68,7 +100,7 @@ func readN(t *testing.T, r net.Conn, n int) string {
 	return string(b)
 }
 
-func TestGUISplicesBothWays(t *testing.T) {
+func TestGUIHandsTheStreamToTheCompositor(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "gui.sock")
 	conns := fakeCompositor(t, sock)
 	h := start(t, guiConfig(sock), unixAddr)

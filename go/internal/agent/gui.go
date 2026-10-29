@@ -3,10 +3,12 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -14,8 +16,8 @@ import (
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/protocol"
 )
 
-// serveGUI splices the stream to the compositor's GUI socket. It never reads
-// the GUI protocol: the compositor and the app speak it end to end.
+// serveGUI hands the stream to the compositor over its GUI socket, so the
+// compositor and the app speak the GUI protocol to each other directly.
 func (s *Server) serveGUI(c net.Conn) {
 	cfg := s.config()
 	if cfg.GUI == nil || !cfg.GUI.Enable {
@@ -31,7 +33,33 @@ func (s *Server) serveGUI(c net.Conn) {
 	if protocol.WriteJSON(c, s.hello()) != nil {
 		return
 	}
-	splice(c, g)
+	if err := handOver(c, g); err != nil {
+		log.Printf("gui: handing the stream to the compositor: %v", err)
+	}
+}
+
+// handOver sends c's descriptor to the compositor over g, as one zero byte
+// carrying it (SCM_RIGHTS).
+func handOver(c, g net.Conn) error {
+	sc, ok := c.(syscall.Conn)
+	if !ok {
+		return fmt.Errorf("a %T has no descriptor", c)
+	}
+	uc, ok := g.(*net.UnixConn)
+	if !ok {
+		return fmt.Errorf("the GUI socket is a %T", g)
+	}
+	rc, err := sc.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var werr error
+	if err := rc.Control(func(fd uintptr) {
+		_, _, werr = uc.WriteMsgUnix([]byte{0}, unix.UnixRights(int(fd)), nil)
+	}); err != nil {
+		return err
+	}
+	return werr
 }
 
 // guiSocket returns the session user's runtime directory and the GUI

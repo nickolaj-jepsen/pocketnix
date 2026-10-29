@@ -3,8 +3,8 @@ package protocol
 // GUI apps (docs/gui.md). The GUI protocol itself is the compositor's
 // and the app's (docs/gui-protocol.md); the agent only carries it.
 
-// StreamGUI is spliced byte for byte to the guest compositor's GUI socket
-// after the agent's Hello. The agent refuses it while [GUI.Enable] is off.
+// StreamGUI is handed to the guest compositor, over its GUI socket, after
+// the agent's Hello. The agent refuses it while [GUI.Enable] is off.
 const StreamGUI = "gui"
 
 // GUI is the module's GUI configuration, in [Config].

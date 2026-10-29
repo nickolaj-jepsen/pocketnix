@@ -9,6 +9,7 @@ use std::io::BufReader;
 use std::io::Read;
 use std::io::Write;
 use std::os::fd::AsFd;
+use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd;
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::FileExt;
@@ -229,6 +230,43 @@ fn be32(b: &[u8], at: usize) -> u32 {
 impl App {
     fn connect(compositor: &Compositor) -> Self {
         let stream = UnixStream::connect(compositor.gui_socket()).unwrap();
+        stream.set_read_timeout(Some(TIMEOUT)).unwrap();
+        let mut app = App {
+            stream,
+            layers: HashMap::new(),
+            auto_ack: false,
+            hashed: 0,
+            icons: Vec::new(),
+        };
+        app.send_json(json!({"type": "hello", "version": 2, "minVersion": 2, "app": "test", "hashes": true}));
+        app
+    }
+
+    /// Connects the way the agent does: hands one end of a socket pair over
+    /// on the GUI socket and speaks the protocol on the other.
+    fn handed_over(compositor: &Compositor) -> Self {
+        let agent = UnixStream::connect(compositor.gui_socket()).unwrap();
+        let (stream, theirs) = UnixStream::pair().unwrap();
+        let mut byte = [0u8];
+        let mut iov = libc::iovec { iov_base: byte.as_mut_ptr().cast(), iov_len: 1 };
+        let mut control = [0u64; 4];
+        // SAFETY: an all-zero msghdr is a valid empty one; the CMSG_* macros
+        // fill in one SCM_RIGHTS header with a descriptor we own, in control.
+        let sent = unsafe {
+            let mut msg: libc::msghdr = std::mem::zeroed();
+            msg.msg_iov = &mut iov;
+            msg.msg_iovlen = 1;
+            msg.msg_control = control.as_mut_ptr().cast();
+            msg.msg_controllen = libc::CMSG_SPACE(4) as _;
+            let c = libc::CMSG_FIRSTHDR(&msg);
+            (*c).cmsg_level = libc::SOL_SOCKET;
+            (*c).cmsg_type = libc::SCM_RIGHTS;
+            (*c).cmsg_len = libc::CMSG_LEN(4) as _;
+            libc::CMSG_DATA(c).cast::<libc::c_int>().write_unaligned(theirs.as_raw_fd());
+            libc::sendmsg(agent.as_raw_fd(), &msg, 0)
+        };
+        assert_eq!(sent, 1, "{}", std::io::Error::last_os_error());
+        drop((agent, theirs));
         stream.set_read_timeout(Some(TIMEOUT)).unwrap();
         let mut app = App {
             stream,
@@ -795,6 +833,14 @@ fn a_client_window_reaches_the_app_with_matching_pixels() {
     while app.read_frame().is_some() {
         assert!(Instant::now() < deadline, "the old connection stayed open");
     }
+}
+
+#[test]
+fn a_stream_handed_over_on_the_gui_socket_becomes_the_connection() {
+    let compositor = Compositor::start("handover");
+    let mut app = App::handed_over(&compositor);
+    app.wait_json("hello");
+    app.wait_json("ready");
 }
 
 #[test]

@@ -9,9 +9,10 @@ agent, the NixOS module and the app.
 ## Transport
 
 - The app opens an agent connection whose Hello names stream `gui`
-  (`protocol.StreamGUI`). After the agent's Hello line, the agent splices the
-  connection to the compositor's GUI socket byte for byte. From there on,
-  every byte belongs to this protocol.
+  (`protocol.StreamGUI`). After the agent's Hello line, the agent hands the
+  connection itself to the compositor (see Contract), so the app and the
+  compositor share one socket. From there on, every byte belongs to this
+  protocol.
 - Both directions carry frames framed like PTY frames: `[type u8][length u32
   BE][payload]`, payload at most `MaxFramePayload` (1 MiB). A longer length
   is a protocol error.
@@ -921,7 +922,9 @@ directory, `$XDG_RUNTIME_DIR` (`/run/user/<uid>`).
     the usual `<NAME>.lock`
 - It sets `WAYLAND_DISPLAY` for the processes it starts.
 - It accepts GUI connections from its own uid and root (`SO_PEERCRED`), one
-  at a time, the newest winning.
+  at a time, the newest winning. A connection whose first byte carries a
+  descriptor is the agent handing over the app's stream: that descriptor
+  replaces it.
 - It keeps running, with its clients, while no app is connected.
 - `--log-hashes`, or `POCKETNIX_COMPOSITOR_LOG_HASHES=1`, logs one stderr line
   per BUFFER commit: `hash surface=<id> seq=<seq> <width>x<height> <hash as %016x>`.
@@ -947,8 +950,11 @@ directory, `$XDG_RUNTIME_DIR` (`/run/user/<uid>`).
   - With GUI off, the agent rejects it with an Error, "GUI is not enabled".
   - Otherwise it dials the GUI socket and rejects with the dial error if that
     fails.
-  - On success it sends its Hello and splices raw bytes both ways until either
-    side closes. It never parses the GUI protocol.
+  - On success it sends its Hello, then sends the stream's descriptor over
+    the GUI socket: one zero byte carrying it (`SCM_RIGHTS`), and closes its
+    own copies. It never reads past the app's Hello line, so the compositor
+    gets the stream from the app's first GUI byte, and it never parses the
+    GUI protocol.
 - Agent config file: `guiSocket` (`agent.File.GUISocket`) is the GUI
   socket it dials.
 - Control stream `Config` push: `gui` (`protocol.GUI`), the module's

@@ -15,7 +15,7 @@
 //   - udp: datagrams ([WriteDatagram]) relayed to a UDP port on the guest's
 //     loopback, one stream per client address on the phone.
 //   - font: the configured font file's bytes, then EOF.
-//   - gui: raw bytes spliced to the guest compositor ([StreamGUI]).
+//   - gui: the stream itself, handed to the guest compositor ([StreamGUI]).
 package protocol
 
 // Version is bumped on any incompatible change. Additive changes (new

@@ -26,7 +26,7 @@ flowchart TB
   fwd -- forward streams --> agent
   agent --> shells
   guestcli -- /run/pocketnix/guest.sock --> agent
-  agent -- gui stream, spliced --> comp
+  agent -- gui stream, handed over --> comp
   ui --- android
 ```
 

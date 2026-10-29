@@ -7,6 +7,8 @@ use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Write;
 use std::os::fd::AsRawFd;
+use std::os::fd::FromRawFd;
+use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
@@ -79,6 +81,8 @@ pub struct Conn {
     discard: Arc<AtomicBool>,
     token: Option<RegistrationToken>,
     reader: FrameReader,
+    /// Nothing read yet: the connection may still be handed over.
+    fresh: bool,
     ready: bool,
     pub hashes: bool,
     seq: u32,
@@ -153,6 +157,42 @@ fn random_id() -> String {
         bytes = (t.as_nanos() as u64 ^ std::process::id() as u64).to_le_bytes();
     }
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Reads like `read`, also taking a descriptor sent with the bytes
+/// (`SCM_RIGHTS`); any more than one are closed.
+fn read_with_fd(stream: &UnixStream, buf: &mut [u8]) -> std::io::Result<(usize, Option<OwnedFd>)> {
+    let mut iov = libc::iovec { iov_base: buf.as_mut_ptr().cast(), iov_len: buf.len() };
+    // Aligned room for a few descriptors; the kernel drops what doesn't fit.
+    let mut control = [0u64; 8];
+    // SAFETY: an all-zero msghdr is a valid empty one.
+    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+    msg.msg_iov = &mut iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control.as_mut_ptr().cast();
+    msg.msg_controllen = std::mem::size_of_val(&control) as _;
+    // SAFETY: msg points at iov and control, which outlive the call.
+    let n = unsafe { libc::recvmsg(stream.as_raw_fd(), &mut msg, libc::MSG_CMSG_CLOEXEC) };
+    if n < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut fds = Vec::new();
+    // SAFETY: the CMSG_* macros walk the control data recvmsg filled in, and
+    // each SCM_RIGHTS descriptor is a new one this process now owns.
+    unsafe {
+        let mut c = libc::CMSG_FIRSTHDR(&msg);
+        while !c.is_null() {
+            if (*c).cmsg_level == libc::SOL_SOCKET && (*c).cmsg_type == libc::SCM_RIGHTS {
+                let count = ((*c).cmsg_len as usize - libc::CMSG_LEN(0) as usize) / std::mem::size_of::<libc::c_int>();
+                let data = libc::CMSG_DATA(c).cast::<libc::c_int>();
+                for i in 0..count {
+                    fds.push(OwnedFd::from_raw_fd(data.add(i).read_unaligned()));
+                }
+            }
+            c = libc::CMSG_NXTHDR(&msg, c);
+        }
+    }
+    Ok((n as usize, fds.into_iter().next()))
 }
 
 /// Whether the peer is our own user or root (the agent).
@@ -337,6 +377,7 @@ impl State {
                 discard,
                 token: Some(token),
                 reader: FrameReader::default(),
+                fresh: true,
                 ready: false,
                 hashes: false,
                 seq: 0,
@@ -351,13 +392,29 @@ impl State {
 
     fn gui_readable(&mut self, id: u64, stream: &UnixStream) -> PostAction {
         let mut buf = vec![0u8; 1 << 16];
-        let n = match (&*stream).read(&mut buf) {
-            Ok(0) => {
+        let fresh = self.gui.conns.get(&id).is_some_and(|c| c.fresh);
+        let read = if fresh {
+            read_with_fd(stream, &mut buf)
+        } else {
+            (&*stream).read(&mut buf).map(|n| (n, None))
+        };
+        let n = match read {
+            Ok((n, Some(fd))) => {
+                // gui-protocol.md's Agent contract: the agent hands over the app's stream.
+                self.close_conn(id, false, false);
+                if n != 1 || buf[0] != 0 {
+                    warn!("GUI connection {id}: a handover with {n} bytes");
+                } else if let Err(e) = self.add_conn(UnixStream::from(fd)) {
+                    warn!("GUI connection handed over: {e:#}");
+                }
+                return PostAction::Remove;
+            }
+            Ok((0, None)) => {
                 debug!("GUI connection {id} closed");
                 self.close_conn(id, false, false);
                 return PostAction::Remove;
             }
-            Ok(n) => n,
+            Ok((n, None)) => n,
             Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) => {
                 return PostAction::Continue;
             }
@@ -370,6 +427,7 @@ impl State {
         let Some(conn) = self.gui.conns.get_mut(&id) else {
             return PostAction::Remove;
         };
+        conn.fresh = false;
         conn.reader.push(&buf[..n]);
         loop {
             let Some(conn) = self.gui.conns.get_mut(&id) else {
