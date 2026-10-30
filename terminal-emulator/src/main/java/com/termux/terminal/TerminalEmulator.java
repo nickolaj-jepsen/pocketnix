@@ -546,6 +546,11 @@ public final class TerminalEmulator {
         return mScreen;
     }
 
+    /** The normal screen and its scrollback, which {@link #getScreen()} isn't while a program uses the alternate screen. */
+    public TerminalBuffer getMainBuffer() {
+        return mMainBuffer;
+    }
+
     public int getRows() {
         return mRows;
     }

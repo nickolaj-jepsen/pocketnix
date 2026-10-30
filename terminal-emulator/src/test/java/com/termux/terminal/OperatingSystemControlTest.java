@@ -205,4 +205,24 @@ public class OperatingSystemControlTest extends TerminalTestCase {
 		assertEnteringStringGivesResponse("\033]10;?\033\\", "\033]10;rgb:abab/cdcd/0000\033\\");
 	}
 
+	public void testHyperlinkList() {
+		withTerminalSized(10, 3);
+		enterString("\033]8;;https://a.example\033\\a\033]8;;\033\\ ");
+		enterString("\033]8;;https://b.example\033\\b\033]8;;\033\\");
+		// Unclosed: not a link yet.
+		enterString("\033]8;;https://open.example\033\\c");
+		List<String> urls = new ArrayList<>();
+		for (TerminalBuffer.Hyperlink h : mTerminal.getScreen().getHyperlinks()) urls.add(h.url);
+		assertEquals(List.of("https://b.example", "https://a.example"), urls);
+	}
+
+	public void testHyperlinkScrolledIntoHistory() {
+		withTerminalSized(10, 3);
+		enterString("x\r\n\033]8;;https://a.example\033\\link\033]8;;\033\\\r\n\r\n\r\n\r\n");
+		TerminalBuffer.Hyperlink h = mTerminal.getScreen().getHyperlinks().get(0);
+		assertEquals(-2, h.row);
+		assertEquals(0, h.col);
+		assertEquals("https://a.example", mTerminal.getScreen().getHyperlinkAt(h.row, h.col));
+	}
+
 }
