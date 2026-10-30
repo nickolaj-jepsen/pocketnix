@@ -24,11 +24,18 @@ class Tab(
         data class Pty(val profile: String) : Kind
     }
 
+    /** The title the user gave it, "" for none; see [tabTitle]. Not kept across app restarts. */
+    @Volatile var userTitle = ""
+        internal set
+
     val title: String
         get() = when (kind) {
             Kind.Console -> "console"
-            is Kind.Pty -> session.title?.takeIf { it.isNotBlank() } ?: kind.profile
+            is Kind.Pty -> tabTitle(userTitle, session.title, kind.profile)
         }
+
+    /** A terminal tab whose session is over; the console never ends. */
+    val ended: Boolean get() = kind != Kind.Console && !session.isRunning
 
     /** The agent's id for its session (`POCKETNIX_TAB`), "" for the console and until the agent answers. */
     val agentId: String get() = agentTab()
@@ -37,6 +44,9 @@ class Tab(
     @Volatile var attention = false
         internal set
 }
+
+/** A terminal tab's title: the [user]'s, else the shell's [osc] title, else the [profile]'s name; blank counts as unset. */
+fun tabTitle(user: String, osc: String?, profile: String): String = user.ifBlank { null } ?: osc?.takeIf { it.isNotBlank() } ?: profile
 
 /**
  * The open terminal tabs, and which tab the terminal screen shows: a
@@ -102,6 +112,27 @@ class Tabs(private val context: Context, consoleBackend: TerminalBackend, privat
         _tabs.update { it + tab }
         select(tab.id)
         return tab
+    }
+
+    /**
+     * Replaces ended tab [id] with a new one on [backend] in its place, with
+     * its id, kind and user title; the old transcript goes. A new [Tab]
+     * rather than a changed one: tabs are compared by identity, and an equal
+     * list wouldn't reach [tabs]' collectors. Null if [id] isn't an ended tab.
+     */
+    fun reopen(id: Int, backend: TerminalBackend, agentTab: () -> String = { "" }): Tab? {
+        val old = _tabs.value.firstOrNull { it.id == id }?.takeIf { it.ended } ?: return null
+        val tab = Tab(id, old.kind, session(backend), agentTab).apply { userTitle = old.userTitle }
+        _tabs.update { list -> list.map { if (it === old) tab else it } }
+        alerts?.seen(old)
+        return tab
+    }
+
+    /** Gives terminal tab [id] the user title [title]; blank clears it, so the shell's title shows again. */
+    fun rename(id: Int, title: String) {
+        val tab = _tabs.value.firstOrNull { it.id == id }?.takeIf { it.kind != Tab.Kind.Console } ?: return
+        tab.userTitle = title.trim()
+        _revision.update { it + 1 }
     }
 
     fun select(id: Int) {
