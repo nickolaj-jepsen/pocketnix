@@ -28,18 +28,21 @@ func offersConfig() map[string]any {
 	return cfg
 }
 
-// startOffers serves cfg with the port watcher polling the real /proc.
-func startOffers(t *testing.T, cfg map[string]any) *harness {
+// startOffers serves cfg at addr with the port watcher polling procNet
+// (empty: the real /proc), and opens a control stream.
+func startOffers(t *testing.T, cfg map[string]any, addr func(string) string, procNet string) (*harness, *client.Control) {
 	t.Helper()
-	h := start(t, cfg, unixAddr)
-	h.srv.PortPoll = 10 * time.Millisecond
+	h := start(t, cfg, addr)
+	// Answered, so Serve has counted its own port before the first scan.
+	ctl := control(t, h)
+	h.srv.PortPoll, h.srv.ProcNet = 10*time.Millisecond, procNet
 	h.srv.WatchPorts(nil)
 	t.Cleanup(func() {
 		// Offers off stops the watcher.
 		h.write(baseConfig())
 		h.srv.Reload()
 	})
-	return h
+	return h, ctl
 }
 
 func listen(t *testing.T) (net.Listener, int) {
@@ -83,8 +86,7 @@ func control(t *testing.T, h *harness) *client.Control {
 }
 
 func TestPortListenersFollowAListener(t *testing.T) {
-	h := startOffers(t, offersConfig())
-	ctl := control(t, h)
+	h, ctl := startOffers(t, offersConfig(), unixAddr, "")
 	l, port := listen(t)
 	awaitPorts(t, ctl, fmt.Sprint("with ", port), func(ps []int) bool { return slices.Contains(ps, port) })
 
@@ -228,8 +230,7 @@ func TestPortOffersOffLoadsNothing(t *testing.T) {
 }
 
 func TestReloadedForwardLeavesTheSnapshot(t *testing.T) {
-	h := startOffers(t, offersConfig())
-	ctl := control(t, h)
+	h, ctl := startOffers(t, offersConfig(), unixAddr, "")
 	_, port := listen(t)
 	awaitPorts(t, ctl, fmt.Sprint("with ", port), func(ps []int) bool { return slices.Contains(ps, port) })
 
@@ -247,8 +248,7 @@ func TestReloadedUserIsResolvedAgain(t *testing.T) {
 	if err != nil || other.Uid == strconv.Itoa(os.Getuid()) {
 		t.Skip("needs a user nobody other than the test's")
 	}
-	h := startOffers(t, offersConfig())
-	ctl := control(t, h)
+	h, ctl := startOffers(t, offersConfig(), unixAddr, "")
 	_, port := listen(t)
 	awaitPorts(t, ctl, fmt.Sprint("with ", port), func(ps []int) bool { return slices.Contains(ps, port) })
 
@@ -265,4 +265,24 @@ func TestReloadedUserIsResolvedAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	awaitPorts(t, ctl, fmt.Sprint("with ", port, " again"), func(ps []int) bool { return slices.Contains(ps, port) })
+}
+
+func TestAgentsOwnPortIsNeverOffered(t *testing.T) {
+	h, ctl := startOffers(t, offersConfig(), tcpAddr, "")
+	own := h.addr.(*net.TCPAddr).Port
+	_, port := listen(t)
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case p := <-ctl.PortListeners():
+			if slices.Contains(p.Ports, own) {
+				t.Fatalf("the agent's own port %d offered: %v", own, p.Ports)
+			}
+			if slices.Contains(p.Ports, port) {
+				return
+			}
+		case <-timeout:
+			t.Fatalf("no snapshot with %d within 5s", port)
+		}
+	}
 }

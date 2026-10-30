@@ -27,6 +27,7 @@ type harness struct {
 	srv    *agent.Server
 	cfg    string
 	client *client.Client
+	addr   net.Addr // the agent's listener
 }
 
 // start serves cfg on a fresh listener at the address made by addr.
@@ -45,6 +46,7 @@ func start(t *testing.T, cfg map[string]any, addr func(dir string) string) *harn
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { l.Close() })
+	h.addr = l.Addr()
 	go srv.Serve(l)
 	dial := l.Addr().Network() + ":" + l.Addr().String()
 	h.client = &client.Client{App: "test", Dial: func() (net.Conn, error) { return transport.Dial(dial) }}
