@@ -381,6 +381,12 @@ func (s *Server) serveForward(c net.Conn, port int) {
 		return
 	}
 	t, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 10*time.Second)
+	// A server for "localhost" may listen on ::1 alone (Node, Vite).
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		if t6, err6 := net.DialTimeout("tcp", net.JoinHostPort("::1", strconv.Itoa(port)), 10*time.Second); err6 == nil {
+			t, err = t6, nil
+		}
+	}
 	if err != nil {
 		reject(c, err.Error())
 		return

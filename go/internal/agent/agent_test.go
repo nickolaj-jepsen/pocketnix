@@ -480,6 +480,31 @@ func TestForward(t *testing.T) {
 	}
 }
 
+func TestForwardReachesIPv6Loopback(t *testing.T) {
+	l, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skip("no IPv6 loopback:", err)
+	}
+	defer l.Close()
+	go func() {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		c.Write([]byte("v6"))
+		c.Close()
+	}()
+	h := start(t, baseConfig(), unixAddr)
+	c, err := h.client.Forward(l.Addr().(*net.TCPAddr).Port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if got, err := io.ReadAll(c); err != nil || string(got) != "v6" {
+		t.Errorf("forward to a ::1 listener got %q, %v", got, err)
+	}
+}
+
 func TestUDP(t *testing.T) {
 	echo, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
