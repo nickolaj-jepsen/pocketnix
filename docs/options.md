@@ -256,6 +256,54 @@ null
 
 
 
+## pocketnix\.guest\.forwardOffers\.enable
+
+
+
+Offer a phone forward for each TCP port that ` pocketnix.guest.user `
+listens on, from 1024 up, on an address a forward reaches (` 0.0.0.0 `,
+` :: `, ` 127.0.0.1 ` or ` ::1 `) and not already in ` forwards `\. The app
+asks in a notification and picks the phone port: the same one, or
+the next free one above it\. An allowed forward lasts until its
+listener has been gone for a while or the guest reboots; put a port
+wanted for good in ` forwards `\.
+
+
+
+*Type:*
+boolean
+
+
+
+*Default:*
+
+```nix
+true
+```
+
+
+
+## pocketnix\.guest\.forwardOffers\.lan
+
+
+
+Allowed offers listen on every interface instead of 127\.0\.0\.1, as a forward with ` lan ` does\.
+
+
+
+*Type:*
+boolean
+
+
+
+*Default:*
+
+```nix
+false
+```
+
+
+
 ## pocketnix\.guest\.forwards
 
 
