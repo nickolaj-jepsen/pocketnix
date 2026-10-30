@@ -306,6 +306,22 @@ func procTable(t *testing.T, dir string, lines ...string) {
 	}
 }
 
+func TestSnapshotKeepsTheLowestPorts(t *testing.T) {
+	dir := t.TempDir()
+	me := strconv.Itoa(os.Getuid())
+	var lines []string
+	// Highest first: the cap keeps the lowest whatever the table's order.
+	for port := 20000 + protocol.MaxPortListeners + 7; port >= 20000; port-- {
+		lines = append(lines, me, fmt.Sprintf("127.0.0.1:%d", port))
+	}
+	procTable(t, dir, lines...)
+	_, ctl := startOffers(t, offersConfig(), unixAddr, dir)
+	p := awaitPorts(t, ctl, "with 20000", func(ps []int) bool { return slices.Contains(ps, 20000) })
+	if len(p.Ports) != protocol.MaxPortListeners || slices.Contains(p.Ports, 20000+protocol.MaxPortListeners) {
+		t.Errorf("snapshot of %d ports from 20000 = %v, want the lowest %d", protocol.MaxPortListeners+8, p.Ports, protocol.MaxPortListeners)
+	}
+}
+
 func TestForwardReachesOnlyTheSessionUsersListener(t *testing.T) {
 	echo, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

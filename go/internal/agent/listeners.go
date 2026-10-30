@@ -212,7 +212,12 @@ func (s *Server) portsChanged() {
 		return
 	}
 	cfg := s.config()
-	snap := protocol.PortListeners{LAN: cfg.ForwardOffers.LAN, Ports: offerable(p.socks, p.uid, cfg.Forwards, p.own)}
+	ports := offerable(p.socks, p.uid, cfg.Forwards, p.own)
+	if len(ports) > protocol.MaxPortListeners {
+		log.Printf("port offers: %d ports, offering the lowest %d", len(ports), protocol.MaxPortListeners)
+		ports = ports[:protocol.MaxPortListeners]
+	}
+	snap := protocol.PortListeners{LAN: cfg.ForwardOffers.LAN, Ports: ports}
 	if p.last != nil && p.last.LAN == snap.LAN && slices.Equal(p.last.Ports, snap.Ports) {
 		p.mu.Unlock()
 		return
