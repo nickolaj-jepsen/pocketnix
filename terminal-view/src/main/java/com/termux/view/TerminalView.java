@@ -621,9 +621,8 @@ public final class TerminalView extends View {
         }
     }
 
-    /** This must be called by the hosting activity in {@link Activity#onContextMenuClosed(Menu)}
-     * when context menu for the {@link TerminalView} is started by
-     * {@link TextSelectionCursorController#ACTION_MORE} is closed. */
+    /** Clears what {@link TextSelectionCursorController#ACTION_MORE} stored, once the client's context menu
+     * (see {@link TerminalViewClient#onContextMenu(float, float)}) closes. */
     public void onContextMenuClosed(Menu menu) {
         // Unset the stored text since it shouldn't be used anymore and should be cleared from memory
         unsetStoredSelectedText();
@@ -740,7 +739,7 @@ public final class TerminalView extends View {
             return true;
         } else if (event.isFromSource(InputDevice.SOURCE_MOUSE)) {
             if (event.isButtonPressed(MotionEvent.BUTTON_SECONDARY)) {
-                if (action == MotionEvent.ACTION_DOWN) showContextMenu();
+                if (action == MotionEvent.ACTION_DOWN) mClient.onContextMenu(event.getX(), event.getY());
                 return true;
             } else if (event.isButtonPressed(MotionEvent.BUTTON_TERTIARY)) {
                 ClipboardManager clipboardManager = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
@@ -1511,6 +1510,11 @@ public final class TerminalView extends View {
             return mTextSelectionCursorController.getSelectedText();
         else
             return null;
+    }
+
+    /** The selected text stored when the "More…" button was pressed, until {@link #unsetStoredSelectedText()}. */
+    public String getStoredSelectedText() {
+        return mTextSelectionCursorController == null ? null : mTextSelectionCursorController.getStoredSelectedText();
     }
 
     /** Unset the selected text stored before "MORE" button was pressed on the context menu. */

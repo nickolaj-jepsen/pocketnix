@@ -1,0 +1,85 @@
+package dev.nickolaj.pocketnix.ui
+
+import dev.nickolaj.pocketnix.agent.Forward
+import dev.nickolaj.pocketnix.gui.MenuAction
+import org.junit.Assert.assertEquals
+import org.junit.Test
+
+class TerminalMenuTest {
+    @Test
+    fun aTapOpensAHyperlinkUnlessTheProgramTracksTheMouse() {
+        assertEquals(TapAction.Open("https://a.example"), tapAction("https://a.example", mouseTracking = false))
+        assertEquals(TapAction.Keyboard, tapAction("https://a.example", mouseTracking = true))
+        assertEquals(TapAction.Keyboard, tapAction(null, mouseTracking = false))
+    }
+
+    private fun menu(links: List<String> = emptyList(), selection: String? = null, opened: MutableList<String> = mutableListOf(), reset: () -> Unit = {}) = terminalMenu(links, selection, open = { opened += it }, share = {}, shareTranscript = {}, reset = reset)
+
+    private fun List<MenuAction>.entry(label: String) = single { it.label == label }
+
+    @Test
+    fun entriesWithNothingToActOnAreDisabled() {
+        val items = menu()
+        assertEquals(false, items.entry("Open link…").enabled)
+        assertEquals(false, items.entry("Share selection").enabled)
+        assertEquals(true, items.entry("Share transcript").enabled)
+        assertEquals(true, items.entry("Reset terminal").enabled)
+    }
+
+    @Test
+    fun openLinkListsEachLinkAndOpensTheOneChosen() {
+        val opened = mutableListOf<String>()
+        val items = menu(links = listOf("https://b.example", "https://a.example"), selection = "picked", opened = opened)
+        val page = items.entry("Open link…")
+        assertEquals(true, page.enabled)
+        assertEquals(listOf("https://b.example", "https://a.example"), page.children.map { it.label })
+        page.children.single { it.label == "https://a.example" }.run()
+        assertEquals(listOf("https://a.example"), opened)
+        assertEquals(true, items.entry("Share selection").enabled)
+    }
+
+    @Test
+    fun aThrowingActionDoesNotEscape() {
+        menu(reset = { throw IllegalStateException("boom") }).entry("Reset terminal").run()
+    }
+
+    @Test
+    fun onlyWebAndGuestFileLinksOpen() {
+        assertEquals(LinkTarget.Web("https://x"), classifyLink("https://x", "box"))
+        assertEquals(LinkTarget.GuestFile("/home/u/a b"), classifyLink("file://box/home/u/a%20b", "box"))
+        assertEquals(LinkTarget.GuestFile("/etc/hosts"), classifyLink("file:///etc/hosts", "box"))
+        assertEquals(LinkTarget.GuestFile("/tmp/x"), classifyLink("file://localhost/tmp/x", null))
+        assertEquals(LinkTarget.OtherHost("other"), classifyLink("file://other/x", "box"))
+        for (url in listOf("intent:#Intent;action=android.intent.action.CALL;end", "content://com.android.contacts/contacts", "android-app://com.example/https/x")) {
+            assertEquals(url, true, classifyLink(url, "box") is LinkTarget.Refused)
+        }
+    }
+
+    @Test
+    fun localhostLinksFollowAListeningForward() {
+        val web = Forward("web", 8000, 18000, lan = false)
+        assertEquals("http://localhost:18000/a?b=c#d", rewriteLocalhost("http://localhost:8000/a?b=c#d", listOf(web)))
+        assertEquals("http://127.0.0.1:18000/", rewriteLocalhost("http://127.0.0.1:8000/", listOf(web)))
+        // Not listening (another app holds 18000), so not among the forwards given.
+        assertEquals("http://localhost:8000/", rewriteLocalhost("http://localhost:8000/", emptyList()))
+        assertEquals("http://localhost:8000/", rewriteLocalhost("http://localhost:8000/", listOf(web.copy(udp = true))))
+        assertEquals("http://example.org:8000/", rewriteLocalhost("http://example.org:8000/", listOf(web)))
+        assertEquals("http://localhost:8080/", rewriteLocalhost("http://localhost:8080/", listOf(Forward("same", 8080, 8080, lan = false))))
+    }
+
+    @Test
+    fun linksAreNewestFirstAndOnce() {
+        val rows = listOf(
+            BufferRow("old https://plain.example.", wraps = false),
+            BufferRow("printf 'https://plain.example\\n'", wraps = false),
+            BufferRow("link (see https://wrapped.exa", wraps = true),
+            BufferRow("mple/a_(b))", wraps = false),
+            BufferRow("x https://plain.example", wraps = false)
+        )
+        val hyperlinks = listOf(LinkAt("https://osc.example", row = -4, col = 0), LinkAt("file://box/tmp/f", row = 0, col = 0))
+        assertEquals(
+            listOf("https://plain.example", "file://box/tmp/f", "https://wrapped.example/a_(b)", "https://osc.example"),
+            linkList(plainLinks(rows, firstRow = -4) + hyperlinks)
+        )
+    }
+}

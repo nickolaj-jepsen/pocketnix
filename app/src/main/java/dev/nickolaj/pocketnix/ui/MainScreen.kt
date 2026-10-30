@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.systemBars
@@ -50,6 +51,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -96,8 +98,13 @@ fun MainScreen(vm: Vm) {
     var showPalette by remember { mutableStateOf(false) }
     var composerOpen by rememberSaveable { mutableStateOf(false) }
     var modifierRevision by remember { mutableIntStateOf(0) }
+    // Where the terminal's context menu opens, in the view's pixels; null while it's closed.
+    var terminalMenuAt by remember { mutableStateOf<IntOffset?>(null) }
     val controller = remember {
-        TerminalController(context, vm.tabs, vm.settings, Modifiers()) { modifierRevision++ }
+        TerminalController(context, vm.tabs, vm.settings, Modifiers()) { modifierRevision++ }.apply {
+            onOpenLink = vm.terminalActions::open
+            onContextMenu = { x, y -> terminalMenuAt = IntOffset(x.toInt(), y.toInt()) }
+        }
     }
 
     DisposableEffect(controller) { onDispose { controller.release() } }
@@ -281,6 +288,16 @@ fun MainScreen(vm: Vm) {
                 update = { it.visibility = if (shownWindow != 0) View.INVISIBLE else View.VISIBLE },
                 modifier = Modifier.fillMaxSize()
             )
+            // A zero-size anchor at the touch point: the menu drops from it.
+            Box(Modifier.offset { terminalMenuAt ?: IntOffset.Zero }) {
+                WindowMenu(
+                    expanded = terminalMenuAt != null,
+                    onDismiss = {
+                        terminalMenuAt = null
+                        controller.clearStoredSelection()
+                    }
+                ) { vm.terminalActions.menu(vm.tabs.current(), controller.storedSelection()) }
+            }
             if (shownWindow != 0) {
                 key(shownWindow) {
                     AndroidView(

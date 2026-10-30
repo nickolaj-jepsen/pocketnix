@@ -116,7 +116,7 @@ public class TextSelectionCursorController implements CursorController {
                 ClipboardManager clipboard = (ClipboardManager) terminalView.getContext().getSystemService(Context.CLIPBOARD_SERVICE);
                 menu.add(Menu.NONE, ACTION_COPY, Menu.NONE, R.string.copy_text).setShowAsAction(show);
                 menu.add(Menu.NONE, ACTION_PASTE, Menu.NONE, R.string.paste_text).setEnabled(clipboard != null && clipboard.hasPrimaryClip()).setShowAsAction(show);
-                menu.add(Menu.NONE, ACTION_MORE, Menu.NONE, R.string.text_selection_more);
+                menu.add(Menu.NONE, ACTION_MORE, Menu.NONE, R.string.text_selection_more).setShowAsAction(show);
                 return true;
             }
 
@@ -147,10 +147,13 @@ public class TextSelectionCursorController implements CursorController {
                         // selected text before MORE button was pressed since we are going to
                         // stop selection mode
                         mStoredSelectedText = getSelectedText();
+                        // The menu opens below the selection's start, read before stopping clears it.
+                        float x = mSelX1 * terminalView.mRenderer.getFontWidth();
+                        float y = (mSelY2 + 1 - terminalView.getTopRow()) * terminalView.mRenderer.getFontLineSpacing();
                         // The text selection needs to be stopped before showing context menu,
                         // otherwise handles will show above popup
                         terminalView.stopTextSelectionMode();
-                        terminalView.showContextMenu();
+                        terminalView.mClient.onContextMenu(x, y);
                         break;
                 }
 

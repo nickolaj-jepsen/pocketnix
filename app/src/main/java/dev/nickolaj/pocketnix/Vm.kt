@@ -8,6 +8,7 @@ import android.util.Log
 import dev.nickolaj.pocketnix.agent.AgentException
 import dev.nickolaj.pocketnix.agent.ControlChannel
 import dev.nickolaj.pocketnix.agent.FontCache
+import dev.nickolaj.pocketnix.agent.Forward
 import dev.nickolaj.pocketnix.agent.GuestConfig
 import dev.nickolaj.pocketnix.agent.GuestFiles
 import dev.nickolaj.pocketnix.agent.HostStateSync
@@ -35,6 +36,7 @@ import dev.nickolaj.pocketnix.terminal.Tab
 import dev.nickolaj.pocketnix.terminal.TabAlerts
 import dev.nickolaj.pocketnix.terminal.Tabs
 import dev.nickolaj.pocketnix.terminal.TerminalTheme
+import dev.nickolaj.pocketnix.ui.TerminalActions
 import java.io.File
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -93,6 +95,9 @@ class Vm(private val app: Context) {
     /** Forwards that couldn't listen, for the UI. */
     val forwardErrors: StateFlow<List<String>> = _forwardErrors.asStateFlow()
 
+    /** The TCP forwards listening on their phone port now, which a localhost link may be pointed at. */
+    fun listeningForwards(): List<Forward> = forwards.listening()
+
     private val _typeface = MutableStateFlow<Typeface?>(null)
 
     /** The module's font, or null for the default monospace. */
@@ -119,6 +124,11 @@ class Vm(private val app: Context) {
 
     private val bridge = GuestBridge(app) { control.config.value?.hostname }
     val transfers = Transfers(app, scope, control, bridge, ::files) { control.config.value?.hostname }
+
+    /** Links and shares from the terminal: see [TerminalActions]. */
+    val terminalActions = TerminalActions(app, scope, bridge, { control.config.value?.hostname }, ::listeningForwards) { path ->
+        control.call(JSONObject().put("type", "resolve-path").put("path", path)).optString("path")
+    }
     private var lastClipboardSent: Pair<String, List<String>>? = null
 
     /** The phone's network, power and timezone, watched while the agent is connected. */

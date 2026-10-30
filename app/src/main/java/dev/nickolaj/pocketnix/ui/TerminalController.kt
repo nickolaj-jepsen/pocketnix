@@ -11,6 +11,7 @@ import com.termux.terminal.TerminalSession
 import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
 import dev.nickolaj.pocketnix.Settings
+import dev.nickolaj.pocketnix.gui.guard
 import dev.nickolaj.pocketnix.terminal.ExtraKeys
 import dev.nickolaj.pocketnix.terminal.FnKeys
 import dev.nickolaj.pocketnix.terminal.KeyAction
@@ -38,6 +39,19 @@ class TerminalController(
         ?: (DEFAULT_TEXT_DP * context.resources.displayMetrics.density).toInt()
 
     private var tabsView: Tabs.View? = null
+
+    /** Opens a link the user tapped. */
+    var onOpenLink: (String) -> Unit = {}
+
+    /** The terminal's context menu is wanted at view-relative pixels: More… on a selection, or a right-click. */
+    var onContextMenu: (x: Float, y: Float) -> Unit = { _, _ -> }
+
+    /** The text selected when More… was chosen, until [clearStoredSelection]. */
+    fun storedSelection(): String? = view?.storedSelectedText
+
+    fun clearStoredSelection() {
+        view?.unsetStoredSelectedText()
+    }
 
     fun create(): TerminalView = TerminalView(context, null).also { v ->
         view = v
@@ -159,10 +173,17 @@ class TerminalController(
             return scale
         }
 
-        override fun onSingleTapUp(e: MotionEvent?) {
-            val v = view ?: return
-            v.requestFocus()
-            context.getSystemService(InputMethodManager::class.java)?.showSoftInput(v, 0)
+        override fun onSingleTapUp(e: MotionEvent?) = guard("terminal tap") {
+            val v = view ?: return@guard
+            val link = e?.let { v.getHyperlinkAt(it.x, it.y) }
+            when (val action = tapAction(link, v.currentSession?.emulator?.isMouseTrackingActive == true)) {
+                is TapAction.Open -> onOpenLink(action.url)
+
+                TapAction.Keyboard -> {
+                    v.requestFocus()
+                    context.getSystemService(InputMethodManager::class.java)?.showSoftInput(v, 0)
+                }
+            }
         }
 
         override fun shouldBackButtonBeMappedToEscape() = false
@@ -203,6 +224,8 @@ class TerminalController(
         }
 
         override fun onLongPress(event: MotionEvent?) = false
+
+        override fun onContextMenu(x: Float, y: Float) = this@TerminalController.onContextMenu(x, y)
 
         override fun readControlKey() = consume(Modifier.CTRL)
         override fun readAltKey() = consume(Modifier.ALT)

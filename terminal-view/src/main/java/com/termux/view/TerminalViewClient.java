@@ -48,6 +48,12 @@ public interface TerminalViewClient {
 
     boolean onLongPress(MotionEvent event);
 
+    /**
+     * The terminal's context menu is wanted at view-relative pixels (x, y): the selection toolbar's
+     * "More…" (its text is then {@link TerminalView#getStoredSelectedText()}) or a mouse right-click.
+     */
+    void onContextMenu(float x, float y);
+
 
 
     boolean readControlKey();
