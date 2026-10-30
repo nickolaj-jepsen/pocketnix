@@ -3,6 +3,7 @@ package agent_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -22,14 +23,20 @@ func TestResolvePath(t *testing.T) {
 	if rel, err := ctl.ResolvePath(filepath.Join(root, "docs", "a b.txt")); err != nil || rel != "docs/a b.txt" {
 		t.Errorf("inside the root = %q, %v", rel, err)
 	}
+	up, err := filepath.Rel(root, outside)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, p := range []string{
 		// Joined by hand: filepath.Join would clean the ".." away before it's sent.
-		root + "/../" + filepath.Base(outside) + "/secret",
+		root + "/" + up + "/secret",
 		filepath.Join(root, "escape"),
-		"docs/a b.txt",
 	} {
-		if rel, err := ctl.ResolvePath(p); err == nil {
-			t.Errorf("%s resolved to %q", p, rel)
+		if rel, err := ctl.ResolvePath(p); err == nil || !strings.Contains(err.Error(), "files.root") {
+			t.Errorf("%s = %q, %v; want refused as outside files.root", p, rel, err)
 		}
+	}
+	if rel, err := ctl.ResolvePath("docs/a b.txt"); err == nil {
+		t.Errorf("a relative path resolved to %q", rel)
 	}
 }
