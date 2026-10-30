@@ -1,5 +1,7 @@
 package dev.nickolaj.pocketnix
 
+import org.json.JSONObject
+
 /**
  * Android's clipboard as the app sends it: its [text] ("" for a clip without
  * text), its MIME [types] and `ClipDescription.getTimestamp()`.
@@ -35,4 +37,20 @@ data class ClipboardSync(private val sent: ClipSnapshot? = null, private val gue
      * data. Whatever the app sent before is no longer the guest's.
      */
     fun guestCopied(text: String?) = ClipboardSync(guestText = text)
+}
+
+/**
+ * A guest copy pushed to the app (`guest-clipboard`, or `guest-clipboard-data`
+ * for typed data, whose [text] is null), and whether it's [sensitive]: a
+ * secret Android should keep out of its previews.
+ */
+data class GuestCopy(val text: String?, val sensitive: Boolean) {
+    companion object {
+        /** The guest copy in [msg], or null for any other push. */
+        fun parse(msg: JSONObject): GuestCopy? = when (msg.optString("type")) {
+            "guest-clipboard" -> GuestCopy(msg.optString("text"), msg.optBoolean("sensitive"))
+            "guest-clipboard-data" -> GuestCopy(null, msg.optBoolean("sensitive"))
+            else -> null
+        }
+    }
 }

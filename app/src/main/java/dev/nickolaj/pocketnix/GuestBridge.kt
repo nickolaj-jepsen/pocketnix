@@ -7,11 +7,13 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.ActivityNotFoundException
 import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.PersistableBundle
 import android.provider.DocumentsContract
 import android.util.Log
 import android.webkit.MimeTypeMap
@@ -51,17 +53,22 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
             "share" -> share(msg, appVisible)
 
             "guest-clipboard" -> {
+                val copy = GuestCopy.parse(msg) ?: return
                 // A clip or an intent goes through one binder transaction (~1 MB, UTF-16): more throws.
-                val text = msg.optString("text").take(MAX_CLIP_CHARS)
-                setGuestClip(ClipData.newPlainText(hostname() ?: "pocketnix", text), text)
+                val text = copy.text.orEmpty().take(MAX_CLIP_CHARS)
+                setGuestClip(ClipData.newPlainText(hostname() ?: "pocketnix", text), copy.sensitive, text)
             }
 
             else -> Log.i(TAG, "ignoring agent push ${msg.optString("type")}")
         }
     }
 
-    /** Puts a guest's copy [clip] on Android's clipboard; [text] is its text, or null for typed data. */
-    fun setGuestClip(clip: ClipData, text: String?) {
+    /**
+     * Puts a guest's copy [clip] on Android's clipboard, kept out of previews
+     * when [sensitive]; [text] is its text, or null for typed data.
+     */
+    fun setGuestClip(clip: ClipData, sensitive: Boolean, text: String?) {
+        if (sensitive) clip.description.extras = PersistableBundle().apply { putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true) }
         clipboard.setPrimaryClip(clip)
         clipSync = clipSync.guestCopied(text)
     }

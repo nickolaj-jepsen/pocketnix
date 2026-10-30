@@ -1,6 +1,7 @@
 package dev.nickolaj.pocketnix.agent
 
 import com.termux.terminal.TerminalBackend
+import dev.nickolaj.pocketnix.GuestCopy
 import dev.nickolaj.pocketnix.forward.PortForwards
 import dev.nickolaj.pocketnix.forward.UdpForwarder
 import java.io.ByteArrayOutputStream
@@ -25,6 +26,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
@@ -229,6 +232,18 @@ class AgentIntegrationTest {
         // Android's clipboard reaches a guest paste.
         ctl.call(JSONObject().put("type", "set-clipboard").put("text", "from android"))
         assertEquals("from android", JSONObject(guest("""{"type":"paste"}""")).getString("text"))
+        ctl.stop()
+    }
+
+    @Test
+    fun aSensitiveGuestCopyReachesTheAppMarked() = runBlocking {
+        val ctl = ControlChannel(scope, "test")
+        ctl.start(dialer)
+        withTimeout(10_000) { ctl.updates.filterNotNull().first() }
+        val events = scope.async(start = CoroutineStart.UNDISPATCHED) { withTimeout(10_000) { ctl.events.take(2).toList() } }
+        guest("""{"type":"copy","text":"plain"}""")
+        guest("""{"type":"copy","text":"hunter2","sensitive":true}""")
+        assertEquals(listOf(GuestCopy("plain", false), GuestCopy("hunter2", true)), events.await().map(GuestCopy::parse))
         ctl.stop()
     }
 

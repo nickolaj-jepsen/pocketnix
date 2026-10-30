@@ -1,6 +1,9 @@
 package dev.nickolaj.pocketnix
 
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -40,5 +43,13 @@ class ClipboardSyncTest {
         val sync = ClipboardSync().sent(png(1))
         assertTrue(sync.isNew(png(2)))
         assertFalse(sync.isNew(png(1)))
+    }
+
+    @Test
+    fun aSensitiveGuestCopyParses() {
+        assertEquals(GuestCopy("pw", true), GuestCopy.parse(JSONObject("""{"type":"guest-clipboard","text":"pw","sensitive":true}""")))
+        assertEquals(GuestCopy("x", false), GuestCopy.parse(JSONObject("""{"type":"guest-clipboard","text":"x"}""")))
+        assertEquals(GuestCopy(null, true), GuestCopy.parse(JSONObject("""{"type":"guest-clipboard-data","ref":"r1","mime":"image/png","size":4,"sensitive":true}""")))
+        assertNull(GuestCopy.parse(JSONObject("""{"type":"notify","title":"t"}""")))
     }
 }
