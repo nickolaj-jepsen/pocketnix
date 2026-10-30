@@ -36,6 +36,7 @@ import android.widget.Scroller;
 import androidx.annotation.RequiresApi;
 
 import com.termux.terminal.KeyHandler;
+import com.termux.terminal.TerminalBuffer;
 import com.termux.terminal.TerminalEmulator;
 import com.termux.terminal.TerminalSession;
 import com.termux.view.textselection.TextSelectionCursorController;
@@ -1158,10 +1159,22 @@ public final class TerminalView extends View {
      */
     public String getHyperlinkAt(float x, float y) {
         if (mEmulator == null || mRenderer == null) return null;
-        int col = (int) (x / mRenderer.mFontWidth);
-        int row = (int) ((y - mRenderer.mFontLineSpacingAndAscent) / mRenderer.mFontLineSpacing) + mTopRow;
-        if (col < 0 || col >= mEmulator.mColumns || row < 0 || row >= mEmulator.mRows) return null;
-        return mEmulator.getScreen().getHyperlinkAt(row, col);
+        TerminalBuffer screen = mEmulator.getScreen();
+        int[] cell = cellAt(x, y, mRenderer.mFontWidth, mRenderer.mFontLineSpacingAndAscent, mRenderer.mFontLineSpacing,
+            mTopRow, mEmulator.mColumns, mEmulator.mRows, screen.getActiveTranscriptRows());
+        return cell == null ? null : screen.getHyperlinkAt(cell[1], cell[0]);
+    }
+
+    /**
+     * The cell under view-relative pixels (x, y) with the view scrolled to topRow, as {column, external row}
+     * (negative rows are scrollback), or null when no cell of the buffer is there.
+     */
+    static int[] cellAt(float x, float y, float fontWidth, int lineSpacingAndAscent, int lineSpacing,
+                        int topRow, int columns, int screenRows, int transcriptRows) {
+        int col = (int) (x / fontWidth);
+        int row = (int) ((y - lineSpacingAndAscent) / lineSpacing) + topRow;
+        if (x < 0 || col >= columns || row < -transcriptRows || row >= screenRows) return null;
+        return new int[]{col, row};
     }
 
     private CharSequence getText() {
