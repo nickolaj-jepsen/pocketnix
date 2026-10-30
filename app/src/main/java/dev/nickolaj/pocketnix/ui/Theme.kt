@@ -9,7 +9,6 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 
@@ -47,19 +46,21 @@ fun isDarkBackground(background: Int): Boolean = Color(background).luminance() <
 fun terminalColorScheme(light: ColorScheme, dark: ColorScheme, background: Int, foreground: Int): ColorScheme {
     val bg = Color(background)
     val fg = Color(foreground)
-    fun lift(fraction: Float) = lerp(bg, fg, fraction)
+
+    // Mixed in sRGB: Compose's lerp mixes in Oklab, where a tenth of the way up from black is still black.
+    fun lift(f: Float) = Color(bg.red + (fg.red - bg.red) * f, bg.green + (fg.green - bg.green) * f, bg.blue + (fg.blue - bg.blue) * f)
     return (if (isDarkBackground(background)) dark else light).copy(
         background = bg,
         onBackground = fg,
         surface = bg,
         onSurface = fg,
-        surfaceVariant = lift(0.15f),
+        surfaceVariant = lift(0.18f),
         onSurfaceVariant = fg,
         surfaceContainerLowest = bg,
         surfaceContainerLow = lift(0.04f),
-        surfaceContainer = lift(0.07f),
-        surfaceContainerHigh = lift(0.11f),
-        surfaceContainerHighest = lift(0.15f)
+        surfaceContainer = lift(0.10f),
+        surfaceContainerHigh = lift(0.14f),
+        surfaceContainerHighest = lift(0.18f)
     )
 }
 

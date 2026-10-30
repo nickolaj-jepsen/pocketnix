@@ -46,8 +46,9 @@ class TerminalColorSchemeTest {
         assertTrue(onLight.luminance() < Color(solarizedBase3).luminance())
         assertTrue(onLight.luminance() > (Color(solarizedBase3).luminance() + Color(solarizedBase01).luminance()) / 2)
 
+        // Visibly lifted, as Material's dark containers are (#1d1b20 has 0.011), yet still dark.
         val onBlack = terminalColorScheme(light, dark, black, white).surfaceContainerHigh
-        assertTrue(onBlack.luminance() > 0f)
-        assertTrue(onBlack.luminance() < 0.5f)
+        assertTrue(onBlack.luminance() > 0.01f)
+        assertTrue(onBlack.luminance() < 0.05f)
     }
 }
