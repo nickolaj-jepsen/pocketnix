@@ -7,8 +7,10 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import dev.nickolaj.pocketnix.gui.MenuAction
 import dev.nickolaj.pocketnix.provision.requireAdbCaller
 import java.io.FileNotFoundException
+import java.net.URLEncoder
 import kotlin.concurrent.thread
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -29,13 +31,20 @@ import kotlinx.coroutines.withTimeoutOrNull
  *   types `input` and, with `enter`, Enter into it, and answers its id as `tab`
  * - `--method type --arg <tab id> --extra input:s:<text> [--extra enter:b:true]`:
  *   types into an open tab
+ * - `--method menu --arg <tab id> [--extra label0:s:<label> [--extra label1:s:…]]`:
+ *   the tab's context menu (`TerminalActions.menu`, with no selection), or the
+ *   page the labels lead to, as `entries`: `<label>\t<enabled|disabled>`
+ *   lines; a path ending at an action runs it
+ * - `--method links --arg <tab id>`: the tab's Open link… list as `links`,
+ *   one URL per line, newest first
  * - `content read --uri content://<package>.control/stats`: the GUI link's
  *   counters and histograms as one line of JSON (`GuiSession.stats`)
  *
  * `content` takes a backslash in a value as escaping the next character, and
  * splits at unescaped colons: send `\\` for each backslash in `input` and
  * `\:` for each colon.
- * A call's errors come back as an `error` key.
+ * A call's errors come back as an `error` key. A listing comes back URL-encoded
+ * (`URLEncoder`), since `content` prints a bundle without quoting.
  */
 class ControlProvider : ContentProvider() {
     override fun onCreate() = true
@@ -58,6 +67,18 @@ class ControlProvider : ContentProvider() {
                 }
 
                 "type" -> onMain { vm.debugType(tabId(arg ?: error("type needs a tab id")), input, enter) }
+
+                "menu" -> {
+                    val id = tabId(arg ?: error("menu needs a tab id"))
+                    val labels = generateSequence(0) { it + 1 }.map { extras?.getString("label$it") }.takeWhile { it != null }.filterNotNull().toList()
+                    val entries = onMain { walk(vm.terminalActions.menu(tab(vm, id), null), labels) }
+                    if (entries != null) out.putString("entries", encode(entries.map { "${it.label}\t${if (it.enabled) "enabled" else "disabled"}" }))
+                }
+
+                "links" -> {
+                    val id = tabId(arg ?: error("links needs a tab id"))
+                    out.putString("links", encode(onMain { vm.terminalActions.links(tab(vm, id)) }))
+                }
 
                 else -> error("unknown method $method")
             }
@@ -95,6 +116,29 @@ class ControlProvider : ContentProvider() {
     private fun <T> onMain(block: () -> T): T = runBlocking { withContext(Dispatchers.Main) { block() } }
 
     private fun tabId(arg: String) = arg.toIntOrNull() ?: error("not a tab id: $arg")
+
+    private fun tab(vm: Vm, id: Int) = vm.tabs.all().firstOrNull { it.id == id } ?: error("no tab $id")
+
+    /**
+     * Follows [labels] through [items] as the menu's pages do: returns the
+     * entries of the page reached, or runs the action reached and returns null.
+     */
+    private fun walk(items: List<MenuAction>, labels: List<String>): List<MenuAction>? {
+        var page = items
+        for ((i, label) in labels.withIndex()) {
+            val a = page.firstOrNull { it.label == label } ?: error("no entry '$label'")
+            if (!a.enabled) error("'$label' is disabled")
+            if (a.children.isEmpty()) {
+                if (i != labels.lastIndex) error("'$label' is an action, not a page")
+                a.run()
+                return null
+            }
+            page = a.children
+        }
+        return page
+    }
+
+    private fun encode(lines: List<String>) = URLEncoder.encode(lines.joinToString("\n"), "UTF-8")
 
     override fun query(uri: Uri, projection: Array<out String>?, selection: String?, selectionArgs: Array<out String>?, sortOrder: String?): Cursor? = null
     override fun getType(uri: Uri): String? = null

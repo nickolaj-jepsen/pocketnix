@@ -31,6 +31,12 @@ commands:
   wait --tab <id> [--timeout <dur>] [--lines <n>] <regexp>
         poll the tab's last lines until <regexp> matches one of them,
         then print them; exit 1 if it doesn't within the timeout (30s)
+  menu --tab <id> [<label>...]
+        list the terminal's context menu, one "<label><TAB><enabled|disabled>"
+        line per entry, or the page the labels lead to; labels ending at an
+        action run it (e.g. "Open link…" <url>)
+  links --tab <id>
+        the terminal's Open link… list, one URL per line, newest first
   logcat [--follow]
         the log of every process running as the app's uid, which keeps
         its lines across the app's crashes and restarts; --follow streams it
@@ -101,6 +107,39 @@ func runControl(args []string) error {
 		}
 		_, err := c.call("type", strconv.Itoa(*tab), inputExtras(strings.Join(sub.Args(), " "), !*noEnter)...)
 		return err
+	case "menu", "links":
+		tab := sub.Int("tab", -1, "")
+		n := -1
+		if cmd == "links" {
+			n = 0
+		}
+		if err := parseArgs(sub, rest, n); err != nil {
+			return err
+		}
+		if *tab < 0 {
+			sub.Usage()
+			return errUsage
+		}
+		var extras []string
+		for i, label := range sub.Args() {
+			extras = append(extras, fmt.Sprintf("label%d:s:%s", i, escapeExtra(label)))
+		}
+		res, err := c.call(cmd, strconv.Itoa(*tab), extras...)
+		if err != nil {
+			return err
+		}
+		key := map[string]string{"menu": "entries", "links": "links"}[cmd]
+		enc, ok := res[key]
+		if !ok {
+			return nil // an action ran
+		}
+		out, err := url.QueryUnescape(enc)
+		if err != nil {
+			return fmt.Errorf("%s: %w", cmd, err)
+		}
+		if out != "" {
+			fmt.Println(out)
+		}
 	case "stats":
 		if err := parseArgs(sub, rest, 0); err != nil {
 			return err
@@ -178,12 +217,15 @@ func parseArgs(fs *flag.FlagSet, args []string, n int) error {
 	return nil
 }
 
-// inputExtras are the extras typing text and, if enter, Enter. `content`
-// takes a backslash as escaping the next character and splits a binding at
-// unescaped colons, so the text's backslashes and colons are escaped.
+// inputExtras are the extras typing text and, if enter, Enter.
 func inputExtras(text string, enter bool) []string {
-	text = strings.NewReplacer(`\`, `\\`, ":", `\:`).Replace(text)
-	return []string{"input:s:" + text, "enter:b:" + strconv.FormatBool(enter)}
+	return []string{"input:s:" + escapeExtra(text), "enter:b:" + strconv.FormatBool(enter)}
+}
+
+// escapeExtra escapes an extra's value for `content`, which takes a
+// backslash as escaping the next character and splits at unescaped colons.
+func escapeExtra(s string) string {
+	return strings.NewReplacer(`\`, `\\`, ":", `\:`).Replace(s)
 }
 
 // control is the app's ControlProvider.

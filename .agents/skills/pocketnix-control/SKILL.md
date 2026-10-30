@@ -33,6 +33,8 @@ attached (`adb devices`). `pocketnix control -h` lists the commands.
 | `tab [--profile <name>] [--timeout <dur>] [<text>]` | Waits for the agent, opens a terminal tab, types `<text>` and Enter, and prints the new tab's id. |
 | `type --tab <id> <text>` | Types `<text>` and Enter into an open tab. |
 | `wait --tab <id> [--timeout <dur>] [--lines <n>] <regexp>` | Polls the tab until one of its transcript lines matches, then prints the tab's dump. Exits 1 with the last dump if nothing matches in time. |
+| `menu --tab <id> [<label>…]` | Lists the tab's context menu (the one More… and a right-click open, with no selection) as `<label><TAB><enabled\|disabled>` lines, or the page a path of labels leads to (`menu --tab 1 "Open link…"`). A path ending at an action runs it: `menu --tab 1 "Open link…" https://example.org`, `menu --tab 1 "Reset terminal"`. |
+| `links --tab <id>` | Prints the tab's Open link… list, one URL per line, newest first. |
 | `logcat [--follow]` | Prints the log (main, system and crash buffers) of every process running as the app's uid, so it keeps lines from before a crash or restart. `--follow` streams it. Works on release builds too (`--package`). |
 
 `tab` and `type` take `--no-enter` to type without pressing Enter. Tab 0 is
@@ -94,6 +96,12 @@ adb shell "content call --uri content://dev.nickolaj.pocketnix.debug.control --m
 
 A call answers `Result: Bundle[{…}]`, carrying an `error` key when it failed.
 A failed dump reads `error: <message>`.
+
+## Checking what the app opened or shared
+
+An open or a share starts another app's activity, which system_server logs
+as `ActivityTaskManager: START u0 {act=… dat=…}`. That isn't the app's uid,
+so read it with plain `adb logcat -d`, not `pocketnix control logcat`.
 
 ## Reading the app's log
 
