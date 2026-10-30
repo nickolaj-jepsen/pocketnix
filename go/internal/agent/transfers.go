@@ -32,8 +32,6 @@ const (
 	// copyWait bounds the app's fetch of a typed copy, and pasteWait its send.
 	copyWait  = 30 * time.Second
 	pasteWait = 2 * time.Minute
-	// maxClipData bounds typed clipboard data, which the agent keeps for a guest paste.
-	maxClipData = 32 << 20
 	// maxGuestFDs bounds the descriptors one guest read takes; the kernel closes the rest.
 	maxGuestFDs = 4
 )
@@ -239,23 +237,24 @@ func (s *Server) serveTransfer(ctx context.Context, req protocol.GuestRequest, f
 		if fd == nil {
 			return reply, errors.New("a typed copy reads an attached descriptor")
 		}
-		data, err := readAll(ctx, fd, maxClipData+1)
+		data, err := readAll(ctx, fd, protocol.MaxClipboardData+1)
 		if err != nil {
 			return reply, err
 		}
-		if len(data) > maxClipData {
-			return reply, fmt.Errorf("clipboard data over %d MiB", maxClipData>>20)
+		if len(data) > protocol.MaxClipboardData {
+			return reply, fmt.Errorf("clipboard data over %d MiB", protocol.MaxClipboardData>>20)
 		}
 		s.setClipboard("")
 		x := &s.transfers
 		x.mu.Lock()
 		x.clipTypes, x.clipMIME, x.clipData = []string{req.MIME}, req.MIME, data
 		x.mu.Unlock()
+		s.publishClipboard()
 		ref, t := s.newTransfer(req.Type)
 		defer s.dropTransfer(ref)
 		t.mime = req.MIME
 		t.src <- io.NewSectionReader(bytes.NewReader(data), 0, int64(len(data)))
-		if err := s.event(protocol.Event{Type: protocol.TypeGuestClipboardData, Ref: ref, MIME: req.MIME, Size: int64(len(data))}); err != nil {
+		if err := s.event(protocol.Event{Type: protocol.TypeGuestClipboardData, Ref: ref, MIME: req.MIME, Size: int64(len(data)), Sensitive: req.Sensitive}); err != nil {
 			return reply, err
 		}
 		return reply, t.wait(ctx)
@@ -379,8 +378,8 @@ func (s *Server) shareOut(req protocol.GuestRequest) error {
 		if req.Text == "" {
 			return errors.New("nothing to share")
 		}
-		if len(req.Text) > maxClipboard {
-			return fmt.Errorf("shared text over %d KiB", maxClipboard>>10)
+		if len(req.Text) > protocol.MaxClipboardText {
+			return fmt.Errorf("shared text over %d KiB", protocol.MaxClipboardText>>10)
 		}
 		return s.event(protocol.Event{Type: protocol.TypeShare, Text: req.Text})
 	}

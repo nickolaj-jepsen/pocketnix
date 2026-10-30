@@ -17,9 +17,6 @@ import (
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/protocol"
 )
 
-// maxClipboard bounds clipboard text both ways; Android's binder can't carry much more.
-const maxClipboard = 128 << 10
-
 // ServeGuest serves guest programs' requests to the app on l, a unix socket
 // inside the guest. Only root and the session user may use it.
 func (s *Server) ServeGuest(l net.Listener) error {
@@ -80,6 +77,10 @@ func (s *Server) handleGuest(c net.Conn) {
 		} else if req.Type == protocol.GuestSubscribe {
 			closeFiles(fds)
 			s.subscribe(c, r)
+			return
+		} else if req.Type == protocol.GuestSubscribeClipboard {
+			closeFiles(fds)
+			s.subscribeClipboard(c, r)
 			return
 		} else if req.Type == protocol.GuestNotify || req.Type == protocol.GuestNotifyClose {
 			var err error
@@ -143,12 +144,13 @@ func (s *Server) guest(req protocol.GuestRequest) (string, error) {
 		}
 		return "", s.event(protocol.Event{Type: protocol.TypeOpen, Path: rel})
 	case protocol.GuestCopy:
-		if len(req.Text) > maxClipboard {
-			return "", fmt.Errorf("clipboard text over %d KiB", maxClipboard>>10)
+		if len(req.Text) > protocol.MaxClipboardText {
+			return "", fmt.Errorf("clipboard text over %d KiB", protocol.MaxClipboardText>>10)
 		}
 		s.setClipboard(req.Text)
 		s.setClipboardTypes(nil, req.Text)
-		return "", s.event(protocol.Event{Type: protocol.TypeGuestClipboard, Text: req.Text})
+		s.publishClipboard()
+		return "", s.event(protocol.Event{Type: protocol.TypeGuestClipboard, Text: req.Text, Sensitive: req.Sensitive})
 	case protocol.GuestPaste:
 		return s.clipboardText(), nil
 	case protocol.GuestHost:

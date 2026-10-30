@@ -43,6 +43,8 @@ type Server struct {
 	clipboard string
 	notes     notifications
 	transfers transfers
+	// clipWatchers follow the clipboard (the Wayland bridge).
+	clipWatchers clipWatchers
 
 	// HostFile is where the phone's state goes as JSON; empty writes none.
 	HostFile string
@@ -317,11 +319,12 @@ func (s *Server) request(req protocol.Request) (any, error) {
 		entries, err := history(s.config(), req.Limit)
 		return protocol.History{Type: protocol.TypeHistory, Entries: entries}, err
 	case protocol.TypeSetClipboard:
-		if len(req.Text) > maxClipboard {
-			return nil, fmt.Errorf("clipboard text over %d KiB", maxClipboard>>10)
+		if len(req.Text) > protocol.MaxClipboardText {
+			return nil, fmt.Errorf("clipboard text over %d KiB", protocol.MaxClipboardText>>10)
 		}
 		s.setClipboard(req.Text)
 		s.setClipboardTypes(req.Types, req.Text)
+		s.publishClipboard()
 		return ack, nil
 	case protocol.TypeShareText:
 		p, err := s.shareText(req.Text)

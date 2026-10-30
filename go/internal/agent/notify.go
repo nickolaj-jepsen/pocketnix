@@ -129,12 +129,18 @@ func (s *Server) notifyFromApp(req protocol.Request) error {
 	return nil
 }
 
-// subscribe answers a GuestSubscribe on c, then feeds it events until the
-// guest closes it; r is c's reader, which may hold nothing but its EOF.
+// subscribe serves a GuestSubscribe on c.
 func (s *Server) subscribe(c net.Conn, r *bufio.Reader) {
-	c.SetReadDeadline(time.Time{})
 	ch := s.notes.subscribe()
 	defer s.notes.unsubscribe(ch)
+	serveSubscription(c, r, ch)
+}
+
+// serveSubscription answers a subscription on c, then writes it what ch
+// brings until the guest closes it; r is c's reader, which may hold nothing
+// but its EOF.
+func serveSubscription[T any](c net.Conn, r *bufio.Reader, ch <-chan T) {
+	c.SetReadDeadline(time.Time{})
 	if protocol.WriteJSON(c, protocol.GuestReply{}) != nil {
 		return
 	}
