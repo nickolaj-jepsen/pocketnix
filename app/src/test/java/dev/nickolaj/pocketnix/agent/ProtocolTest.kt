@@ -131,4 +131,26 @@ class ProtocolTest {
         assertEquals("pty", h.getString("stream"))
         assertEquals("htop", h.getString("profile"))
     }
+
+    @Test
+    fun parsesPortListeners() {
+        assertEquals(
+            PortListeners(lan = true, ports = listOf(3000, 8123)),
+            PortListeners.parse("""{"type":"port-listeners","lan":true,"ports":[3000,8123]}""")
+        )
+        assertEquals(PortListeners(lan = false, ports = emptyList()), PortListeners.parse("""{"type":"port-listeners","lan":false,"ports":[]}"""))
+    }
+
+    @Test
+    fun malformedPortListenersAreNull() {
+        listOf(
+            """{"type":"port-listeners","lan":false,"ports":["8123"]}""",
+            """{"type":"port-listeners","lan":false,"ports":8123}""",
+            """{"type":"port-listeners","lan":false}""",
+            """{"type":"port-listeners","lan":false,"ports":[70000]}""",
+            """{"type":"wake","ports":[8123]}""",
+            """{"type":"port-listeners","ports":[""",
+            "not json"
+        ).forEach { assertNull(it, PortListeners.parse(it)) }
+    }
 }

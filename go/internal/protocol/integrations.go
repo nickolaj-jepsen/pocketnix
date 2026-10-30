@@ -45,6 +45,9 @@ type Event struct {
 	Name     string   `json:"name,omitempty"`
 	MIME     string   `json:"mime,omitempty"`
 	Size     int64    `json:"size,omitempty"`
+	// Sensitive marks a guest-clipboard or guest-clipboard-data copy as a
+	// secret (a password manager's), which Android hides from its previews.
+	Sensitive bool `json:"sensitive,omitempty"`
 }
 
 // Streams for shared files and the file provider.

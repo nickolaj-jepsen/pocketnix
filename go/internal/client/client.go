@@ -56,6 +56,7 @@ type Control struct {
 	configs chan protocol.Config
 	events  chan protocol.Event
 	wakes   chan protocol.Wake
+	ports   chan protocol.PortListeners
 	ended   chan struct{}
 	wmu     sync.Mutex
 
@@ -95,7 +96,7 @@ func (c *Client) Control() (*Control, error) {
 		conn: conn, Agent: hello.Agent,
 		configs: make(chan protocol.Config, 16), uchange: make(chan struct{}),
 		events: make(chan protocol.Event, 64), ended: make(chan struct{}),
-		wakes: make(chan protocol.Wake, 16),
+		wakes: make(chan protocol.Wake, 16), ports: make(chan protocol.PortListeners, 1),
 	}
 	go ctl.read()
 	return ctl, nil
@@ -106,6 +107,7 @@ func (c *Control) read() {
 	defer close(c.configs)
 	defer close(c.events)
 	defer close(c.wakes)
+	defer close(c.ports)
 	defer func() {
 		c.umu.Lock()
 		close(c.uchange)
@@ -167,6 +169,20 @@ func (c *Control) read() {
 				select {
 				case c.wakes <- w:
 				default: // nobody reads them
+				}
+			}
+		case protocol.TypePortListeners:
+			var p protocol.PortListeners
+			if json.Unmarshal(line, &p) == nil {
+				// A snapshot: a reader that fell behind gets the latest one.
+				select {
+				case c.ports <- p:
+				default:
+					select {
+					case <-c.ports:
+					default:
+					}
+					c.ports <- p
 				}
 			}
 		case protocol.TypeError:
@@ -347,6 +363,10 @@ func (c *Control) ShareText(text string) (string, error) {
 // Wakes delivers the agent's wake states, on connect and on every change
 // (the last 16 unread); closed when the stream ends.
 func (c *Control) Wakes() <-chan protocol.Wake { return c.wakes }
+
+// PortListeners delivers the agent's listener snapshots, on connect and on
+// every change, holding only the latest unread one; closed when the stream ends.
+func (c *Control) PortListeners() <-chan protocol.PortListeners { return c.ports }
 
 // HostState tells the agent the phone's state, as the app does on connect
 // and on changes. It holds until this stream ends.

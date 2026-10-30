@@ -45,7 +45,8 @@ commands:
   update-cancel          stop a running check or download
   switch-generation <n>  switch to generation <n> (a rollback, or forward again)
   history [limit]        print the user's shell history, newest first
-  events                 print the guest's notify/open/clipboard/transfer pushes, one JSON per line
+  events                 print the guest's notify/open/clipboard/transfer pushes and
+                         port-listeners snapshots, one JSON per line
   set-clipboard [--type <mime>]… <text>
                          hand the agent a clipboard (its text and types), as the app does on focus
   pick-answer <ref> [file…]   answer a pick event with files; none cancels
@@ -134,12 +135,25 @@ func runAgent(args []string) error {
 		switch cmd {
 		case "events":
 			enc := json.NewEncoder(os.Stdout)
-			for ev := range ctl.Events() {
-				if err := enc.Encode(ev); err != nil {
+			events, ports := ctl.Events(), ctl.PortListeners()
+			for {
+				var v any
+				select {
+				case ev, ok := <-events:
+					if !ok {
+						return errors.New("control stream closed")
+					}
+					v = ev
+				case p, ok := <-ports:
+					if !ok {
+						return errors.New("control stream closed")
+					}
+					v = p
+				}
+				if err := enc.Encode(v); err != nil {
 					return err
 				}
 			}
-			return errors.New("control stream closed")
 		case "set-clipboard":
 			var types []string
 			for len(rest) >= 2 && rest[0] == "--type" {

@@ -206,6 +206,30 @@ data class Updates(
     }
 }
 
+/** The guest's listeners the app may offer to forward (go/internal/protocol PortListeners). */
+data class PortListeners(
+    /** Allowed forwards bind 0.0.0.0, not 127.0.0.1. */
+    val lan: Boolean,
+    /** Guest ports, ascending. */
+    val ports: List<Int>
+) {
+    companion object {
+        const val TYPE = "port-listeners"
+
+        /** Null for anything but a well-formed port-listeners message; never throws. */
+        fun parse(line: String): PortListeners? = runCatching { JSONObject(line) }.getOrNull()?.let(::parse)
+
+        fun parse(o: JSONObject): PortListeners? {
+            if (o.optString("type") != TYPE) return null
+            val a = o.optJSONArray("ports") ?: return null
+            val ports = (0 until a.length()).map { i ->
+                (a.opt(i) as? Int)?.takeIf { it in 1..65535 } ?: return null
+            }
+            return PortListeners(o.optBoolean("lan"), ports.sorted().distinct())
+        }
+    }
+}
+
 private fun JSONArray?.strings(): List<String> = if (this == null) emptyList() else (0 until length()).map { getString(it) }
 
 private fun JSONArray?.objects(): List<JSONObject> = if (this == null) emptyList() else (0 until length()).map { getJSONObject(it) }

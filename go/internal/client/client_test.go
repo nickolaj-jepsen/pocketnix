@@ -127,3 +127,22 @@ func TestUnansweredRequestTimesOut(t *testing.T) {
 		t.Fatalf("the next ping: %v", err)
 	}
 }
+
+func TestPortListenersKeepTheLatest(t *testing.T) {
+	ctl := fakeAgent(t, func(w net.Conn, req protocol.Request) {
+		line(w, `{"type":"port-listeners","lan":false,"ports":[8000]}`)
+		line(w, `{"type":"port-listeners","lan":true,"ports":[3000,8123]}`)
+		line(w, `{"type":"pong","id":%d}`, req.ID)
+	})
+	if err := ctl.Ping(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case p := <-ctl.PortListeners():
+		if !p.LAN || len(p.Ports) != 2 || p.Ports[0] != 3000 || p.Ports[1] != 8123 {
+			t.Errorf("snapshot %+v, want lan and [3000 8123]", p)
+		}
+	default:
+		t.Fatal("no snapshot")
+	}
+}
