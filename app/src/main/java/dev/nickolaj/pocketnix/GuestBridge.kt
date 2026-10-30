@@ -29,9 +29,8 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
     private var nextId = NOTIFICATION_BASE
     private val notifications = GuestNotifications(context, hostname)
 
-    /** What a guest copy last put on the clipboard, so it isn't handed straight back. */
-    @Volatile var lastGuestCopy: String? = null
-        private set
+    /** What the guest has of the clipboard, so a clip isn't sent twice or handed straight back. */
+    @Volatile var clipSync = ClipboardSync()
 
     init {
         manager.createNotificationChannel(
@@ -54,12 +53,17 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
             "guest-clipboard" -> {
                 // A clip or an intent goes through one binder transaction (~1 MB, UTF-16): more throws.
                 val text = msg.optString("text").take(MAX_CLIP_CHARS)
-                lastGuestCopy = text
-                clipboard.setPrimaryClip(ClipData.newPlainText(hostname() ?: "pocketnix", text))
+                setGuestClip(ClipData.newPlainText(hostname() ?: "pocketnix", text), text)
             }
 
             else -> Log.i(TAG, "ignoring agent push ${msg.optString("type")}")
         }
+    }
+
+    /** Puts a guest's copy [clip] on Android's clipboard; [text] is its text, or null for typed data. */
+    fun setGuestClip(clip: ClipData, text: String?) {
+        clipboard.setPrimaryClip(clip)
+        clipSync = clipSync.guestCopied(text)
     }
 
     private fun open(msg: JSONObject, appVisible: Boolean) {

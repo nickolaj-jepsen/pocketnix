@@ -129,7 +129,6 @@ class Vm(private val app: Context) {
     val terminalActions = TerminalActions(app, scope, bridge, { control.config.value?.hostname }, ::listeningForwards) { path ->
         control.call(JSONObject().put("type", "resolve-path").put("path", path)).optString("path")
     }
-    private var lastClipboardSent: Pair<String, List<String>>? = null
 
     /** The phone's network, power and timezone, watched while the agent is connected. */
     val host = HostMonitor(app)
@@ -360,11 +359,12 @@ class Vm(private val app: Context) {
         val types = (0 until desc.mimeTypeCount).map { desc.getMimeType(it) }.distinct()
         // An image's "text" is its URI.
         val text = if (types.any { it.startsWith("text/") }) clip.getItemAt(0).coerceToText(app)?.toString().orEmpty() else ""
-        if (text == bridge.lastGuestCopy || text to types == lastClipboardSent) return
+        val snapshot = ClipSnapshot(text, types, desc.timestamp)
+        if (!bridge.clipSync.isNew(snapshot)) return
         if (control.link.value !is ControlChannel.Link.Up) return
         scope.launch {
             val req = JSONObject().put("type", "set-clipboard").put("text", text).put("types", JSONArray(types))
-            if (runCatching { control.call(req) }.isSuccess) lastClipboardSent = text to types
+            if (runCatching { control.call(req) }.isSuccess) bridge.clipSync = bridge.clipSync.sent(snapshot)
         }
     }
 
