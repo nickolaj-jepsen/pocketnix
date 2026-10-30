@@ -39,6 +39,8 @@ attached (`adb devices`). `pocketnix control -h` lists the commands.
 | `links --tab <id>` | Prints the tab's Open link… list, one full URL per line, newest first. |
 | `rename --tab <id> <title>` | Gives a terminal tab its own title, which `dump` and the notifications show; `""` goes back to the shell's title. |
 | `reopen --tab <id>` | Starts an ended terminal tab again in a new session, keeping its id, place and title; the old transcript is gone. |
+| `offers` | Prints the port forward offers of this guest boot, one `port=<guest> state=<offered\|dismissed\|allowed> phone=<port\|->` line per guest port the agent reported (`forwardOffers` must be on). An allowed port stays listed through the grace period after its listener goes, then drops out. |
+| `offer <port> allow\|dismiss` | Answers an offer as its notification's buttons do. `allow` returns once the phone port listens, and fails with the reason when it couldn't. |
 | `logcat [--follow]` | Prints the log (main, system and crash buffers) of every process running as the app's uid, so it keeps lines from before a crash or restart. `--follow` streams it. Works on release builds too (`--package`). |
 
 `tab` and `type` take `--no-enter` to type without pressing Enter. Tab 0 is
@@ -100,6 +102,17 @@ adb shell "content call --uri content://dev.nickolaj.pocketnix.debug.control --m
 
 A call answers `Result: Bundle[{…}]`, carrying an `error` key when it failed.
 A failed dump reads `error: <message>`.
+
+## Checking port forward offers
+
+An offer is also a notification, readable over adb:
+`adb shell dumpsys notification --noredact | grep -A3 forward-offer`. To
+reach an allowed forward from the desktop, forward to its phone port:
+`adb forward tcp:<local> tcp:<phone port>`. Against the dev agent (`nix run
+.#dev-agent`), the guest is your desktop and its config leaves offers off:
+pass it a second `--config` (the last one wins), a copy of its own with
+`.forwardOffers = {"enable": true, "lan": false}`. Your desktop's listeners
+are then offered.
 
 ## Checking what the app opened or shared
 

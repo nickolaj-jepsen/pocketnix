@@ -42,6 +42,12 @@ commands:
         give a terminal tab its own title; "" goes back to the shell's
   reopen --tab <id>
         start an ended terminal tab again, in its place
+  offers
+        the guest listeners offered as port forwards this boot, one
+        "port=<guest> state=<offered|dismissed|allowed> phone=<port|->" line each
+  offer <port> allow|dismiss
+        answer guest port <port>'s offer as its notification does; allow
+        returns once the phone port listens
   logcat [--follow]
         the log of every process running as the app's uid, which keeps
         its lines across the app's crashes and restarts; --follow streams it
@@ -167,6 +173,28 @@ func runControl(args []string) error {
 			extras = append(extras, "title:s:"+escapeExtra(sub.Arg(0)))
 		}
 		_, err := c.call(cmd, strconv.Itoa(*tab), extras...)
+		return err
+	case "offers":
+		if err := parseArgs(sub, rest, 0); err != nil {
+			return err
+		}
+		out, err := c.offers()
+		if err != nil {
+			return err
+		}
+		if out != "" {
+			fmt.Println(out)
+		}
+	case "offer":
+		if err := parseArgs(sub, rest, 2); err != nil {
+			return err
+		}
+		port, answer := sub.Arg(0), sub.Arg(1)
+		if _, err := strconv.ParseUint(port, 10, 16); err != nil || (answer != "allow" && answer != "dismiss") {
+			sub.Usage()
+			return errUsage
+		}
+		_, err := c.call("offer", port, "answer:s:"+answer)
 		return err
 	case "stats":
 		if err := parseArgs(sub, rest, 0); err != nil {
@@ -308,6 +336,19 @@ func (c control) dump(tab, lines int) (string, error) {
 	// Anything else that isn't a dump is `content` reporting a failure (no such provider, a refusal).
 	if !strings.HasPrefix(out, "state=") {
 		return "", fmt.Errorf("dump: %s", strings.TrimSpace(out))
+	}
+	return out, nil
+}
+
+// offers lists the app's port forward offers, one line per guest port.
+func (c control) offers() (string, error) {
+	res, err := c.call("offers", "")
+	if err != nil {
+		return "", err
+	}
+	out, err := url.QueryUnescape(res["offers"])
+	if err != nil {
+		return "", fmt.Errorf("offers: %w", err)
 	}
 	return out, nil
 }

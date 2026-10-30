@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import dev.nickolaj.pocketnix.forward.ForwardOffers
 import dev.nickolaj.pocketnix.gui.MenuAction
 import dev.nickolaj.pocketnix.provision.requireAdbCaller
 import dev.nickolaj.pocketnix.terminal.Tab
@@ -52,6 +53,11 @@ import kotlinx.coroutines.withTimeoutOrNull
  * - `--method rename --arg <tab id> --extra title:s:<title>`: gives a terminal
  *   tab its user title; an empty one clears it
  * - `--method reopen --arg <tab id>`: starts an ended terminal tab again
+ * - `--method offers`: the port forward offers as `offers`, one
+ *   [ForwardOffers.describe] line per known guest port
+ * - `--method offer --arg <guest port> --extra answer:s:<allow|dismiss>`:
+ *   answers an offer as its notification does; an allow returns once the
+ *   phone port listens ([OFFER_TIMEOUT_MS])
  * - `content read --uri content://<package>.control/stats`: the GUI link's
  *   counters and histograms as one line of JSON (`GuiSession.stats`)
  *
@@ -126,6 +132,19 @@ class ControlProvider : ContentProvider() {
                     out.putString("links", encode(onMain { vm.terminalActions.links(tab(vm, id)) }))
                 }
 
+                "offers" -> out.putString("offers", encode(vm.offers.value.describe()))
+
+                "offer" -> {
+                    val port = arg?.toIntOrNull() ?: error("offer needs a guest port")
+                    val allow = when (extras?.getString("answer")) {
+                        "allow" -> true
+                        "dismiss" -> false
+                        else -> error("offer needs answer allow or dismiss")
+                    }
+                    runBlocking { vm.answerOffer(port, allow) }
+                    if (allow) awaitForward(vm, port)
+                }
+
                 else -> error("unknown method $method")
             }
             out.putBoolean("ok", true)
@@ -173,6 +192,18 @@ class ControlProvider : ContentProvider() {
         if (entries != null) out.putString("entries", encode(entries.map { "${it.label}\t${if (it.enabled) "enabled" else "disabled"}" }))
     }
 
+    /** Waits until allowed guest [port]'s phone port listens; throws when it went back to an offer, or in [OFFER_TIMEOUT_MS]. */
+    private fun awaitForward(vm: Vm, port: Int) {
+        val deadline = System.currentTimeMillis() + OFFER_TIMEOUT_MS
+        while (true) {
+            val o = vm.offers.value.offers[port]
+            if (o?.state != ForwardOffers.State.ALLOWED) error(o?.failure ?: "guest port $port is no longer allowed")
+            if (vm.listeningForwards().any { it.guestPort == port && it.hostPort == o.phonePort }) return
+            if (System.currentTimeMillis() > deadline) error("phone port ${o.phonePort} isn't listening after $OFFER_TIMEOUT_MS ms")
+            Thread.sleep(OFFER_POLL_MS)
+        }
+    }
+
     private fun tab(vm: Vm, id: Int) = vm.tabs.all().firstOrNull { it.id == id } ?: error("no tab $id")
 
     /**
@@ -206,5 +237,7 @@ class ControlProvider : ContentProvider() {
         const val TAG = "ControlProvider"
         const val DUMP_LINES = 40
         const val TAB_TIMEOUT_MS = 60_000L
+        const val OFFER_TIMEOUT_MS = 5_000L
+        const val OFFER_POLL_MS = 50L
     }
 }
