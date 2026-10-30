@@ -217,9 +217,10 @@ in
 
       with subtest("a udp stream relays datagrams to a guest UDP port"):
           phone.wait_until_succeeds("ss -uln | grep -q 127.0.0.1:7777")
-          # Each datagram is its own socat child, so replies may cross, and on a
-          # loaded build machine they come later than the CLI's default --wait.
-          out = client.succeed(f"printf 'one\\ntwo\\n' | {A} udp --wait 15s 7777")
+          # Each datagram is its own socat child, so replies may cross, and on a loaded machine come late.
+          client.succeed(f"systemd-run --unit=udp sh -c \"printf 'one\\ntwo\\n' | {A} udp --wait 120s 7777 > /tmp/udp\"")
+          client.wait_until_succeeds("test $(grep -c '^echo:' /tmp/udp) -ge 2", timeout=120)
+          out = client.succeed("cat /tmp/udp")
           assert sorted(out.split()) == ["echo:one", "echo:two"], out
 
       with subtest("a switch reloads the config live, without restarting the agent"):
@@ -252,14 +253,17 @@ in
           phone.fail("runuser -u nobody -- ${nodes.phone.pocketnix.guest.package}/bin/pocketnix-guest paste")
 
       with subtest("a user's listener reaches the app"):
-          # Runs only where the module offers forwards; /tmp/events is the events stream above.
-          if ${offersPython}:
-              def pushed_8123(_):
+          # A function, so the type check covers it while the module has no forwardOffers.
+          def user_listener_reaches_the_app() -> None:
+              def pushed_8123(_: bool) -> bool:
+                  # The events unit's output.
                   pushes = [json.loads(l) for l in client.succeed("cat /tmp/events").splitlines()]
                   snapshots = [p["ports"] for p in pushes if p["type"] == "port-listeners"]
                   return bool(snapshots) and 8123 in snapshots[-1]
               phone.succeed("systemd-run --unit=user-listener -p User=${nodes.phone.pocketnix.guest.user} ${pkgs.socat}/bin/socat TCP-LISTEN:8123,fork EXEC:${pkgs.coreutils}/bin/cat")
-              retry(pushed_8123, timeout=60)
+              retry(pushed_8123, timeout_seconds=60)
+          if ${offersPython}:
+              user_listener_reaches_the_app()
           else:
               print("skipped: no pocketnix.guest.forwardOffers")
 
