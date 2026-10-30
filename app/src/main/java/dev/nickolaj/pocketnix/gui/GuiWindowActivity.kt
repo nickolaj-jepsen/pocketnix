@@ -2,6 +2,7 @@ package dev.nickolaj.pocketnix.gui
 
 import android.annotation.SuppressLint
 import android.app.ActivityManager
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -377,6 +378,8 @@ class GuiWindowActivity :
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        // Android lets an app read the clipboard only while it has focus.
+        if (hasFocus) getSystemService(ClipboardManager::class.java)?.primaryClip?.takeIf { it.itemCount > 0 }?.let(vm::syncClipboard)
         // Kept on a splash too: the window it becomes has the focus it had.
         focused = hasFocus
         val s = surface ?: return
