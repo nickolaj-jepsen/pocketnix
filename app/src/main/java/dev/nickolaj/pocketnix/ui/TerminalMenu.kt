@@ -106,7 +106,7 @@ private fun localhostPort(uri: URI): Int? {
 sealed interface WebOpen {
     data class Now(val url: String) : WebOpen
 
-    /** Allow guest [port]'s offer (D80), then open [url] through its forward ([rewriteLocalhost]). */
+    /** Allow guest [port]'s offer, as a tap on a link to it is consent, then open [url] through its forward ([rewriteLocalhost]). */
     data class AllowThenOpen(val port: Int, val url: String) : WebOpen
 }
 

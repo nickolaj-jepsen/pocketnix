@@ -115,4 +115,12 @@ class ForwardOffersTest {
             o.describe()
         )
     }
+
+    @Test
+    fun anAllowLosesAPhonePortAnotherAllowTook() {
+        val o = ForwardOffers().observe(listOf(8000, 8001), lan = false, module = emptyList(), now = 0)
+        val first = o.allow(8000, 8001)
+        assertNull(first.allowUnlessTaken(8001, 8001, module = emptyList()))
+        assertEquals(State.ALLOWED, first.allowUnlessTaken(8001, 8002, module = emptyList())!!.offers[8001]!!.state)
+    }
 }

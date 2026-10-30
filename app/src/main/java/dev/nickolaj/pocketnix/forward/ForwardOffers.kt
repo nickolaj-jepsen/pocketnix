@@ -14,7 +14,7 @@ data class ForwardOffers(
     val offers: Map<Int, Offer> = emptyMap(),
     /** The last snapshot's ports, less module forwards'. */
     val listening: Set<Int> = emptySet(),
-    /** The snapshot's `lan`: session forwards bind every address, not 127.0.0.1 (B3). */
+    /** The snapshot's `lan`: session forwards bind every address, not 127.0.0.1; only the module's option sets it. */
     val lan: Boolean = false
 ) {
     enum class State { OFFERED, DISMISSED, ALLOWED }
@@ -38,7 +38,8 @@ data class ForwardOffers(
      * that left is withdrawn; a dismissed one stays dismissed. An allowed one
      * that left keeps its forward for [GRACE_MS], and one that came back in
      * time keeps it without asking again. A port that is now a module
-     * forward's is dropped whatever its state (D78).
+     * forward's is dropped whatever its state, so two phone listeners never
+     * reach one guest port.
      */
     fun observe(ports: Collection<Int>, lan: Boolean, module: List<Forward>, now: Long): ForwardOffers {
         val moduleGuest = moduleGuestPorts(module)
@@ -63,11 +64,21 @@ data class ForwardOffers(
         return with(Offer(port, State.ALLOWED, phonePort = phonePort))
     }
 
-    /** Dismisses an offered [port] for the rest of the boot. An allowed one has no manual revoke (D75). */
+    /**
+     * Dismisses an offered [port] for the rest of the boot. An allowed one has
+     * no manual revoke: it ends when its listener has been gone for [GRACE_MS],
+     * or at the next boot.
+     */
     fun dismiss(port: Int): ForwardOffers {
         val o = offers[port]?.takeIf { it.state == State.OFFERED } ?: return this
         return with(o.copy(state = State.DISMISSED, failure = null))
     }
+
+    /**
+     * [allow], unless [phonePort] became another forward's since it was
+     * picked (two Allows at once): null then, and the caller picks again.
+     */
+    fun allowUnlessTaken(port: Int, phonePort: Int, module: List<Forward>): ForwardOffers? = if (phonePort in takenPhonePorts(module)) null else allow(port, phonePort)
 
     /** An Allow found no phone port: [port] stays offered, saying why. */
     fun allowFailed(port: Int, message: String): ForwardOffers {

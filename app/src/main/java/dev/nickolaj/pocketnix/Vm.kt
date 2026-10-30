@@ -468,18 +468,25 @@ class Vm(private val app: Context) {
         }
         if (offer.state == ForwardOffers.State.ALLOWED) return
         if (port !in o.listening) error("nothing listens on guest port $port")
-        val taken = o.takenPhonePorts(control.config.value?.forwards.orEmpty())
-        val phone = withContext(Dispatchers.IO) { pickPhonePort(port, o.lan, taken) }
-        if (phone == null) {
-            _offers.update { it.allowFailed(port, "No phone port from $port up is free.") }
-            error("no phone port from $port up is free")
+        val module = control.config.value?.forwards.orEmpty()
+        // Another Allow may take the picked port while this one probes: pick again then.
+        repeat(ALLOW_ATTEMPTS) {
+            val taken = _offers.value.takenPhonePorts(module)
+            val phone = withContext(Dispatchers.IO) { pickPhonePort(port, o.lan, taken) }
+            if (phone == null) {
+                _offers.update { it.allowFailed(port, "No phone port from $port up is free.") }
+                error("no phone port from $port up is free")
+            }
+            var allowed = false
+            _offers.update { s -> s.allowUnlessTaken(port, phone, module)?.also { allowed = true } ?: s.also { allowed = false } }
+            if (allowed) return
         }
-        _offers.update { it.allow(port, phone) }
+        error("guest port $port's phone port kept being taken")
     }
 
     /**
      * Guest [port]'s forward once it listens, allowing its offer first as a
-     * tap on a localhost link does (D80). Throws as [answerOffer] does, when
+     * tap on a localhost link does. Throws as [answerOffer] does, when
      * the forward's phone port couldn't listen, or after [LINK_FORWARD_WAIT_MS].
      */
     suspend fun forwardForLink(port: Int): Forward {
@@ -615,6 +622,9 @@ class Vm(private val app: Context) {
 
         // How long a link tap waits for its new session forward to listen.
         const val LINK_FORWARD_WAIT_MS = 10_000L
+
+        /** How often an Allow picks a phone port again when another Allow took it meanwhile. */
+        private const val ALLOW_ATTEMPTS = 3
         const val HISTORY_LIMIT = 1000
 
         // org.freedesktop.Notifications' "dismissed by the user".
