@@ -23,7 +23,7 @@ use anyhow::bail;
 const USAGE: &str = "usage: pocketnix-gui-bench <command> [flags]
 
 commands:
-  client [--mode noise|gradient|scroll|rect|idle|touch] [--duration SECS] [--warmup SECS]
+  client [--mode noise|gradient|scroll|rect|idle|touch|video] [--duration SECS] [--warmup SECS]
          [--rate HZ] [--res FACTOR] [--scroll PX] [--rect PX] [--full-damage] [--fullscreen]
          [--stats NAME=SOCKET]... [--no-default-stats] [--timeout SECS]
       Opens one window and draws into it: a new frame on every frame callback
@@ -41,6 +41,8 @@ commands:
         idle      one frame, then nothing
         touch     a new colour on each touch or button press: the input's
                   latency to its frame callback
+        video     every frame a whole buffer of video-like content (panning
+                  smooth colour, compressing like filmed video)
       --res scales the buffer against the window's pixels; a viewport shows
       it at the window's size.
       --stats adds a stats socket to snapshot (the compositor's,
