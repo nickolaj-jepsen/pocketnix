@@ -33,6 +33,7 @@ changing an option or bumping `flake.lock` (nixpkgs renders the doc), run
 
 ```bash
 nix flake check                       # every check for this system (avf-boot on x86_64 needs aarch64 builds)
+(cd go && GOOS= GOARCH= go generate ./internal/portwatch)  # once per checkout: the eBPF objects
 go -C go vet ./... && go -C go test ./...
 nix run .#gradle -- testDebugUnitTest lintDebug
 nix fmt                               # Nix, Go and Kotlin (nix/treefmt.nix)
