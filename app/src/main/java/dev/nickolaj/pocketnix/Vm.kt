@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.graphics.Typeface
+import android.os.SystemClock
 import android.util.Log
 import dev.nickolaj.pocketnix.agent.AgentException
 import dev.nickolaj.pocketnix.agent.ControlChannel
@@ -24,8 +25,12 @@ import dev.nickolaj.pocketnix.engine.VmState
 import dev.nickolaj.pocketnix.files.GuestDocumentsProvider
 import dev.nickolaj.pocketnix.files.PendingUploads
 import dev.nickolaj.pocketnix.files.Transfers
+import dev.nickolaj.pocketnix.forward.ForwardOffers
+import dev.nickolaj.pocketnix.forward.OfferNotifications
 import dev.nickolaj.pocketnix.forward.PortForwards
+import dev.nickolaj.pocketnix.forward.pickPhonePort
 import dev.nickolaj.pocketnix.gui.GuiSession
+import dev.nickolaj.pocketnix.gui.guard
 import dev.nickolaj.pocketnix.host.HostMonitor
 import dev.nickolaj.pocketnix.hostfs.HostFolderLinks
 import dev.nickolaj.pocketnix.hostfs.SafFolder
@@ -55,6 +60,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -97,6 +103,12 @@ class Vm(private val app: Context) {
 
     /** The TCP forwards listening on their phone port now, which a localhost link may be pointed at. */
     fun listeningForwards(): List<Forward> = forwards.listening()
+
+    private val _offers = MutableStateFlow(ForwardOffers())
+
+    /** The guest listeners offered as forwards this boot, and the user's answers. */
+    val offers: StateFlow<ForwardOffers> = _offers.asStateFlow()
+    private val offerNotifications = OfferNotifications(app)
 
     private val _typeface = MutableStateFlow<Typeface?>(null)
 
@@ -226,11 +238,54 @@ class Vm(private val app: Context) {
         }
         scope.launch { control.config.map { it?.gui }.distinctUntilChanged().collect { gui.config(it) } }
         scope.launch {
-            combine(control.config, state) { cfg, s -> cfg?.forwards.orEmpty() to (s == VmState.Running) }
+            // Offers belong to one guest boot; a dropped stream keeps the last snapshot, the next one replaces it.
+            combine(state, control.portListeners, control.config) { s, l, cfg -> Triple(s == VmState.Running, l, cfg?.forwards.orEmpty()) }
+                .collect { (running, l, module) ->
+                    _offers.update { o ->
+                        when {
+                            !running -> ForwardOffers()
+                            l == null -> o
+                            else -> o.observe(l.ports, l.lan, module, SystemClock.elapsedRealtime())
+                        }
+                    }
+                }
+        }
+        scope.launch {
+            _offers.collectLatest { o ->
+                val at = o.nextExpiry() ?: return@collectLatest
+                delay(at - SystemClock.elapsedRealtime())
+                _offers.update { it.expire(SystemClock.elapsedRealtime()) }
+            }
+        }
+        scope.launch {
+            var before = ForwardOffers()
+            _offers.collect { after ->
+                val notices = after.noticesSince(before)
+                before = after
+                for (port in notices.cancel) guard("withdrawing the offer of $port") { offerNotifications.cancel(port) }
+                for (o in notices.post) {
+                    val taken = after.takenPhonePorts(control.config.value?.forwards.orEmpty())
+                    val phone = withContext(Dispatchers.IO) { pickPhonePort(o.port, after.lan, taken) }
+                    guard("offering ${o.port}") { offerNotifications.post(o, phone, after.lan, control.config.value?.hostname) }
+                }
+            }
+        }
+        scope.launch {
+            combine(control.config, state, _offers) { cfg, s, o ->
+                val module = cfg?.forwards.orEmpty()
+                Triple(module, o.forwards(module), s == VmState.Running)
+            }
                 .distinctUntilChanged()
-                .collectLatest { (fw, running) ->
+                .collectLatest { (module, session, running) ->
+                    val fw = module + session
                     val dialer = if (running) _engine.value.dialer else null
                     _forwardErrors.value = withContext(Dispatchers.IO) { forwards.apply(fw, dialer) }
+                    // A session forward that can't listen goes back to an offer rather than into the retries.
+                    if (dialer != null) {
+                        for (f in session.filter { forwards.failure(it) != null }) {
+                            _offers.update { it.bindFailed(f.guestPort, f.hostPort, "Phone port ${f.hostPort} couldn't listen.") }
+                        }
+                    }
                     // A port another app holds may come free (that app stopped): keep trying, less and less often.
                     var wait = FORWARD_RETRY_MS
                     while (_forwardErrors.value.isNotEmpty() && dialer != null) {
@@ -390,6 +445,36 @@ class Vm(private val app: Context) {
                 Log.w(TAG, "${req.optString("type")}: ${it.message}")
             }
         }
+    }
+
+    /**
+     * Answers guest [port]'s offer: allowing picks its phone port
+     * ([pickPhonePort]) and makes it a session forward, which listens once
+     * the forwards are applied; dismissing hides it for the rest of the boot.
+     * Throws when the port isn't offered, or no phone port is free (which the
+     * offer then says).
+     */
+    suspend fun answerOffer(port: Int, allow: Boolean) {
+        val o = _offers.value
+        val offer = o.offers[port] ?: error("guest port $port isn't offered")
+        if (!allow) {
+            _offers.update { it.dismiss(port) }
+            return
+        }
+        if (offer.state == ForwardOffers.State.ALLOWED) return
+        if (port !in o.listening) error("nothing listens on guest port $port")
+        val taken = o.takenPhonePorts(control.config.value?.forwards.orEmpty())
+        val phone = withContext(Dispatchers.IO) { pickPhonePort(port, o.lan, taken) }
+        if (phone == null) {
+            _offers.update { it.allowFailed(port, "No phone port from $port up is free.") }
+            error("no phone port from $port up is free")
+        }
+        _offers.update { it.allow(port, phone) }
+    }
+
+    /** [answerOffer] from a notification: a failure is logged. */
+    fun answerOfferLater(port: Int, allow: Boolean) {
+        scope.launch { runCatching { answerOffer(port, allow) }.onFailure { Log.w(TAG, "offer $port: ${it.message}") } }
     }
 
     /** Shares text as the share sheet does; returns where it landed, or throws. */

@@ -133,6 +133,11 @@
             android:name=".GuestNotificationReceiver"
             android:exported="false" />
 
+        <!-- A port forward offer's Allow, Dismiss and swipe; only its own PendingIntents reach it. -->
+        <receiver
+            android:name=".forward.ForwardOfferReceiver"
+            android:exported="false" />
+
         <!-- A guest's pick or save: Android's document picker, then the transfer. -->
         <activity
             android:name=".files.PickerActivity"
