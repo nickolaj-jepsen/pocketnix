@@ -4,6 +4,7 @@
 {
   lib,
   buildGoModule,
+  llvmPackages,
   e2fsprogs,
   dbus,
   pname ? "pocketnix",
@@ -31,10 +32,15 @@ in
     # A module cache rather than vendor/, whose contents follow the source's imports: every
     # variant shares this hash.
     proxyVendor = true;
-    vendorHash = "sha256-ZeQ7I2zkB7ER67x1Ji9qOd0zs5L67o3gD2SnXAL2Z2k=";
+    vendorHash = "sha256-4lP2HSoobu81vk4kTDxnmDNyiBy1KvIbNl9YBhSBOBI=";
 
     # The agent runs in the guest from a NixOS store path; no cgo keeps it a single static binary.
     env.CGO_ENABLED = 0;
+    # bpf2go's clang and llvm-strip. Unwrapped: the wrapper's hardening flags aren't valid for BPF,
+    # and its cross-compiling name is target-prefixed.
+    nativeBuildInputs = [llvmPackages.clang-unwrapped llvmPackages.llvm];
+    # The BPF object is git-ignored; GOOS/GOARCH cleared so the generator runs on the build platform.
+    preBuild = "GOOS= GOARCH= go generate ./internal/portwatch";
     doCheck = withTests;
     # The --inject tests edit a real ext4 image; notifyd's run a private session bus.
     nativeCheckInputs = [e2fsprogs dbus];
