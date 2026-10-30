@@ -183,18 +183,21 @@ fun MainScreen(vm: Vm) {
             updateAvailable = updates?.available != null,
             onUpdates = { showUpdates = true }
         ) {
-            mainMenu(mainMenuState(context, vm, shownWindow)) { item ->
-                when (item) {
-                    MainItem.APPS -> context.startActivity(Intent(context, LauncherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                    MainItem.MOVE_OUT -> vm.gui.move(shownWindow, "")
-                    MainItem.REOPEN_ENDED -> vm.reopenEndedTabs()
-                    MainItem.COMMANDS -> showPalette = true
-                    MainItem.UPDATES -> showUpdates = true
-                    MainItem.SETTINGS -> showSettings = true
-                    MainItem.KEEP_SCREEN_ON -> controller.setKeepScreenOn(!vm.settings.keepScreenOn)
-                    MainItem.REBOOT -> confirm = "Reboot the guest? Every tab ends. ${closingWindows(vm.gui.windowTitles())}".trim() to vm::reboot
-                    MainItem.RESTART_BOOT_MENU -> confirm = "Restart into the boot menu? This stops the guest at once, without shutting it down." to vm::restartWithBootMenu
-                    MainItem.START_BOOT_MENU -> vm.start(bootMenu = true)
+            // Built during composition: a throw here would kill the app and the VM.
+            guard("building the ⋮ menu", emptyList()) {
+                mainMenu(mainMenuState(context, vm, shownWindow)) { item ->
+                    when (item) {
+                        MainItem.APPS -> context.startActivity(Intent(context, LauncherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        MainItem.MOVE_OUT -> vm.gui.move(shownWindow, "")
+                        MainItem.REOPEN_ENDED -> vm.reopenEndedTabs()
+                        MainItem.COMMANDS -> showPalette = true
+                        MainItem.UPDATES -> showUpdates = true
+                        MainItem.SETTINGS -> showSettings = true
+                        MainItem.KEEP_SCREEN_ON -> controller.setKeepScreenOn(!vm.settings.keepScreenOn)
+                        MainItem.REBOOT -> confirm = "Reboot the guest? Every tab ends. ${closingWindows(vm.gui.windowTitles())}".trim() to vm::reboot
+                        MainItem.RESTART_BOOT_MENU -> confirm = "Restart into the boot menu? This stops the guest at once, without shutting it down." to vm::restartWithBootMenu
+                        MainItem.START_BOOT_MENU -> vm.start(bootMenu = true)
+                    }
                 }
             }
         }

@@ -34,16 +34,22 @@ fun tabMenu(
     add(MenuAction(SHARE_TRANSCRIPT) { guard("sharing the transcript") { shareTranscript() } })
 }
 
-/** [tab]'s long-press menu on [vm]; [rename] asks for the new title. */
-fun chipMenu(vm: Vm, tab: Tab, rename: () -> Unit): List<MenuAction> = tabMenu(
-    console = tab.kind == Tab.Kind.Console,
-    ended = tab.ended,
-    canOpen = vm.control.link.value is ControlChannel.Link.Up,
-    rename = rename,
-    newTab = { (tab.kind as? Tab.Kind.Pty)?.let { vm.openTab(it.profile) } },
-    shareTranscript = { vm.terminalActions.shareTranscript(tab) },
-    reopen = { vm.reopenTab(tab.id)?.let { vm.tabs.select(it.id) } }
-)
+/**
+ * [tab]'s long-press menu on [vm]; [rename] asks for the new title. Empty
+ * when building it fails: it's built during composition, where a throw would
+ * kill the app and the VM.
+ */
+fun chipMenu(vm: Vm, tab: Tab, rename: () -> Unit): List<MenuAction> = guard("building the tab menu", emptyList()) {
+    tabMenu(
+        console = tab.kind == Tab.Kind.Console,
+        ended = tab.ended,
+        canOpen = vm.control.link.value is ControlChannel.Link.Up,
+        rename = rename,
+        newTab = { (tab.kind as? Tab.Kind.Pty)?.let { vm.openTab(it.profile) } },
+        shareTranscript = { vm.terminalActions.shareTranscript(tab) },
+        reopen = { vm.reopenTab(tab.id)?.let { vm.tabs.select(it.id) } }
+    )
+}
 
 /** Starts every ended terminal tab again, each in its place. */
 fun Vm.reopenEndedTabs() {
