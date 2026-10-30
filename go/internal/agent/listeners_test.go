@@ -2,16 +2,19 @@ package agent_test
 
 import (
 	"bufio"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"os/user"
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -284,5 +287,75 @@ func TestAgentsOwnPortIsNeverOffered(t *testing.T) {
 		case <-timeout:
 			t.Fatalf("no snapshot with %d within 5s", port)
 		}
+	}
+}
+
+// procTable writes a /proc/net/tcp with a LISTEN line per uid and IPv4 address:port.
+func procTable(t *testing.T, dir string, lines ...string) {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString("  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n")
+	for i := 0; i+1 < len(lines); i += 2 {
+		uid, addr := lines[i], netip.MustParseAddrPort(lines[i+1])
+		a := addr.Addr().As4()
+		fmt.Fprintf(&b, "%4d: %08X:%04X 00000000:0000 0A 00000000:00000000 00:00000000 00000000 %5s        0 %d\n",
+			i/2, binary.NativeEndian.Uint32(a[:]), addr.Port(), uid, 1000+i)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tcp"), []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestForwardReachesOnlyTheSessionUsersListener(t *testing.T) {
+	echo, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echo.Close()
+	go func() {
+		for {
+			c, err := echo.Accept()
+			if err != nil {
+				return
+			}
+			c.Write([]byte("hi"))
+			c.Close()
+		}
+	}()
+	port := echo.Addr().(*net.TCPAddr).Port
+	me, other := strconv.Itoa(os.Getuid()), strconv.Itoa(os.Getuid()+1)
+	dir := t.TempDir()
+	forward := func(h *harness) error {
+		c, err := h.client.Forward(port)
+		if err == nil {
+			defer c.Close()
+			if got, _ := io.ReadAll(c); string(got) != "hi" {
+				t.Errorf("forward got %q", got)
+			}
+		}
+		return err
+	}
+
+	h := start(t, baseConfig(), unixAddr)
+	h.srv.ProcNet = dir
+	// The table says another user also listens on 0.0.0.0, which a dial to 127.0.0.1 may reach.
+	procTable(t, dir, me, fmt.Sprintf("127.0.0.1:%d", port), other, fmt.Sprintf("0.0.0.0:%d", port))
+	var re *protocol.RemoteError
+	if err := forward(h); !errors.As(err, &re) {
+		t.Errorf("forward to a port another user listens on = %v, want an agent error", err)
+	}
+	procTable(t, dir, me, fmt.Sprintf("127.0.0.1:%d", port))
+	if err := forward(h); err != nil {
+		t.Errorf("forward to the session user's port: %v", err)
+	}
+
+	// A module forward reaches whoever listens.
+	cfg := baseConfig()
+	cfg["forwards"] = []map[string]any{{"name": "svc", "guestPort": port}}
+	m := start(t, cfg, unixAddr)
+	m.srv.ProcNet = dir
+	procTable(t, dir, other, fmt.Sprintf("127.0.0.1:%d", port))
+	if err := forward(m); err != nil {
+		t.Errorf("module forward to another user's port: %v", err)
 	}
 }

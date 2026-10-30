@@ -136,13 +136,9 @@ func (s *Server) watchPorts(ctx context.Context, gen int, load func() (PortHints
 		log.Printf("port watcher: polling /proc every %v (%v)", poll, err)
 		polling()
 	}
-	dir := s.ProcNet
-	if dir == "" {
-		dir = "/proc/net"
-	}
 	var lastErr string
 	for {
-		socks, err := scanSockets(dir)
+		socks, err := scanSockets(s.procNet())
 		if err != nil {
 			if err.Error() != lastErr {
 				log.Printf("port watcher: %v", err)
@@ -172,6 +168,13 @@ func (s *Server) watchPorts(ctx context.Context, gen int, load func() (PortHints
 			}
 		}
 	}
+}
+
+func (s *Server) procNet() string {
+	if s.ProcNet == "" {
+		return "/proc/net"
+	}
+	return s.ProcNet
 }
 
 func (s *Server) portsScanned(gen int, socks []socket) {
@@ -256,25 +259,62 @@ var dialable = []netip.Addr{
 	netip.IPv6Loopback(),
 }
 
-// offerable is the set forwardOffers pushes: the ports, ascending and
-// unique, of LISTEN sockets that uid owns on a dialable address, from 1024
-// up, that are neither a module TCP forward's guest port nor the agent's own.
-func offerable(socks []socket, uid int, forwards []protocol.Forward, own map[int]int) []int {
-	ports := []int{}
+// owned maps each port that has a LISTEN socket on a dialable address to
+// whether uid owns every such socket. A forward dials by port, so one other
+// owner may be the one that answers.
+func owned(socks []socket, uid int) map[int]bool {
+	ports := map[int]bool{}
 	for _, sk := range socks {
-		port := int(sk.local.Port())
-		if sk.state != tcpListen || sk.uid != uid || port < 1024 || own[port] > 0 || !slices.Contains(dialable, sk.local.Addr()) {
+		if sk.state != tcpListen || !slices.Contains(dialable, sk.local.Addr()) {
 			continue
 		}
-		if slices.ContainsFunc(forwards, func(f protocol.Forward) bool {
-			return f.GuestPort == port && f.Protocol == protocol.ProtocolTCP
-		}) {
+		port := int(sk.local.Port())
+		mine, seen := ports[port]
+		ports[port] = sk.uid == uid && (mine || !seen)
+	}
+	return ports
+}
+
+// offerable is the set forwardOffers pushes: the ports, ascending and
+// unique, whose dialable LISTEN sockets uid owns all of, from 1024 up, that
+// are neither a module TCP forward's guest port nor the agent's own.
+func offerable(socks []socket, uid int, forwards []protocol.Forward, own map[int]int) []int {
+	ports := []int{}
+	for port, mine := range owned(socks, uid) {
+		if !mine || port < 1024 || own[port] > 0 || moduleForward(forwards, port) {
 			continue
 		}
 		ports = append(ports, port)
 	}
 	slices.Sort(ports)
-	return slices.Compact(ports)
+	return ports
+}
+
+func moduleForward(forwards []protocol.Forward, port int) bool {
+	return slices.ContainsFunc(forwards, func(f protocol.Forward) bool {
+		return f.GuestPort == port && f.Protocol == protocol.ProtocolTCP
+	})
+}
+
+// sessionListener errs unless the session user owns every dialable
+// listener on port, read from /proc now: a forward the module didn't
+// declare reaches only the session user's servers.
+func (s *Server) sessionListener(port int) error {
+	socks, err := scanSockets(s.procNet())
+	if err != nil {
+		return err
+	}
+	s.ports.mu.Lock()
+	uid := s.ports.uid
+	s.ports.mu.Unlock()
+	mine, listening := owned(socks, uid)[port]
+	switch {
+	case !listening:
+		return fmt.Errorf("nothing listens on port %d", port)
+	case !mine:
+		return fmt.Errorf("port %d has a listener that isn't the session user's, and isn't a module forward", port)
+	}
+	return nil
 }
 
 // scanSockets reads the LISTEN sockets of dir's tcp and tcp6 (absent

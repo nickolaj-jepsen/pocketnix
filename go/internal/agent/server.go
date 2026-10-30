@@ -380,6 +380,12 @@ func (s *Server) serveForward(c net.Conn, port int) {
 		reject(c, fmt.Sprintf("port %d out of range", port))
 		return
 	}
+	if !moduleForward(s.config().Forwards, port) {
+		if err := s.sessionListener(port); err != nil {
+			reject(c, err.Error())
+			return
+		}
+	}
 	t, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 10*time.Second)
 	// A server for "localhost" may listen on ::1 alone (Node, Vite).
 	if errors.Is(err, syscall.ECONNREFUSED) {

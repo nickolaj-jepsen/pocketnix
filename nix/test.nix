@@ -288,6 +288,18 @@ in
           assert client.succeed(f"printf v6 | timeout 60 {A} forward 8125") == "v6"
           phone.succeed("systemctl stop v6-listener")
 
+      with subtest("a port root also listens on is neither offered nor forwarded"):
+          # A forward dials 127.0.0.1 first: root's would answer for the user's ::1.
+          phone.succeed("systemd-run --unit=root-v4 ${pkgs.socat}/bin/socat TCP4-LISTEN:8126,bind=127.0.0.1,fork EXEC:${pkgs.coreutils}/bin/cat")
+          phone.succeed("systemd-run --unit=user-v6 -p User=${user} ${pkgs.socat}/bin/socat TCP6-LISTEN:8126,bind=[::1],fork EXEC:${pkgs.coreutils}/bin/cat")
+          phone.wait_until_succeeds("test $(ss -tlnH 'sport = :8126' | wc -l) = 2", timeout=60)
+          # Started after both, so the scan that finds it sees them too.
+          phone.succeed("systemd-run --unit=user-later -p User=${user} ${pkgs.socat}/bin/socat TCP-LISTEN:8127,fork EXEC:${pkgs.coreutils}/bin/cat")
+          await_ports("/tmp/events", lambda ports: 8127 in ports)
+          assert all(8126 not in p["ports"] for p in snapshots("/tmp/events")), snapshots("/tmp/events")
+          client.fail(f"printf x | timeout 60 {A} forward 8126")
+          phone.succeed("systemctl stop root-v4 user-v6 user-later")
+
       with subtest("the session bus: notify-send's actions come back, gio opens on Android"):
           # Lingering, with no login, starts the user's bus.
           phone.wait_for_unit("dbus.socket", "nixos")
