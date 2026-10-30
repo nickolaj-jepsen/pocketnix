@@ -5,6 +5,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -14,7 +15,11 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import android.util.Log
 import android.webkit.MimeTypeMap
+import android.widget.Toast
+import androidx.core.content.FileProvider
 import dev.nickolaj.pocketnix.files.GuestDocumentsProvider
+import dev.nickolaj.pocketnix.files.Transfers
+import java.io.File
 import org.json.JSONObject
 
 /** Guest programs reaching Android: see docs/architecture.md, Integrations. */
@@ -47,7 +52,7 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
             "share" -> share(msg, appVisible)
 
             "guest-clipboard" -> {
-                // A clip goes through one binder transaction (~1 MB, UTF-16): more throws.
+                // A clip or an intent goes through one binder transaction (~1 MB, UTF-16): more throws.
                 val text = msg.optString("text").take(MAX_CLIP_CHARS)
                 lastGuestCopy = text
                 clipboard.setPrimaryClip(ClipData.newPlainText(hostname() ?: "pocketnix", text))
@@ -59,38 +64,79 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
 
     private fun open(msg: JSONObject, appVisible: Boolean) {
         val url = msg.optString("url")
-        val intent = if (url.isNotEmpty()) {
-            Intent(Intent.ACTION_VIEW, Uri.parse(url))
-        } else {
-            val path = msg.optString("path")
-            val uri = DocumentsContract.buildDocumentUri(GuestDocumentsProvider.authority(context), GuestDocumentsProvider.docId(path))
-            Intent(Intent.ACTION_VIEW).setDataAndType(uri, mimeType(path)).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        val chooser = Intent.createChooser(intent, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        startOrNotify(chooser, appVisible, "Open from ${hostname() ?: "the guest"}", url.ifEmpty { msg.optString("path") })
+        if (url.isNotEmpty()) openUrl(url, appVisible) else openDocument(msg.optString("path"), appVisible)
     }
 
     private fun share(msg: JSONObject, appVisible: Boolean) {
         val paths = msg.optJSONArray("paths")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty()
-        val send = if (paths.isEmpty()) {
-            Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, msg.optString("text"))
+        if (paths.isEmpty()) {
+            shareText(msg.optString("text"), appVisible)
         } else {
-            val uris = paths.map { DocumentsContract.buildDocumentUri(GuestDocumentsProvider.authority(context), GuestDocumentsProvider.docId(it)) }
-            val types = paths.map(::mimeType).distinct()
-            val type = types.singleOrNull() ?: types.map { it.substringBefore('/') }.distinct().singleOrNull()?.let { "$it/*" } ?: "*/*"
-            val intent = if (uris.size == 1) {
-                Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, uris[0])
-            } else {
-                Intent(Intent.ACTION_SEND_MULTIPLE).putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
-            }
-            intent.setType(type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION).apply {
-                clipData = ClipData.newRawUri(null, uris[0]).apply { uris.drop(1).forEach { addItem(ClipData.Item(it)) } }
-            }
+            shareFiles(paths.map(::documentUri), paths.map(::mimeType), appVisible, paths.joinToString(", "))
         }
-        val what = if (paths.isEmpty()) msg.optString("text").take(200) else paths.joinToString(", ")
-        val chooser = Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+
+    /**
+     * Opens [url]: a guest's request through a chooser, or with [chosen] (a
+     * link the user picked in the app) straight in its default app.
+     */
+    fun openUrl(url: String, appVisible: Boolean, chosen: Boolean = false) = open(Intent(Intent.ACTION_VIEW, Uri.parse(url)), url, appVisible, chosen)
+
+    /** Opens the document at [path], relative to the files root, as [openUrl] does. */
+    fun openDocument(path: String, appVisible: Boolean, chosen: Boolean = false) {
+        val intent = Intent(Intent.ACTION_VIEW).setDataAndType(documentUri(path), mimeType(path)).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        open(intent, path, appVisible, chosen)
+    }
+
+    private fun open(intent: Intent, what: String, appVisible: Boolean, chosen: Boolean) {
+        if (chosen) {
+            try {
+                context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            } catch (_: ActivityNotFoundException) {
+                Toast.makeText(context, "No app opens $what", Toast.LENGTH_LONG).show()
+            }
+            return
+        }
+        val chooser = Intent.createChooser(intent, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startOrNotify(chooser, appVisible, "Open from ${hostname() ?: "the guest"}", what)
+    }
+
+    /**
+     * Shares [text] through the share sheet; text too long for an intent
+     * goes as a text file named after [name].
+     */
+    fun shareText(text: String, appVisible: Boolean, name: String = "text") {
+        if (text.length <= MAX_CLIP_CHARS) {
+            val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
+            val chooser = Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startOrNotify(chooser, appVisible, "Share from ${hostname() ?: "the guest"}", text.take(200))
+            return
+        }
+        val dir = File(context.cacheDir, SHARE_DIR).apply { mkdirs() }
+        // A receiving app may still be reading an earlier share, so only old ones go.
+        val now = System.currentTimeMillis()
+        dir.listFiles()?.filter { now - it.lastModified() > SHARE_KEEP_MS }?.forEach { it.delete() }
+        val file = File(dir, "$name-$now.txt").apply { writeText(text) }
+        shareFiles(listOf(FileProvider.getUriForFile(context, Transfers.clipAuthority(context), file)), listOf("text/plain"), appVisible, file.name)
+    }
+
+    /** Shares the content [uris], of MIME [types], through the share sheet. */
+    fun shareFiles(uris: List<Uri>, types: List<String>, appVisible: Boolean, what: String) {
+        val distinct = types.distinct()
+        val type = distinct.singleOrNull() ?: distinct.map { it.substringBefore('/') }.distinct().singleOrNull()?.let { "$it/*" } ?: "*/*"
+        val intent = if (uris.size == 1) {
+            Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, uris[0])
+        } else {
+            Intent(Intent.ACTION_SEND_MULTIPLE).putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+        }
+        intent.setType(type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION).apply {
+            clipData = ClipData.newRawUri(null, uris[0]).apply { uris.drop(1).forEach { addItem(ClipData.Item(it)) } }
+        }
+        val chooser = Intent.createChooser(intent, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         startOrNotify(chooser, appVisible, "Share from ${hostname() ?: "the guest"}", what)
     }
+
+    private fun documentUri(path: String) = DocumentsContract.buildDocumentUri(GuestDocumentsProvider.authority(context), GuestDocumentsProvider.docId(path))
 
     /**
      * Starts [intent] while the app is visible; Android stops background apps
@@ -125,6 +171,10 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
         private const val NOTIFICATION_BASE = 100_000
         private const val MAX_NOTIFICATIONS = 50
         private const val MAX_CLIP_CHARS = 100_000
+
+        // A <cache-path> of the clip provider (res/xml/clipboard_paths.xml), apart from the clipboard's, which a guest copy empties.
+        private const val SHARE_DIR = "share"
+        private const val SHARE_KEEP_MS = 24 * 60 * 60 * 1000L
 
         fun mimeType(path: String): String = MimeTypeMap.getSingleton().getMimeTypeFromExtension(path.substringAfterLast('.', "").lowercase()) ?: "application/octet-stream"
     }

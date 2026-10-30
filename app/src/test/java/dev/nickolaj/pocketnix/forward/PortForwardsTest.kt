@@ -48,4 +48,20 @@ class PortForwardsTest {
         assertEquals(emptyList<String>(), forwards.apply(listOf(tcp, udp), unreachable))
         assertEquals(emptyList<String>(), forwards.apply(emptyList(), null))
     }
+
+    @Test
+    fun listeningLeavesOutFailedAndUdpForwards() {
+        val taken = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        val forwards = PortForwards("test")
+        val failed = Forward("web", 8000, taken.localPort, lan = false)
+        val up = Forward("ssh", 22, 0, lan = false)
+        val udp = Forward("mosh", 60001, 0, lan = false, udp = true)
+        try {
+            forwards.apply(listOf(failed, up, udp), unreachable)
+            assertEquals(listOf("ssh"), forwards.listening().map { it.name })
+        } finally {
+            taken.close()
+            forwards.apply(emptyList(), null)
+        }
+    }
 }
