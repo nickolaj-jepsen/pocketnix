@@ -107,6 +107,11 @@ class Vm(private val app: Context) {
     /** The guest runs but its agent hasn't answered in [AGENT_LATE_MS]: maybe a generation that won't boot. */
     val agentLate: StateFlow<Boolean> = _agentLate.asStateFlow()
 
+    /** What every status surface shows (see [vmPhase]). */
+    val phase: StateFlow<VmPhase> =
+        combine(state, control.link, stopping, agentLate, control.config) { s, link, stop, late, cfg -> vmPhase(s, link, stop, late, cfg?.hostname) }
+            .stateIn(scope, SharingStarted.Eagerly, vmPhase(state.value, control.link.value, stopping.value, agentLate.value, control.config.value?.hostname))
+
     val updates: StateFlow<Updates?> get() = control.updates
 
     private val bridge = GuestBridge(app) { control.config.value?.hostname }

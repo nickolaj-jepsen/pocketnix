@@ -5,7 +5,7 @@ import android.content.Intent
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import dev.nickolaj.pocketnix.ControlActivity
-import dev.nickolaj.pocketnix.agent.ControlChannel
+import dev.nickolaj.pocketnix.VmPhase
 import dev.nickolaj.pocketnix.engine.VmState
 import dev.nickolaj.pocketnix.gui.StopActivity
 import dev.nickolaj.pocketnix.vm
@@ -14,7 +14,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 /** A Quick Settings tile that starts and stops the VM, showing its state. */
@@ -24,18 +23,10 @@ class VmTileService : TileService() {
 
     override fun onStartListening() {
         watch = scope.launch {
-            combine(vm.state, vm.control.link, vm.stopping) { s, link, stopping -> Triple(s, link, stopping) }.collect { (s, link, stopping) ->
+            vm.phase.collect { phase ->
                 val tile = qsTile ?: return@collect
-                val running = s == VmState.Running || s == VmState.Starting
-                tile.state = if (running) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
-                tile.subtitle = when {
-                    stopping -> "Stopping"
-                    s == VmState.Starting -> "Starting"
-                    s is VmState.Failed -> "Failed"
-                    !running -> "Stopped"
-                    link is ControlChannel.Link.Up -> vm.config.value?.hostname ?: "Running"
-                    else -> "Booting"
-                }
+                tile.state = if (phase.off) Tile.STATE_INACTIVE else Tile.STATE_ACTIVE
+                tile.subtitle = tileSubtitle(phase)
                 tile.updateTile()
             }
         }
@@ -74,4 +65,16 @@ class VmTileService : TileService() {
         scope.cancel()
         super.onDestroy()
     }
+}
+
+/** The tile's subtitle for [phase]: one short line under the label. */
+internal fun tileSubtitle(phase: VmPhase): String = when (phase) {
+    VmPhase.Stopped -> "Stopped"
+    is VmPhase.Failed -> "Failed"
+    VmPhase.Starting -> "Starting"
+    VmPhase.Booting -> "Booting"
+    VmPhase.AgentLate -> "No agent yet"
+    is VmPhase.Running -> phase.host ?: "Running"
+    is VmPhase.Refused -> "Refused: ${phase.reason}"
+    VmPhase.Stopping -> "Stopping"
 }

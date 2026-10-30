@@ -1,7 +1,6 @@
 package dev.nickolaj.pocketnix.gui
 
-import dev.nickolaj.pocketnix.agent.ControlChannel
-import dev.nickolaj.pocketnix.engine.VmState
+import dev.nickolaj.pocketnix.VmPhase
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -152,20 +151,18 @@ class LaunchesTest {
     }
 
     private fun status(
-        vm: VmState = VmState.Running,
-        link: ControlChannel.Link = ControlChannel.Link.Up("1"),
-        late: Boolean = false,
+        vm: VmPhase = VmPhase.Running("box"),
         gui: Boolean? = true,
         ready: Boolean = true,
         launch: LaunchState = LaunchState.Pending
-    ) = splashStatus("Foot", vm, link, late, gui, ready, launch)
+    ) = splashStatus("Foot", vm, gui, ready, launch)
 
     @Test
     fun theSplashFollowsTheBootThenTheLaunch() {
-        val booting = status(vm = VmState.Starting, link = ControlChannel.Link.Down, gui = null, ready = false)
+        val booting = status(vm = VmPhase.Starting, gui = null, ready = false)
         // Running, but the agent hasn't answered yet: still the boot.
-        assertEquals(booting, status(link = ControlChannel.Link.Down, gui = null, ready = false))
-        val late = status(link = ControlChannel.Link.Down, late = true)
+        assertEquals(booting, status(vm = VmPhase.Booting, gui = null, ready = false))
+        val late = status(vm = VmPhase.AgentLate)
         val connecting = status(ready = false)
         val starting = status()
         assertEquals(starting, status(launch = LaunchState.Started))
@@ -183,15 +180,15 @@ class LaunchesTest {
         assertTrue(exec.failed && exec.canRetry)
         assertTrue(exec.text.contains("exited with status 127"))
         assertTrue(status(launch = LaunchState.Failed(LaunchState.TIMEOUT, "")).canRetry)
-        assertTrue(status(vm = VmState.Stopped, link = ControlChannel.Link.Down).failed)
-        val vmFailed = status(vm = VmState.Failed("no disk"), link = ControlChannel.Link.Down)
+        assertTrue(status(vm = VmPhase.Stopped).failed)
+        val vmFailed = status(vm = VmPhase.Failed("no disk"))
         assertTrue(vmFailed.failed && vmFailed.canRetry)
         assertTrue(vmFailed.text.contains("no disk"))
         val off = status(gui = false, ready = false)
         assertTrue(off.failed)
         assertFalse(off.canRetry)
-        assertTrue(status(link = ControlChannel.Link.Refused("too old")).failed)
+        assertTrue(status(vm = VmPhase.Refused("too old")).failed)
         // A failure the launch reported wins over a VM that stopped since.
-        assertFalse(status(vm = VmState.Stopped, launch = LaunchState.Failed(LaunchState.UNKNOWN, "")).canRetry)
+        assertFalse(status(vm = VmPhase.Stopped, launch = LaunchState.Failed(LaunchState.UNKNOWN, "")).canRetry)
     }
 }

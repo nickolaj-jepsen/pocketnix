@@ -44,8 +44,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.nickolaj.pocketnix.R
 import dev.nickolaj.pocketnix.Vm
-import dev.nickolaj.pocketnix.agent.ControlChannel
-import dev.nickolaj.pocketnix.engine.VmState
+import dev.nickolaj.pocketnix.VmPhase
 import dev.nickolaj.pocketnix.ui.PocketnixTheme
 import dev.nickolaj.pocketnix.vm
 import kotlinx.coroutines.Dispatchers
@@ -86,8 +85,7 @@ class LauncherActivity : ComponentActivity() {
 @Composable
 private fun Launcher(vm: Vm, open: (AppEntry, String, Boolean) -> Unit, pin: (AppEntry) -> Unit) {
     val revision by vm.gui.catalog.revision.collectAsState()
-    val state by vm.state.collectAsState()
-    val link by vm.control.link.collectAsState()
+    val phase by vm.phase.collectAsState()
     val config by vm.config.collectAsState()
     var query by rememberSaveable { mutableStateOf("") }
     val apps = remember(revision, query) {
@@ -96,7 +94,7 @@ private fun Launcher(vm: Vm, open: (AppEntry, String, Boolean) -> Unit, pin: (Ap
     val iconSize = remember { vm.gui.iconSize(large = false) }
     Column(Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 12.dp)) {
         Text(
-            launcherStatus(state, link, config?.gui?.enable, config?.hostname),
+            launcherStatus(phase, config?.gui?.enable),
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(vertical = 8.dp)
         )
@@ -175,9 +173,23 @@ private fun AppCell(vm: Vm, app: AppEntry, iconSize: Int, revision: Int, open: (
     }
 }
 
-private fun launcherStatus(state: VmState, link: ControlChannel.Link, guiEnabled: Boolean?, hostname: String?): String = when {
-    state == VmState.Stopped || state is VmState.Failed -> "The VM is off. Tapping an app starts it."
-    link !is ControlChannel.Link.Up -> "The VM is starting."
-    guiEnabled == false -> "GUI apps are off in this guest (pocketnix.guest.gui.enable)."
-    else -> "Apps of ${hostname ?: "the guest"}"
+/** The launcher's line above the apps; [guiEnabled] is the guest config's `gui.enable`, null before one arrived. */
+internal fun launcherStatus(phase: VmPhase, guiEnabled: Boolean?): String = when (phase) {
+    VmPhase.Stopped -> "The VM is off. Tapping an app starts it."
+
+    is VmPhase.Failed -> "The VM failed: ${phase.message}. Tapping an app starts it again."
+
+    VmPhase.Stopping -> "The VM is stopping."
+
+    VmPhase.Starting, VmPhase.Booting -> "The VM is starting."
+
+    VmPhase.AgentLate -> "The guest's agent hasn't answered. pocketnix's console tab shows the boot."
+
+    is VmPhase.Refused -> "The guest's agent refused pocketnix: ${phase.reason}"
+
+    is VmPhase.Running -> if (guiEnabled == false) {
+        "GUI apps are off in this guest (pocketnix.guest.gui.enable)."
+    } else {
+        "Apps of ${phase.host ?: "the guest"}"
+    }
 }

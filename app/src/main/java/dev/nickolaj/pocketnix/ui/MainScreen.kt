@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import dev.nickolaj.pocketnix.Vm
+import dev.nickolaj.pocketnix.VmPhase
 import dev.nickolaj.pocketnix.agent.ControlChannel
 import dev.nickolaj.pocketnix.engine.DiskImage
 import dev.nickolaj.pocketnix.engine.VmState
@@ -77,7 +78,7 @@ fun MainScreen(vm: Vm) {
     val context = LocalContext.current
     val state by vm.state.collectAsState()
     val link by vm.control.link.collectAsState()
-    val stopping by vm.stopping.collectAsState()
+    val phase by vm.phase.collectAsState()
     val config by vm.config.collectAsState()
     val tabs by vm.tabs.tabs.collectAsState()
     val selected by vm.tabs.selected.collectAsState()
@@ -86,7 +87,6 @@ fun MainScreen(vm: Vm) {
     val themeRevision by vm.themeRevision.collectAsState()
     val forwardErrors by vm.forwardErrors.collectAsState()
     val updates by vm.updates.collectAsState()
-    val agentLate by vm.agentLate.collectAsState()
     val serviceRefused by vm.serviceRefused.collectAsState()
     val windowTabs by vm.gui.tabWindows.collectAsState()
     val selectedWindow by vm.tabs.selectedWindow.collectAsState()
@@ -166,7 +166,7 @@ fun MainScreen(vm: Vm) {
             .imePadding()
     ) {
         StatusBar(
-            status = statusText(state, link, stopping, config?.hostname),
+            status = statusText(phase),
             running = running,
             canStart = missing.isEmpty(),
             foreground = foreground,
@@ -237,10 +237,10 @@ fun MainScreen(vm: Vm) {
                 modifier = Modifier.padding(horizontal = 8.dp)
             )
         }
-        if (agentLate) {
+        if (phase == VmPhase.AgentLate) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "No agent after two minutes. A generation that won't boot? The console tab shows the boot.",
+                    "The agent hasn't answered. A generation that won't boot? The console tab shows the boot.",
                     color = foreground.copy(alpha = 0.8f),
                     fontSize = 12.sp,
                     modifier = Modifier.weight(1f)
@@ -323,14 +323,16 @@ fun MainScreen(vm: Vm) {
     }
 }
 
-private fun statusText(state: VmState, link: ControlChannel.Link, stopping: Boolean, hostname: String?): String = when {
-    stopping -> "Stopping…"
-    state == VmState.Stopped -> "Stopped"
-    state is VmState.Failed -> "Failed: ${state.message}"
-    state == VmState.Starting -> "Starting…"
-    link is ControlChannel.Link.Up -> "Running · ${hostname ?: "guest"}"
-    link is ControlChannel.Link.Refused -> "Agent refused: ${link.reason}"
-    else -> "Booting (waiting for the agent)"
+/** The status bar's line for [phase]. */
+internal fun statusText(phase: VmPhase): String = when (phase) {
+    VmPhase.Stopping -> "Stopping…"
+    VmPhase.Stopped -> "Stopped"
+    is VmPhase.Failed -> "Failed: ${phase.message}"
+    VmPhase.Starting -> "Starting…"
+    is VmPhase.Running -> "Running · ${phase.host ?: "guest"}"
+    is VmPhase.Refused -> "Agent refused: ${phase.reason}"
+    VmPhase.AgentLate -> "Booting (no agent yet)"
+    VmPhase.Booting -> "Booting (waiting for the agent)"
 }
 
 @Composable

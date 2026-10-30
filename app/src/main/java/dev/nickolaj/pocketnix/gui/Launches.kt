@@ -1,7 +1,6 @@
 package dev.nickolaj.pocketnix.gui
 
-import dev.nickolaj.pocketnix.agent.ControlChannel
-import dev.nickolaj.pocketnix.engine.VmState
+import dev.nickolaj.pocketnix.VmPhase
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -147,9 +146,7 @@ fun appGone(name: String): String = "$name is no longer installed in the guest."
  */
 fun splashStatus(
     name: String,
-    vm: VmState,
-    link: ControlChannel.Link,
-    agentLate: Boolean,
+    vm: VmPhase,
     guiEnabled: Boolean?,
     guiReady: Boolean,
     launch: LaunchState
@@ -163,16 +160,17 @@ fun splashStatus(
 
     launch.ended -> SplashStatus("Opening $name…")
 
-    vm is VmState.Failed -> SplashStatus("The VM failed: ${vm.message}", failed = true, canRetry = true)
+    vm is VmPhase.Failed -> SplashStatus("The VM failed: ${vm.message}", failed = true, canRetry = true)
 
-    vm == VmState.Stopped -> SplashStatus("The VM is stopped.", failed = true, canRetry = true)
+    vm == VmPhase.Stopped -> SplashStatus("The VM is stopped.", failed = true, canRetry = true)
 
-    link is ControlChannel.Link.Refused -> SplashStatus("The guest's agent refused pocketnix: ${link.reason}", failed = true)
+    vm == VmPhase.Stopping -> SplashStatus("The VM is stopping.")
 
-    link !is ControlChannel.Link.Up && agentLate ->
-        SplashStatus("The guest's agent hasn't answered in two minutes. pocketnix's console tab shows the boot.")
+    vm is VmPhase.Refused -> SplashStatus("The guest's agent refused pocketnix: ${vm.reason}", failed = true)
 
-    link !is ControlChannel.Link.Up -> SplashStatus("Starting the VM…")
+    vm == VmPhase.AgentLate -> SplashStatus("The guest's agent hasn't answered. pocketnix's console tab shows the boot.")
+
+    vm !is VmPhase.Running -> SplashStatus("Starting the VM…")
 
     guiEnabled == false -> SplashStatus("GUI apps are off in this guest (pocketnix.guest.gui.enable).", failed = true)
 
