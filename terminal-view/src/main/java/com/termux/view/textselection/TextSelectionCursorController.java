@@ -147,7 +147,7 @@ public class TextSelectionCursorController implements CursorController {
                         // selected text before MORE button was pressed since we are going to
                         // stop selection mode
                         mStoredSelectedText = getSelectedText();
-                        // The menu opens below the selection's start, read before stopping clears it.
+                        // The menu opens under the selection's last row, at its first column: read before stopping clears them.
                         float x = mSelX1 * terminalView.mRenderer.getFontWidth();
                         float y = (mSelY2 + 1 - terminalView.getTopRow()) * terminalView.mRenderer.getFontLineSpacing();
                         // The text selection needs to be stopped before showing context menu,

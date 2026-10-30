@@ -20,7 +20,6 @@ import android.view.HapticFeedbackConstants;
 import android.view.InputDevice;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
-import android.view.Menu;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -619,13 +618,6 @@ public final class TerminalView extends View {
             mFramePosted = true;
             mChoreographer.postFrameCallback(mFrameCallback);
         }
-    }
-
-    /** Clears what {@link TextSelectionCursorController#ACTION_MORE} stored, once the client's context menu
-     * (see {@link TerminalViewClient#onContextMenu(float, float)}) closes. */
-    public void onContextMenuClosed(Menu menu) {
-        // Unset the stored text since it shouldn't be used anymore and should be cleared from memory
-        unsetStoredSelectedText();
     }
 
     /**
