@@ -31,12 +31,17 @@ commands:
   wait --tab <id> [--timeout <dur>] [--lines <n>] <regexp>
         poll the tab's last lines until <regexp> matches one of them,
         then print them; exit 1 if it doesn't within the timeout (30s)
-  menu --tab <id> [<label>...]
-        list the terminal's context menu, one "<label><TAB><enabled|disabled>"
-        line per entry, or the page the labels lead to; labels ending at an
-        action run it (e.g. "Open link…" <url>)
+  menu (--tab <id> | --chip <id> | --main) [<label>...]
+        list a menu, one "<label><TAB><enabled|disabled>" line per entry, or
+        the page the labels lead to; labels ending at an action run it (e.g.
+        "Open link…" <url>). --tab: the terminal's context menu; --chip: the
+        tab's long-press menu; --main: the ⋮ menu
   links --tab <id>
         the terminal's Open link… list, one URL per line, newest first
+  rename --tab <id> <title>
+        give a terminal tab its own title; "" goes back to the shell's
+  reopen --tab <id>
+        start an ended terminal tab again, in its place
   logcat [--follow]
         the log of every process running as the app's uid, which keeps
         its lines across the app's crashes and restarts; --follow streams it
@@ -109,6 +114,8 @@ func runControl(args []string) error {
 		return err
 	case "menu", "links":
 		tab := sub.Int("tab", -1, "")
+		chip := sub.Int("chip", -1, "")
+		main := sub.Bool("main", false, "")
 		n := -1
 		if cmd == "links" {
 			n = 0
@@ -116,7 +123,8 @@ func runControl(args []string) error {
 		if err := parseArgs(sub, rest, n); err != nil {
 			return err
 		}
-		if *tab < 0 {
+		method, arg, ok := menuTarget(cmd, *tab, *chip, *main)
+		if !ok {
 			sub.Usage()
 			return errUsage
 		}
@@ -124,7 +132,7 @@ func runControl(args []string) error {
 		for i, label := range sub.Args() {
 			extras = append(extras, fmt.Sprintf("label%d:s:%s", i, escapeExtra(label)))
 		}
-		res, err := c.call(cmd, strconv.Itoa(*tab), extras...)
+		res, err := c.call(method, arg, extras...)
 		if err != nil {
 			return err
 		}
@@ -140,6 +148,26 @@ func runControl(args []string) error {
 		if out != "" {
 			fmt.Println(out)
 		}
+	case "rename", "reopen":
+		tab := sub.Int("tab", -1, "")
+		n := 0
+		if cmd == "rename" {
+			n = 1
+		}
+		if err := parseArgs(sub, rest, n); err != nil {
+			return err
+		}
+		if *tab < 0 {
+			sub.Usage()
+			return errUsage
+		}
+		var extras []string
+		// No extra is an empty title: the provider's default.
+		if cmd == "rename" && sub.Arg(0) != "" {
+			extras = append(extras, "title:s:"+escapeExtra(sub.Arg(0)))
+		}
+		_, err := c.call(cmd, strconv.Itoa(*tab), extras...)
+		return err
 	case "stats":
 		if err := parseArgs(sub, rest, 0); err != nil {
 			return err
@@ -203,6 +231,29 @@ func logcat(dev adb.Device, pkg string, follow bool, w io.Writer) error {
 		args = append(args, "-d")
 	}
 	return dev.Stream(w, args...)
+}
+
+// menuTarget is the provider method and argument for a menu or links
+// command's target flags; ok is false unless exactly one fits the command.
+func menuTarget(cmd string, tab, chip int, main bool) (method, arg string, ok bool) {
+	set := 0
+	for _, b := range []bool{tab >= 0, chip >= 0, main} {
+		if b {
+			set++
+		}
+	}
+	switch {
+	case set != 1:
+		return "", "", false
+	case tab >= 0:
+		return cmd, strconv.Itoa(tab), true
+	case cmd != "menu":
+		return "", "", false
+	case chip >= 0:
+		return "chip-menu", strconv.Itoa(chip), true
+	default:
+		return "main-menu", "", true
+	}
 }
 
 // parseArgs parses a command's flags and checks it got n arguments (-1: any).

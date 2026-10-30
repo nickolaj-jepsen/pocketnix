@@ -102,6 +102,29 @@ func TestControlTypesTextVerbatim(t *testing.T) {
 	}
 }
 
+func TestControlMenuTargets(t *testing.T) {
+	for _, c := range []struct {
+		cmd       string
+		tab, chip int
+		main      bool
+		method    string
+		arg       string
+	}{
+		{"menu", 3, -1, false, "menu", "3"},
+		{"menu", -1, 0, false, "chip-menu", "0"},
+		{"menu", -1, -1, true, "main-menu", ""},
+		{"links", 3, -1, false, "links", "3"},
+		{"links", -1, 3, false, "", ""},
+		{"menu", 3, 3, false, "", ""},
+		{"menu", -1, -1, false, "", ""},
+	} {
+		method, arg, ok := menuTarget(c.cmd, c.tab, c.chip, c.main)
+		if ok != (c.method != "") || method != c.method || arg != c.arg {
+			t.Errorf("%s tab=%d chip=%d main=%v: got %q %q %v, want %q %q", c.cmd, c.tab, c.chip, c.main, method, arg, ok, c.method, c.arg)
+		}
+	}
+}
+
 func TestControlWait(t *testing.T) {
 	c, d := testControl(t)
 	d.setDump("state=Running\ntab 2 Pty(profile=shell) 'shell' running=true\n|2| $ echo done-$((1+1))\n")
