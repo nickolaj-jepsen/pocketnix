@@ -82,22 +82,44 @@ fun classifyLink(url: String, hostname: String?): LinkTarget {
  */
 fun rewriteLocalhost(url: String, forwards: List<Forward>): String {
     val uri = runCatching { URI(url) }.getOrNull() ?: return url
-    val host = uri.host?.lowercase() ?: return url
-    if (host != "localhost" && host != "127.0.0.1") return url
-    val port = if (uri.port != -1) {
-        uri.port
-    } else {
-        when (uri.scheme?.lowercase()) {
-            "http" -> 80
-            "https" -> 443
-            else -> return url
-        }
-    }
+    val port = localhostPort(uri) ?: return url
     val f = forwards.firstOrNull { !it.udp && it.guestPort == port } ?: return url
     if (f.hostPort == port) return url
     val authority = (uri.rawUserInfo?.let { "$it@" } ?: "") + uri.host + ":" + f.hostPort
     return "${uri.scheme}://$authority${uri.rawPath.orEmpty()}" +
         (uri.rawQuery?.let { "?$it" } ?: "") + (uri.rawFragment?.let { "#$it" } ?: "")
+}
+
+// The guest port a web link names on `localhost` or `127.0.0.1`, or null.
+private fun localhostPort(uri: URI): Int? {
+    val host = uri.host?.lowercase() ?: return null
+    if (host != "localhost" && host != "127.0.0.1") return null
+    if (uri.port != -1) return uri.port
+    return when (uri.scheme?.lowercase()) {
+        "http" -> 80
+        "https" -> 443
+        else -> null
+    }
+}
+
+/** How a web link opens. */
+sealed interface WebOpen {
+    data class Now(val url: String) : WebOpen
+
+    /** Allow guest [port]'s offer (D80), then open [url] through its forward ([rewriteLocalhost]). */
+    data class AllowThenOpen(val port: Int, val url: String) : WebOpen
+}
+
+/**
+ * How web link [url] opens: through a [listening] forward of the guest port
+ * it names on localhost, or, with none and that port in the [offerable]
+ * listener snapshot, once a session forward for it is allowed. Any other
+ * link opens unchanged.
+ */
+fun webOpen(url: String, listening: List<Forward>, offerable: Set<Int>): WebOpen {
+    val port = runCatching { URI(url) }.getOrNull()?.let(::localhostPort) ?: return WebOpen.Now(url)
+    if (listening.none { !it.udp && it.guestPort == port } && port in offerable) return WebOpen.AllowThenOpen(port, url)
+    return WebOpen.Now(rewriteLocalhost(url, listening))
 }
 
 /** One row of a terminal buffer, and whether it wraps into the next. */
@@ -186,7 +208,9 @@ fun terminalMenu(
 /**
  * The terminal's link and share actions, on the main thread, where the
  * emulator lives. [listening] is the forwards a localhost link may go
- * through; [resolve] asks the agent for a guest path's document.
+ * through, and [offerable] the guest ports a session forward may be allowed
+ * for; [forward] allows one and returns it once it listens, or throws.
+ * [resolve] asks the agent for a guest path's document.
  */
 class TerminalActions(
     private val context: Context,
@@ -194,12 +218,26 @@ class TerminalActions(
     private val bridge: GuestBridge,
     private val hostname: () -> String?,
     private val listening: () -> List<Forward>,
+    private val offerable: () -> Set<Int>,
+    private val forward: suspend (Int) -> Forward,
     private val resolve: suspend (String) -> String
 ) {
     /** Opens a link printed in a tab, if it is one Android may: see [classifyLink]. */
     fun open(url: String) = guard("opening $url") {
         when (val target = classifyLink(url, hostname()?.ifEmpty { null })) {
-            is LinkTarget.Web -> bridge.openUrl(rewriteLocalhost(target.url, listening()), appVisible = true, chosen = true)
+            is LinkTarget.Web -> when (val w = webOpen(target.url, listening(), offerable())) {
+                is WebOpen.Now -> bridge.openUrl(w.url, appVisible = true, chosen = true)
+
+                is WebOpen.AllowThenOpen -> scope.launch {
+                    val f = runCatching { forward(w.port) }
+                        .onFailure { Log.w(TAG, "forwarding guest port ${w.port}: ${it.message}") }
+                        .getOrElse {
+                            toast("Can't forward guest port ${w.port}: ${it.message}")
+                            return@launch
+                        }
+                    guard("opening ${w.url}") { bridge.openUrl(rewriteLocalhost(w.url, listOf(f)), appVisible = true, chosen = true) }
+                }
+            }
 
             is LinkTarget.GuestFile -> scope.launch {
                 val rel = runCatching { resolve(target.path) }

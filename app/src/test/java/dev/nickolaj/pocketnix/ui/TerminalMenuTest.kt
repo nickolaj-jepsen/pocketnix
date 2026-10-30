@@ -1,6 +1,7 @@
 package dev.nickolaj.pocketnix.ui
 
 import dev.nickolaj.pocketnix.agent.Forward
+import dev.nickolaj.pocketnix.forward.ForwardOffers
 import dev.nickolaj.pocketnix.gui.MenuAction
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -65,6 +66,26 @@ class TerminalMenuTest {
         assertEquals("http://localhost:8000/", rewriteLocalhost("http://localhost:8000/", listOf(web.copy(udp = true))))
         assertEquals("http://example.org:8000/", rewriteLocalhost("http://example.org:8000/", listOf(web)))
         assertEquals("http://localhost:8080/", rewriteLocalhost("http://localhost:8080/", listOf(Forward("same", 8080, 8080, lan = false))))
+    }
+
+    @Test
+    fun aLocalhostLinkToAnOfferedListenerAllowsThenOpensOnTheChosenPort() {
+        val url = "http://localhost:8765/"
+        val offers = ForwardOffers().observe(listOf(8765), lan = false, module = emptyList(), now = 0)
+        val tap = webOpen(url, emptyList(), offers.listening)
+        assertEquals(WebOpen.AllowThenOpen(8765, url), tap)
+        val allowed = offers.allow(8765, 18765)
+        assertEquals("http://localhost:18765/", rewriteLocalhost((tap as WebOpen.AllowThenOpen).url, allowed.forwards(emptyList())))
+        // Once its forward listens, the next tap just goes through it.
+        assertEquals(WebOpen.Now("http://localhost:18765/"), webOpen(url, allowed.forwards(emptyList()), allowed.listening))
+    }
+
+    @Test
+    fun otherLocalhostLinksOpenWithoutAllowing() {
+        val offerable = setOf(8765)
+        assertEquals(WebOpen.Now("http://localhost:9000/"), webOpen("http://localhost:9000/", emptyList(), offerable))
+        assertEquals(WebOpen.Now("http://example.org:8765/"), webOpen("http://example.org:8765/", emptyList(), offerable))
+        assertEquals(WebOpen.Now("http://localhost:18000/"), webOpen("http://localhost:8000/", listOf(Forward("web", 8000, 18000, lan = false)), setOf(8000)))
     }
 
     @Test

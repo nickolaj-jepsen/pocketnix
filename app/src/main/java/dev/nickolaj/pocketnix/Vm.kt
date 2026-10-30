@@ -101,8 +101,11 @@ class Vm(private val app: Context) {
     /** Forwards that couldn't listen, for the UI. */
     val forwardErrors: StateFlow<List<String>> = _forwardErrors.asStateFlow()
 
+    // What forwards.listening() said after the last apply, to wait on.
+    private val listening = MutableStateFlow<List<Forward>>(emptyList())
+
     /** The TCP forwards listening on their phone port now, which a localhost link may be pointed at. */
-    fun listeningForwards(): List<Forward> = forwards.listening()
+    fun listeningForwards(): List<Forward> = listening.value
 
     private val _offers = MutableStateFlow(ForwardOffers())
 
@@ -138,7 +141,7 @@ class Vm(private val app: Context) {
     val transfers = Transfers(app, scope, control, bridge, ::files) { control.config.value?.hostname }
 
     /** Links and shares from the terminal: see [TerminalActions]. */
-    val terminalActions = TerminalActions(app, scope, bridge, { control.config.value?.hostname }, ::listeningForwards) { path ->
+    val terminalActions = TerminalActions(app, scope, bridge, { control.config.value?.hostname }, ::listeningForwards, { _offers.value.listening }, ::forwardForLink) { path ->
         control.call(JSONObject().put("type", "resolve-path").put("path", path)).optString("path")
     }
 
@@ -280,6 +283,7 @@ class Vm(private val app: Context) {
                     val fw = module + session
                     val dialer = if (running) _engine.value.dialer else null
                     _forwardErrors.value = withContext(Dispatchers.IO) { forwards.apply(fw, dialer) }
+                    listening.value = forwards.listening()
                     // A session forward that can't listen goes back to an offer rather than into the retries.
                     if (dialer != null) {
                         for (f in session.filter { forwards.failure(it) != null }) {
@@ -292,6 +296,7 @@ class Vm(private val app: Context) {
                         delay(wait)
                         wait = (wait * 2).coerceAtMost(FORWARD_RETRY_MAX_MS)
                         _forwardErrors.value = withContext(Dispatchers.IO) { forwards.apply(fw, dialer) }
+                        listening.value = forwards.listening()
                     }
                 }
         }
@@ -472,6 +477,23 @@ class Vm(private val app: Context) {
         _offers.update { it.allow(port, phone) }
     }
 
+    /**
+     * Guest [port]'s forward once it listens, allowing its offer first as a
+     * tap on a localhost link does (D80). Throws as [answerOffer] does, when
+     * the forward's phone port couldn't listen, or after [LINK_FORWARD_WAIT_MS].
+     */
+    suspend fun forwardForLink(port: Int): Forward {
+        answerOffer(port, allow = true)
+        return withTimeoutOrNull(LINK_FORWARD_WAIT_MS) {
+            combine(listening, _offers) { l, o -> l.firstOrNull { !it.udp && it.guestPort == port } to o.offers[port] }
+                .map { (f, o) ->
+                    if (f == null && o?.state != ForwardOffers.State.ALLOWED) error(o?.failure ?: "guest port $port is no longer allowed")
+                    f
+                }
+                .first { it != null }
+        } ?: error("guest port $port's forward isn't listening")
+    }
+
     /** [answerOffer] from a notification: a failure is logged. */
     fun answerOfferLater(port: Int, allow: Boolean) {
         scope.launch { runCatching { answerOffer(port, allow) }.onFailure { Log.w(TAG, "offer $port: ${it.message}") } }
@@ -590,6 +612,9 @@ class Vm(private val app: Context) {
         const val AGENT_LATE_MS = 120_000L
         const val FORWARD_RETRY_MS = 30_000L
         const val FORWARD_RETRY_MAX_MS = 600_000L
+
+        // How long a link tap waits for its new session forward to listen.
+        const val LINK_FORWARD_WAIT_MS = 10_000L
         const val HISTORY_LIMIT = 1000
 
         // org.freedesktop.Notifications' "dismissed by the user".
