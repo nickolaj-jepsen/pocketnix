@@ -157,17 +157,18 @@ func (s *Server) watchPorts(ctx context.Context, gen int, load func() (PortHints
 			return
 		case <-tick:
 		case err := <-ended:
+			// Offers turned off close the hints too.
+			if ctx.Err() != nil {
+				return
+			}
 			log.Printf("port watcher: %v ended: %v; polling /proc every %v", hints, err, poll)
 			polling()
 		case <-wake:
+			// A hint during the wait stays queued: its socket may reach /proc only after this scan.
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(portRescanDebounce):
-			}
-			select {
-			case <-wake:
-			default:
 			}
 		}
 	}
