@@ -23,7 +23,8 @@ func TestResolvePath(t *testing.T) {
 		t.Errorf("inside the root = %q, %v", rel, err)
 	}
 	for _, p := range []string{
-		filepath.Join(root, "..", filepath.Base(outside), "secret"),
+		// Joined by hand: filepath.Join would clean the ".." away before it's sent.
+		root + "/../" + filepath.Base(outside) + "/secret",
 		filepath.Join(root, "escape"),
 		"docs/a b.txt",
 	} {
