@@ -299,10 +299,21 @@ pub fn wire_format(format: wl_shm::Format) -> Option<u8> {
 /// in memory; the wire wants R, G, B, A.
 fn to_wire(src: &[u8], out: &mut Vec<u8>) {
     let (px, _) = src.as_chunks::<4>();
-    out.reserve(src.len());
-    for p in px {
-        out.extend_from_slice(&[p[2], p[1], p[0], p[3]]);
+    out.reserve(px.len() * 4);
+    let dst = out.spare_capacity_mut().as_mut_ptr().cast::<[u8; 4]>();
+    // Whole-word writes, so the loop vectorizes; byte writes to the spare capacity don't.
+    for (i, p) in px.iter().enumerate() {
+        // SAFETY: the reserve leaves room for px.len() words; [u8; 4] has alignment 1.
+        unsafe { dst.add(i).write(swap_red_blue(*p)) };
     }
+    // SAFETY: the loop wrote every byte of the first px.len() * 4 spare ones.
+    unsafe { out.set_len(out.len() + px.len() * 4) };
+}
+
+/// BGRA to RGBA, or back: swaps bytes 0 and 2.
+fn swap_red_blue(p: [u8; 4]) -> [u8; 4] {
+    let v = u32::from_le_bytes(p);
+    ((v & 0xff00_ff00) | ((v >> 16) & 0xff) | ((v & 0xff) << 16)).to_le_bytes()
 }
 
 fn copy_whole(src: &[u8], width: u32, height: u32, stride: usize) -> Vec<u8> {
@@ -331,10 +342,9 @@ fn bounding(rects: &[Rect]) -> Rect {
     Rect { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
 }
 
+/// Scroll detection's row identity; internal, so any strong 64-bit hash.
 fn row_hash(row: &[u8]) -> u64 {
-    let mut h = ContentHash::default();
-    h.update(row);
-    h.finish()
+    xxhash_rust::xxh3::xxh3_64(row)
 }
 
 fn row_hashes(pixels: &[u8], stride: usize, row: usize, height: usize) -> Vec<u64> {

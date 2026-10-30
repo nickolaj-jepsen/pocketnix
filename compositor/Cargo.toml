@@ -25,6 +25,7 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 wayland-client = "0.31.11"
 wayland-protocols = { version = "0.32.9", features = ["client", "staging", "unstable"] }
+xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
 zstd = "0.13.3"
 
 [dev-dependencies]
