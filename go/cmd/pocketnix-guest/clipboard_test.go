@@ -25,6 +25,8 @@ type fakeWayland struct {
 	mu      sync.Mutex
 	offered []string
 	data    map[string][]byte
+	// duringRead, when set, runs once inside the next read, as a copy racing it.
+	duringRead func()
 }
 
 // copy takes the selection as an app does, offering data under each of types.
@@ -57,8 +59,13 @@ func (f *fakeWayland) types() ([]string, error) {
 
 func (f *fakeWayland) read(t string, limit int64) ([]byte, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	race := f.duringRead
+	f.duringRead = nil
 	d, ok := f.data[t]
+	f.mu.Unlock()
+	if race != nil {
+		race()
+	}
 	if !ok {
 		return nil, errors.New("not offered")
 	}
@@ -66,6 +73,37 @@ func (f *fakeWayland) read(t string, limit int64) ([]byte, error) {
 		return nil, errTooLarge
 	}
 	return d, nil
+}
+
+// fakeWlClipboard puts a wl-copy and wl-paste on PATH that keep the
+// selection in a directory. wl-copy takes it only after reading its data,
+// later for "slow", the way the real one waits on the compositor.
+func fakeWlClipboard(t *testing.T) {
+	dir := t.TempDir()
+	sel := filepath.Join(dir, "selection")
+	scripts := map[string]string{
+		"wl-copy": `#!/bin/sh
+[ "$1" = --type ] || exit 2
+data=$(cat; echo .)
+[ "$data" = "slow." ] && sleep 0.5
+mkdir -p ` + sel + `.new && printf %s "${data%.}" >` + sel + `.new/data && printf '%s\n' "$2" >` + sel + `.new/types
+rm -rf ` + sel + ` && mv ` + sel + `.new ` + sel + `
+`,
+		"wl-paste": `#!/bin/sh
+[ -d ` + sel + ` ] || { echo "Nothing is copied" >&2; exit 1; }
+case "$1" in
+--list-types) cat ` + sel + `/types ;;
+--no-newline) cat ` + sel + `/data ;;
+*) exit 2 ;;
+esac
+`,
+	}
+	for name, script := range scripts {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func (f *fakeWayland) offer(t string, data []byte) error {
@@ -320,5 +358,125 @@ func TestBridgeSkipsOversizedText(t *testing.T) {
 	changes.put("data")
 	if ev := appEvent(t, ctl); ev.Text != "small" {
 		t.Errorf("app event = %+v", ev)
+	}
+}
+
+func TestBridgeBurstFromAndroidEndsOnTheLast(t *testing.T) {
+	fakeWlClipboard(t)
+	sock, _, ctl := startAgent(t)
+	b := &bridge{sock: sock, wl: wlClipboard{}, logf: t.Logf}
+	next := clipboardEvents(t, sock)
+
+	// The first copy takes the selection last unless offers wait for it.
+	must(t, ctl.SetClipboard("slow"))
+	must(t, b.fromAgent(next()))
+	must(t, ctl.SetClipboard("fast"))
+	must(t, b.fromAgent(next()))
+	must(t, b.fromWayland("data"))
+	if types, err := (wlClipboard{}).types(); err != nil || !slices.Equal(types, []string{"text/plain"}) {
+		t.Fatalf("types = %q, %v", types, err)
+	}
+	if data, err := (wlClipboard{}).read("text/plain", 100); err != nil || string(data) != "fast" {
+		t.Errorf("Wayland holds %q, %v", data, err)
+	}
+	// Neither offer came back: the next app event is a new Wayland copy.
+	must(t, (wlClipboard{}).offer("text/plain", []byte("from-wayland")))
+	must(t, b.fromWayland("data"))
+	if ev := appEvent(t, ctl); ev.Text != "from-wayland" {
+		t.Errorf("app event = %+v, want from-wayland and nothing before it", ev)
+	}
+}
+
+func TestBridgeKeepsTheSelectionOnALateNil(t *testing.T) {
+	sock, _, ctl := startAgent(t)
+	b, wl := newBridge(t, sock)
+	next := clipboardEvents(t, sock)
+	must(t, ctl.SetClipboard("from-android"))
+	must(t, b.fromAgent(next()))
+	// A nil from an owner the bridge's offer replaced arrives after the offer.
+	must(t, b.fromWayland("nil"))
+	must(t, b.fromWayland("data"))
+	wl.copy([]byte("from-wayland"), "text/plain")
+	must(t, b.fromWayland("data"))
+	if ev := appEvent(t, ctl); ev.Text != "from-wayland" {
+		t.Errorf("app event = %+v, want from-wayland and nothing before it", ev)
+	}
+}
+
+func TestBridgeRetriesAFailedCopy(t *testing.T) {
+	sock, _, ctl := startAgent(t)
+	b, wl := newBridge(t, sock)
+	b.sock = filepath.Join(t.TempDir(), "gone.sock")
+	wl.copy([]byte("again"), "text/plain")
+	if err := b.fromWayland("data"); err == nil {
+		t.Fatal("a copy to a missing agent succeeded")
+	}
+	// The same copy once the agent is back crosses.
+	b.sock = sock
+	wl.copy([]byte("again"), "text/plain")
+	must(t, b.fromWayland("data"))
+	if ev := appEvent(t, ctl); ev.Text != "again" {
+		t.Errorf("app event = %+v", ev)
+	}
+}
+
+func TestBridgeSensitiveCopyOfOfferedText(t *testing.T) {
+	sock, _, ctl := startAgent(t)
+	b, wl := newBridge(t, sock)
+	next := clipboardEvents(t, sock)
+	must(t, ctl.SetClipboard("hunter2"))
+	must(t, b.fromAgent(next()))
+	// A password manager copies the same text: it crosses, marked.
+	wl.copy([]byte("hunter2"), "text/plain", sensitiveHint)
+	must(t, b.fromWayland("sensitive"))
+	if ev := appEvent(t, ctl); ev.Text != "hunter2" || !ev.Sensitive {
+		t.Errorf("app event = %+v, want it sensitive", ev)
+	}
+}
+
+func TestBridgeSkipsAReadRacedByACopy(t *testing.T) {
+	sock, _, ctl := startAgent(t)
+	b, wl := newBridge(t, sock)
+	wl.copy([]byte("public"), "text/plain")
+	// A password manager's copy lands between listing the types and reading.
+	wl.duringRead = func() { wl.copy([]byte("secret"), "text/plain", sensitiveHint) }
+	must(t, b.fromWayland("data"))
+	must(t, b.fromWayland("sensitive"))
+	if ev := appEvent(t, ctl); ev.Text != "secret" || !ev.Sensitive {
+		t.Errorf("app event = %+v, want only the password manager's, marked", ev)
+	}
+}
+
+func TestDrainIsBounded(t *testing.T) {
+	endless, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer endless.Close()
+	go func() {
+		chunk := make([]byte, 64<<10)
+		for {
+			if _, err := w.Write(chunk); err != nil {
+				w.Close()
+				return
+			}
+		}
+	}()
+	silent, w2, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer silent.Close()
+	defer w2.Close()
+	done := make(chan struct{})
+	go func() {
+		drain(endless, 1<<20, time.Hour)
+		drain(silent, 1<<20, 100*time.Millisecond)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("drain didn't stop at its limit or its wait")
 	}
 }

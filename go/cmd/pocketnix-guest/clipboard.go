@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/client"
@@ -36,6 +37,12 @@ const (
 	sensitiveHint = "x-kde-passwordManagerHint"
 	// maxResubscribe caps the wait between attempts to reach the agent.
 	maxResubscribe = 30 * time.Second
+	// hookDrainWait bounds the hook's drain: wl-paste waits for the hook
+	// before it reports the next change, so a client that never ends its
+	// data mustn't hold it.
+	hookDrainWait = 5 * time.Second
+	// offerWait bounds wl-copy's taking of the selection.
+	offerWait = 10 * time.Second
 )
 
 var errTooLarge = errors.New("too large to cross")
@@ -60,9 +67,20 @@ func clipboardBridge(args []string) error {
 // watchHook drains the selection wl-paste hands it, which the bridge reads
 // again in the type it picks, and passes CLIPBOARD_STATE on.
 func watchHook() error {
-	io.Copy(io.Discard, os.Stdin)
+	// Non-blocking, stdin takes a read deadline.
+	if syscall.SetNonblock(0, true) == nil {
+		drain(os.NewFile(0, "stdin"), protocol.MaxClipboardData, hookDrainWait)
+	}
 	_, err := fmt.Fprintln(os.NewFile(hookFD, "bridge"), os.Getenv("CLIPBOARD_STATE"))
 	return err
+}
+
+// drain reads r until its end, limit bytes or wait, whichever comes first.
+// Reading spares the client a write into a closed pipe, which kills one
+// that doesn't ignore SIGPIPE.
+func drain(r *os.File, limit int64, wait time.Duration) {
+	r.SetReadDeadline(time.Now().Add(wait))
+	io.Copy(io.Discard, io.LimitReader(r, limit))
 }
 
 // watchWayland puts each selection change's state (data, sensitive or nil)
@@ -150,20 +168,25 @@ type wayland interface {
 	// read returns the selection's data of type t, failing with errTooLarge
 	// past limit bytes.
 	read(t string, limit int64) ([]byte, error)
-	// offer takes the selection with data, of type t only.
+	// offer takes the selection with data, of type t only, returning once
+	// the selection holds it: offers land in the order they're made.
 	offer(t string, data []byte) error
 }
 
 // bridge carries changes between the Wayland selection and the agent's
-// clipboard. Each change it makes on one side comes back from it, so it
-// drops a change equal to what the Wayland selection holds.
+// clipboard. Each change it makes on one side comes back from it: the agent
+// publishes the bridge's copies, and wl-paste reports its offers.
 type bridge struct {
 	sock string
 	wl   wayland
 	logf func(string, ...any)
-	// held identifies what the Wayland selection holds as far as the bridge
-	// knows (see clipKey); "" when it doesn't.
-	held string
+	// selection identifies what the Wayland selection holds as far as the
+	// bridge knows (see clipKey), "" when it doesn't: an agent change equal
+	// to it would only replace an app's offer with the bridge's.
+	selection string
+	// offered identifies the bridge's own offer while the selection holds
+	// it: the change wl-paste reports for it doesn't go back to the agent.
+	offered string
 }
 
 // run acts on the latest change from either side, one at a time, until ctx ends.
@@ -187,13 +210,17 @@ func (b *bridge) run(ctx context.Context, changes slot[string], events slot[prot
 // fromWayland hands the agent the Wayland selection after a change in state
 // (wl-paste's CLIPBOARD_STATE). An emptied selection leaves Android's alone.
 func (b *bridge) fromWayland(state string) error {
-	if state == "nil" {
-		b.held = ""
-		return nil
-	}
 	types, err := b.wl.types()
-	if err != nil {
+	if err != nil || len(types) == 0 {
+		b.selection, b.offered = "", ""
+		if state == "nil" {
+			return nil
+		}
 		return err
+	}
+	if state == "nil" {
+		// Reported late: another copy has the selection, and its change follows.
+		return nil
 	}
 	t := pickType(types)
 	if t == "" {
@@ -205,20 +232,26 @@ func (b *bridge) fromWayland(state string) error {
 	}
 	data, err := b.wl.read(t, limit)
 	if err != nil {
-		b.held = ""
+		b.selection, b.offered = "", ""
 		return fmt.Errorf("the Wayland clipboard's %s: %w", t, err)
+	}
+	// Another copy took the selection meanwhile: data may not be what types
+	// describe (a password manager's, unmarked), and that copy's own change follows.
+	if after, err := b.wl.types(); err != nil || !slices.Equal(after, types) {
+		return nil
 	}
 	if len(data) == 0 {
 		return nil
 	}
 	key := clipKey(t, data)
-	if key == b.held {
+	sensitive := state == "sensitive" || slices.Contains(types, sensitiveHint)
+	b.selection = key
+	// The bridge's offers are never sensitive: the same data marked so is a new copy.
+	if key == b.offered && !sensitive {
 		return nil
 	}
-	b.held = key
-	req := protocol.GuestRequest{
-		Type: protocol.GuestCopy, Sensitive: state == "sensitive" || slices.Contains(types, sensitiveHint),
-	}
+	b.offered = ""
+	req := protocol.GuestRequest{Type: protocol.GuestCopy, Sensitive: sensitive}
 	if isText(t) {
 		req.Text = string(data)
 		_, err = client.GuestCall(b.sock, req)
@@ -258,11 +291,14 @@ func (b *bridge) fromAgent(ev protocol.ClipboardEvent) error {
 		return nil
 	}
 	key := clipKey(t, data)
-	if key == b.held {
+	if key == b.selection {
 		return nil
 	}
-	b.held = key
-	return b.wl.offer(t, data)
+	if err := b.wl.offer(t, data); err != nil {
+		return err
+	}
+	b.selection, b.offered = key, key
+	return nil
 }
 
 // paste fetches the agent's clipboard data of type t.
@@ -365,16 +401,20 @@ func (wlClipboard) read(t string, limit int64) ([]byte, error) {
 	return data, err
 }
 
-// offer runs wl-copy in the foreground, which serves pastes until another
-// copy replaces it, and then exits.
+// offer runs wl-copy, which exits once the compositor has its selection and
+// leaves a child serving pastes until another copy replaces it. Waiting for
+// that exit keeps two offers from racing for the selection; --foreground
+// gives no such sign.
 func (wlClipboard) offer(t string, data []byte) error {
+	ctx, cancel := context.WithTimeout(context.Background(), offerWait)
+	defer cancel()
 	// --type keeps wl-copy from guessing the type with xdg-mime.
-	cmd := exec.Command("wl-copy", "--foreground", "--type", t)
+	cmd := exec.CommandContext(ctx, "wl-copy", "--type", t)
 	cmd.Stdin = bytes.NewReader(data)
+	// A file, not a pipe: the serving child keeps it, and Wait would wait for it.
 	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		return err
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("wl-copy: %w", err)
 	}
-	go cmd.Wait()
 	return nil
 }
