@@ -20,6 +20,8 @@ class OfferNotifications(private val context: Context) {
 
     init {
         manager.createNotificationChannel(NotificationChannel(CHANNEL, context.getString(R.string.forward_offers_channel), NotificationManager.IMPORTANCE_DEFAULT))
+        // Offers are this process's: one that outlived a crash (and the VM) can't be answered.
+        guard("withdrawing stale offers") { manager.activeNotifications.filter { it.tag == TAG }.forEach { manager.cancel(TAG, it.id) } }
     }
 
     /** Offers [offer], naming [phonePort] (null: none is free) as where Allow would forward it. */
