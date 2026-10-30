@@ -21,8 +21,8 @@ func TestPortListenersRoundTrip(t *testing.T) {
 	}
 }
 
-func TestEmptyPortListenersKeepsTheirFields(t *testing.T) {
-	out, _ := json.Marshal(PortListeners{Type: TypePortListeners, Ports: []int{}})
+func TestEmptyPortListenersKeepTheirFields(t *testing.T) {
+	out, _ := json.Marshal(PortListeners{})
 	if want := `{"type":"port-listeners","lan":false,"ports":[]}`; string(out) != want {
 		t.Errorf("encoded %s, want %s", out, want)
 	}
@@ -44,5 +44,20 @@ func TestSensitiveClipboardRoundTrip(t *testing.T) {
 	plain, _ := json.Marshal(Event{Type: TypeGuestClipboard, Text: "x"})
 	if want := `{"type":"guest-clipboard","text":"x"}`; string(plain) != want {
 		t.Errorf("a plain copy encoded %s, want %s", plain, want)
+	}
+}
+
+func TestSensitiveGuestCopyRoundTrip(t *testing.T) {
+	const wire = `{"type":"copy","text":"hunter2","sensitive":true}`
+	var req GuestRequest
+	if err := json.Unmarshal([]byte(wire), &req); err != nil {
+		t.Fatal(err)
+	}
+	if !req.Sensitive || req.Type != GuestCopy {
+		t.Fatalf("decoded %+v", req)
+	}
+	out, _ := json.Marshal(req)
+	if string(out) != wire {
+		t.Errorf("encoded %s, want %s", out, wire)
 	}
 }

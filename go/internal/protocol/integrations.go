@@ -161,6 +161,8 @@ type GuestRequest struct {
 	Name     string   `json:"name,omitempty"`
 	MIME     string   `json:"mime,omitempty"`
 	Ref      string   `json:"ref,omitempty"`
+	// Sensitive is a copy's: it reaches the app as [Event.Sensitive].
+	Sensitive bool `json:"sensitive,omitempty"`
 }
 
 // GuestReply answers a GuestRequest: Error is set when it failed.

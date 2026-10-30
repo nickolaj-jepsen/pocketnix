@@ -1,5 +1,7 @@
 package protocol
 
+import "encoding/json"
+
 // TypePortListeners is the agent's push of [PortListeners], on connect and
 // whenever the set changes, and only while the module's forwardOffers is on.
 const TypePortListeners = "port-listeners"
@@ -14,4 +16,16 @@ type PortListeners struct {
 	LAN bool `json:"lan"`
 	// Ports are guest ports, ascending and unique.
 	Ports []int `json:"ports"`
+}
+
+// MarshalJSON always writes the type and a ports array, empty rather than
+// null: the app drops a snapshot without one.
+func (p PortListeners) MarshalJSON() ([]byte, error) {
+	type wire PortListeners
+	w := wire(p)
+	w.Type = TypePortListeners
+	if w.Ports == nil {
+		w.Ports = []int{}
+	}
+	return json.Marshal(w)
 }
