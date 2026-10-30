@@ -52,4 +52,22 @@ class ClipboardSyncTest {
         assertEquals(GuestCopy(null, true), GuestCopy.parse(JSONObject("""{"type":"guest-clipboard-data","ref":"r1","mime":"image/png","size":4,"sensitive":true}""")))
         assertNull(GuestCopy.parse(JSONObject("""{"type":"notify","title":"t"}""")))
     }
+
+    @Test
+    fun aGuestCopyDuringASendLeavesTheNextFocusSending() {
+        val a = ClipSnapshot("from android", listOf("text/plain"), 1)
+        val before = ClipboardSync()
+        val during = before.guestCopied("from guest")
+        val after = during.afterSend(before, a)
+        // The agent may have applied A after the guest's copy: the guest's text goes to it again.
+        assertTrue(after.isNew(ClipSnapshot("from guest", listOf("text/plain"), 2)))
+        assertTrue(after.isNew(a))
+    }
+
+    @Test
+    fun anUndisturbedSendIsRecorded() {
+        val a = ClipSnapshot("from android", listOf("text/plain"), 1)
+        val before = ClipboardSync()
+        assertFalse(before.afterSend(before, a).isNew(a))
+    }
 }

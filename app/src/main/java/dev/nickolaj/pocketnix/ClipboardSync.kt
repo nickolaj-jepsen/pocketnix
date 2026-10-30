@@ -33,6 +33,14 @@ data class ClipboardSync(private val sent: ClipSnapshot? = null, private val gue
     fun sent(clip: ClipSnapshot) = ClipboardSync(sent = clip)
 
     /**
+     * This state once [clip], sent when the state was [before], reached the
+     * guest. A guest copy that landed meanwhile may have reached the agent
+     * before or after [clip], so what the guest holds is unknown: the next
+     * focus sends again.
+     */
+    fun afterSend(before: ClipboardSync, clip: ClipSnapshot) = if (this === before) before.sent(clip) else ClipboardSync()
+
+    /**
      * A guest copy is on Android's clipboard: its [text], or null for typed
      * data. Whatever the app sent before is no longer the guest's.
      */

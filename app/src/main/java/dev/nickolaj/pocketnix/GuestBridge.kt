@@ -76,11 +76,11 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
     }
 
     /**
-     * Records that the guest has [clip], sent when the state was [before];
-     * a guest copy that landed meanwhile wins.
+     * Records that [clip], sent when the state was [before], reached the
+     * guest (see [ClipboardSync.afterSend]).
      */
     fun clipSent(before: ClipboardSync, clip: ClipSnapshot) = synchronized(clipLock) {
-        if (clipSync === before) clipSync = before.sent(clip)
+        clipSync = clipSync.afterSend(before, clip)
     }
 
     private fun open(msg: JSONObject, appVisible: Boolean) {
