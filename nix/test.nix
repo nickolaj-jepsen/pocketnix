@@ -160,6 +160,10 @@ in
     testScript = {nodes, ...}: let
       inherit (nodes.phone.system.build) next;
       inherit (nodes.phone.pocketnix.guest) terminal;
+      offersPython =
+        if nodes.phone.pocketnix.guest.forwardOffers.enable or false
+        then "True"
+        else "False";
     in ''
       import json
       import shlex
@@ -246,6 +250,18 @@ in
           assert phone.succeed("runuser -u nixos -- pocketnix-guest paste") == "from-android"
           # Only root and the session user may use the guest socket.
           phone.fail("runuser -u nobody -- ${nodes.phone.pocketnix.guest.package}/bin/pocketnix-guest paste")
+
+      with subtest("a user's listener reaches the app"):
+          # Runs only where the module offers forwards; /tmp/events is the events stream above.
+          if ${offersPython}:
+              def pushed_8123(_):
+                  pushes = [json.loads(l) for l in client.succeed("cat /tmp/events").splitlines()]
+                  snapshots = [p["ports"] for p in pushes if p["type"] == "port-listeners"]
+                  return bool(snapshots) and 8123 in snapshots[-1]
+              phone.succeed("systemd-run --unit=user-listener -p User=${nodes.phone.pocketnix.guest.user} ${pkgs.socat}/bin/socat TCP-LISTEN:8123,fork EXEC:${pkgs.coreutils}/bin/cat")
+              retry(pushed_8123, timeout=60)
+          else:
+              print("skipped: no pocketnix.guest.forwardOffers")
 
       with subtest("the session bus: notify-send's actions come back, gio opens on Android"):
           # Lingering, with no login, starts the user's bus.
