@@ -43,7 +43,7 @@ type Server struct {
 	clipboard string
 	notes     notifications
 	transfers transfers
-	// clipWatchers follow the clipboard (the Wayland bridge).
+	// clipWatchers are the guest connections following the clipboard.
 	clipWatchers clipWatchers
 
 	// HostFile is where the phone's state goes as JSON; empty writes none.

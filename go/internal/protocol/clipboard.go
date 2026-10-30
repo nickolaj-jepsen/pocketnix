@@ -1,8 +1,8 @@
 package protocol
 
-// The clipboard as guest programs follow it (`pocketnix-guest clipboard`,
-// the Wayland bridge): the agent hands every change of its clipboard, whether
-// Android's or a guest copy, to each [GuestSubscribeClipboard] connection.
+// The clipboard as guest programs follow it: the agent hands every change of
+// its clipboard, whether Android's or a guest copy, to each
+// [GuestSubscribeClipboard] connection.
 
 // GuestSubscribeClipboard is answered once, then the connection carries a
 // [ClipboardEvent] line for the clipboard as it is (when it holds anything)
