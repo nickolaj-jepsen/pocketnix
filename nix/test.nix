@@ -57,6 +57,7 @@ in
           # Blocks until the action comes back; the bus address is the agent's doing.
           notify.command = ''printf 'bus:%s\n' "$DBUS_SESSION_BUS_ADDRESS"; notify-send -A ok=OK -w build waits; echo "exit:$?"'';
         };
+        forwardOffers.enable = true;
         terminal.snippets.probe = {
           command = "echo snippet";
           submit = true;
@@ -101,6 +102,9 @@ in
       xdg.portal.enable = true;
       users.users.nixos.linger = true;
       specialisation.retheme.configuration.pocketnix.guest.terminal.theme.colors.background = pkgs.lib.mkForce "#123456";
+      # The port watcher's /proc poller, which this kernel's eBPF otherwise leaves unused.
+      specialisation.poller.configuration.systemd.services.pocketnix-agent.serviceConfig.ExecStart =
+        pkgs.lib.mkForce "${config.systemd.services.pocketnix-agent.serviceConfig.ExecStart} --poll-ports";
     };
 
     # A build host (over ssh, for next.1) and a binary cache plus published
@@ -159,9 +163,9 @@ in
     # By IP: the CLI's pure-Go resolver asks DNS before /etc/hosts under NixOS's nsswitch order.
     testScript = {nodes, ...}: let
       inherit (nodes.phone.system.build) next;
-      inherit (nodes.phone.pocketnix.guest) terminal;
-      offersPython =
-        if nodes.phone.pocketnix.guest.forwardOffers.enable or false
+      inherit (nodes.phone.pocketnix.guest) terminal user;
+      lanPython =
+        if nodes.phone.pocketnix.guest.forwardOffers.lan
         then "True"
         else "False";
     in ''
@@ -252,20 +256,37 @@ in
           # Only root and the session user may use the guest socket.
           phone.fail("runuser -u nobody -- ${nodes.phone.pocketnix.guest.package}/bin/pocketnix-guest paste")
 
-      with subtest("a user's listener reaches the app"):
-          # A function, so the type check covers it while the module has no forwardOffers.
-          def user_listener_reaches_the_app() -> None:
-              def pushed_8123(_: bool) -> bool:
-                  # The events unit's output.
-                  pushes = [json.loads(l) for l in client.succeed("cat /tmp/events").splitlines()]
-                  snapshots = [p["ports"] for p in pushes if p["type"] == "port-listeners"]
-                  return bool(snapshots) and 8123 in snapshots[-1]
-              phone.succeed("systemd-run --unit=user-listener -p User=${nodes.phone.pocketnix.guest.user} ${pkgs.socat}/bin/socat TCP-LISTEN:8123,fork EXEC:${pkgs.coreutils}/bin/cat")
-              retry(pushed_8123, timeout_seconds=60)
-          if ${offersPython}:
-              user_listener_reaches_the_app()
-          else:
-              print("skipped: no pocketnix.guest.forwardOffers")
+      # The port-listeners snapshots an events stream's output holds, oldest first.
+      def snapshots(events: str) -> list[dict]:
+          pushes = [json.loads(l) for l in client.succeed(f"cat {events}").splitlines()]
+          return [p for p in pushes if p["type"] == "port-listeners"]
+
+      def await_ports(events: str, ok) -> None:
+          retry(lambda _: bool(snapshots(events)) and ok(snapshots(events)[-1]["ports"]), timeout_seconds=60)
+
+      # Root's listener is up before the user's, so the scan that finds the user's sees it too.
+      def listeners_reach_the_app(events: str) -> None:
+          phone.succeed("systemd-run --unit=root-listener ${pkgs.socat}/bin/socat TCP-LISTEN:8124,fork EXEC:${pkgs.coreutils}/bin/cat")
+          phone.wait_for_open_port(8124)
+          phone.succeed("systemd-run --unit=user-listener -p User=${user} ${pkgs.socat}/bin/socat TCP-LISTEN:8123,fork EXEC:${pkgs.coreutils}/bin/cat")
+          await_ports(events, lambda ports: 8123 in ports)
+          assert all(8124 not in p["ports"] for p in snapshots(events)), snapshots(events)
+          assert snapshots(events)[-1]["lan"] == ${lanPython}, snapshots(events)[-1]
+          phone.succeed("systemctl stop user-listener")
+          await_ports(events, lambda ports: ports == [])
+          phone.succeed("systemctl stop root-listener")
+
+      with subtest("a user's listener reaches the app, and root's never does"):
+          listeners_reach_the_app("/tmp/events")
+
+      with subtest("the agent watches listeners with eBPF"):
+          print(phone.succeed("journalctl -u pocketnix-agent -o cat | grep 'port watcher: eBPF'"))
+
+      with subtest("a forward reaches a listener on ::1 alone"):
+          phone.succeed("systemd-run --unit=v6-listener -p User=${user} ${pkgs.socat}/bin/socat TCP6-LISTEN:8125,bind=[::1],fork EXEC:${pkgs.coreutils}/bin/cat")
+          await_ports("/tmp/events", lambda ports: 8125 in ports)
+          assert client.succeed(f"printf v6 | timeout 60 {A} forward 8125") == "v6"
+          phone.succeed("systemctl stop v6-listener")
 
       with subtest("the session bus: notify-send's actions come back, gio opens on Android"):
           # Lingering, with no login, starts the user's bus.
@@ -520,6 +541,15 @@ in
           u = json.loads(client.succeed(f"{A} switch-generation 2"))
           assert u["current"] == "${next."1"}", u
           phone.succeed("grep -qx 1 /etc/pocketnix-test-generation")
+
+      with subtest("with the /proc poller, a user's listener reaches the app, and root's never does"):
+          phone.succeed("${nodes.phone.system.build.toplevel}/specialisation/poller/bin/switch-to-configuration test")
+          # A switch only reloads the agent.
+          phone.succeed("systemctl restart pocketnix-agent")
+          phone.wait_for_open_port(9100)
+          phone.wait_until_succeeds("journalctl -u pocketnix-agent -o cat | grep 'port watcher: polling /proc'", timeout=60)
+          client.succeed(f"systemd-run --unit=events-poller sh -c '{A} events > /tmp/events-poller'")
+          listeners_reach_the_app("/tmp/events-poller")
 
       with subtest("poweroff over the control stream shuts the guest down"):
           client.succeed(f"{A} poweroff")
