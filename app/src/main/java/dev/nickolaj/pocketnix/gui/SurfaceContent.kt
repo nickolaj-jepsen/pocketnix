@@ -3,9 +3,12 @@ package dev.nickolaj.pocketnix.gui
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-/** Decompresses [src] (concatenated zstd frames) into exactly [dstLen] bytes of [dst] at [dstOff], or throws. */
 fun interface Unpacker {
+    /** Decompresses [src] (concatenated zstd frames) into exactly [dstLen] bytes of [dst] at [dstOff], or throws. */
     fun unpack(src: ByteArray, dst: ByteArray, dstOff: Int, dstLen: Int)
+
+    /** Copies the first [len] bytes of the guest pages [src] lists (a PAGES commit's data) into [dst], or throws. */
+    fun guestPages(src: ByteArray, dst: ByteArray, len: Int): Unit = throw GuiProtocolException("a PAGES commit without guest RAM")
 }
 
 /**
@@ -63,6 +66,7 @@ class SurfaceContent {
      */
     fun apply(c: Commit, unpacker: Unpacker) {
         require(c.buffer) { "commit without BUFFER" }
+        if (c.encoding == Gui.ENCODING_PAGES) return apply(c.unpacked(unpacker), unpacker)
         val n = c.pixelBytes.toInt()
         if (c.full) {
             if (c.encoding == Gui.ENCODING_RAW && c.data.size == n) {
@@ -144,7 +148,15 @@ private fun unpack(c: Commit, unpacker: Unpacker, dst: ByteArray, off: Int) {
 fun Commit.unpacked(unpacker: Unpacker): Commit {
     if (!buffer || encoding == Gui.ENCODING_RAW) return this
     val out = SpareArrays.take(pixelBytes.toInt())
-    unpack(this, unpacker, out, 0)
+    if (encoding == Gui.ENCODING_PAGES) {
+        try {
+            unpacker.guestPages(data, out, pixelBytes.toInt())
+        } catch (e: GuiProtocolException) {
+            throw GuiProtocolException("commit ${seq.u}: ${e.message}")
+        }
+    } else {
+        unpack(this, unpacker, out, 0)
+    }
     return Commit(
         flags, surface, window, seq, z, format, Gui.ENCODING_RAW, transform, x, y, dstWidth, dstHeight, width, height,
         srcX, srcY, srcWidth, srcHeight, scroll, rects, out, hash

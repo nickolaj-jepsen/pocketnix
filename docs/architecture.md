@@ -51,6 +51,10 @@ flowchart TB
   tab, one per forwarded connection or file operation, one per shared folder,
   and the compositor's ([GUI protocol](gui-protocol.md)). The kinds are the
   `Stream*` constants in `go/internal/protocol`.
+- A vsock stream carries about 110 MB/s on a phone, far short of full-screen
+  frames at display rate. So the app makes the memory the guest runs on, and
+  big frames cross as the addresses of the guest pages holding them (the GUI
+  protocol's Guest RAM); the stream carries only the page lists.
 
 - A tab needs nothing from the control stream, so a stuck control channel
   doesn't freeze terminals.

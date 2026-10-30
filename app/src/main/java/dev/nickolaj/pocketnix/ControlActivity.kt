@@ -94,6 +94,8 @@ class ControlActivity : Activity() {
         if (intent.hasExtra(EXTRA_CPUS)) s.cpus = if (intent.getIntExtra(EXTRA_CPUS, 0) == 1) 1 else 0
         // Debug builds: `--ez audio true` gives the guest a speaker from the next VM start.
         if (BuildConfig.DEBUG && intent.hasExtra(EXTRA_AUDIO)) s.audio = intent.getBooleanExtra(EXTRA_AUDIO, false)
+        // Debug builds: `--ez guestRam false` keeps guest RAM out of the app from the next VM start.
+        if (BuildConfig.DEBUG && intent.hasExtra(EXTRA_GUEST_RAM)) s.guestRam = intent.getBooleanExtra(EXTRA_GUEST_RAM, true)
         // Debug builds: `--ez guiHashes true` checks every GUI commit against the compositor's content hash.
         if (BuildConfig.DEBUG && intent.hasExtra(EXTRA_GUI_HASHES)) s.guiHashes = intent.getBooleanExtra(EXTRA_GUI_HASHES, false)
         // Debug builds: `--es tcp <host:port>` runs against a desktop agent, `--es tcp ""` back to AVF.
@@ -139,5 +141,6 @@ class ControlActivity : Activity() {
         const val EXTRA_CPUS = "cpus"
         const val EXTRA_GUI_HASHES = "guiHashes"
         const val EXTRA_AUDIO = "audio"
+        const val EXTRA_GUEST_RAM = "guestRam"
     }
 }

@@ -6,6 +6,7 @@ mod apps;
 mod damage;
 mod flush;
 mod gui;
+mod guestram;
 mod icons;
 mod keyboard;
 mod launch;

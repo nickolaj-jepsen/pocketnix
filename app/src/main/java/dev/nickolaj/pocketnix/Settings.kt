@@ -32,6 +32,11 @@ class Settings(context: Context) {
         get() = BuildConfig.DEBUG && prefs.getBoolean("audio", false)
         set(v) = prefs.edit { putBoolean("audio", v) }
 
+    /** Guest RAM in the app's memory, so GUI frames cross without a copy over the stream. Off only for A/B tests in debug builds. */
+    var guestRam: Boolean
+        get() = !BuildConfig.DEBUG || prefs.getBoolean("guestRam", true)
+        set(v) = prefs.edit { putBoolean("guestRam", v) }
+
     /** Debug builds: run against an agent over TCP instead of AVF. */
     var tcpBackend: Boolean
         get() = BuildConfig.DEBUG && prefs.getBoolean("tcpBackend", false)
@@ -77,7 +82,7 @@ class Settings(context: Context) {
         }
         set(v) = prefs.edit { if (v == null) remove("terminalColors") else putString("terminalColors", JSONObject(v).toString()) }
 
-    fun vm() = VmSettings(memoryMb = memoryMb, cpus = cpus, diskGb = diskGb, network = network, audio = audio)
+    fun vm() = VmSettings(memoryMb = memoryMb, cpus = cpus, diskGb = diskGb, network = network, audio = audio, guestRam = guestRam)
 
     companion object {
         const val MAX_MEMORY_MB = 65_536

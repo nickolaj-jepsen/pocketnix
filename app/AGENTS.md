@@ -40,6 +40,27 @@ that cross directories.
 - An app can't `FIONREAD` a vsock fd, so `available()` on its stream throws,
   and a `BufferedInputStream` calls it after every short read: big PTY output
   and forwards died. `AgentLink`'s buffer hides it; TCP tests can't catch it.
+- The Java config never sets several `VirtualMachineRawConfig` fields
+  (`customMemoryBackingFiles`, `boostUclamp`); `AvfReflect.editRawConfig`
+  reaches them through the binder `VirtualMachine.run` uses.
+- crosvm maps app-made memory as guest RAM (`--file-backed-mapping …,ram`), as
+  a memory region of its own: a virtio buffer across its edge kills the device
+  ("invalid descriptor chain memory regions"), and u-boot's kernel load
+  straddles a range at the top of RAM. Only all of RAM, from `0x8000_0000`,
+  has no edge.
+- AVF's sound device (`crosvm_vu_snd`, vhost-user) must map guest RAM, and
+  sepolicy denies it the app's descriptor (`avc: denied { use }`): it dies and
+  the VM with it. App-made guest RAM and the AVF speaker exclude each other.
+- The balloon's free-page reporting fails on app-made (ashmem) guest RAM
+  ("failed to handle the inflate balloon event … I/O error"), so with it the
+  guest keeps the memory it touched.
+- The host refuses crosvm's own `sched_setattr` and `sched_setaffinity` for
+  its vCPUs ("Failed to boost vcpu util", "Failed to set CPU affinity":
+  EPERM), so `--host-cpu-topology`'s pinning and `boostUclamp` do nothing; the
+  vCPUs run anywhere, often on little cores. The app can't reach crosvm's
+  threads either.
+- `SharedMemory.create` takes an `Int` size and hides its descriptor; the
+  NDK's `ASharedMemory_create` takes a `size_t`.
 - The app's vsock fds carry virtmgr's label
   (`untrusted_app_all_virtualizationmanager`), and sepolicy denies the app
   `setopt` and `shutdown` on them: `SO_VM_SOCKETS_BUFFER_SIZE` can't be

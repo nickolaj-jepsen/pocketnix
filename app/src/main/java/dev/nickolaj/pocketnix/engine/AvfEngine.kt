@@ -12,6 +12,7 @@ import android.util.Log
 import dev.nickolaj.pocketnix.agent.AgentDialer
 import dev.nickolaj.pocketnix.agent.AgentStream
 import dev.nickolaj.pocketnix.agent.Protocol
+import dev.nickolaj.pocketnix.gui.GuestRam
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
@@ -86,7 +87,8 @@ class AvfEngine(private val context: Context) : VmEngine {
             if (caps != 0 && caps and AvfReflect.CAPABILITY_NON_PROTECTED_VM == 0) {
                 throw IllegalStateException("This device's hypervisor only runs protected VMs")
             }
-            val config = buildConfig(disk, settings)
+            val shared = shareRam(settings)
+            val config = buildConfig(disk, settings, shared)
             val v = runCatching { AvfReflect.getOrCreate(mgr, VM_NAME, config).also { AvfReflect.setConfig(it, config) } }
                 .getOrElse {
                     Log.w(TAG, "stored VM config incompatible (${it.message}); recreating")
@@ -128,7 +130,34 @@ class AvfEngine(private val context: Context) : VmEngine {
         }
     }
 
-    private fun buildConfig(disk: File, settings: VmSettings): Any {
+    /**
+     * Has the VM run on guest RAM in the app's memory, when [settings] want
+     * it and AVF lets the config carry it; false leaves the VM as before.
+     */
+    private fun shareRam(settings: VmSettings): Boolean {
+        GuestRam.release()
+        if (!settings.guestRam || settings.audio) {
+            AvfReflect.editRawConfig(null)
+            return false
+        }
+        val bytes = settings.memoryMb.toLong() shl 20
+        val fd = runCatching { GuestRam.create(bytes) }.getOrElse {
+            Log.w(TAG, "guest RAM stays in crosvm", it)
+            AvfReflect.editRawConfig(null)
+            return false
+        }
+        // All of RAM: crosvm takes a backed range for a memory region of its own, and a
+        // virtio buffer across a region's edge breaks the device.
+        val edited = AvfReflect.editRawConfig { raw ->
+            check(AvfReflect.rawMemoryMib(raw).toLong() shl 20 == bytes) { "the VM's RAM isn't the ${settings.memoryMb} MiB shared" }
+            AvfReflect.addMemoryBackingFile(raw, fd, GuestRam.BASE, bytes)
+        }
+        if (!edited) GuestRam.release()
+        Log.i(TAG, if (edited) "guest RAM in app memory" else "guest RAM stays in crosvm")
+        return edited
+    }
+
+    private fun buildConfig(disk: File, settings: VmSettings, sharedRam: Boolean): Any {
         val custom = AvfReflect.newCustomBuilder()
         AvfReflect.setName(custom, VM_NAME)
         AvfReflect.setBootloaderPath(custom, UBOOT)
@@ -137,8 +166,9 @@ class AvfEngine(private val context: Context) : VmEngine {
         // A GPU config selects full crosvm, which a networked VM needs (see AvfReflect.setGpuConfig).
         if (settings.network) AvfReflect.setGpuConfig(custom, "2d")
         if (settings.audio) AvfReflect.setAudioConfig(custom)
-        // Hands the guest's free pages back to Android while the VM runs.
-        AvfReflect.useAutoMemoryBalloon(custom, true)
+        // Hands the guest's free pages back to Android while the VM runs; crosvm can't free
+        // the app's shared memory, so then the guest keeps what it touched.
+        AvfReflect.useAutoMemoryBalloon(custom, !sharedRam)
 
         val b = AvfReflect.newVmConfigBuilder(context)
         AvfReflect.setProtectedVm(b, false)
@@ -211,6 +241,7 @@ class AvfEngine(private val context: Context) : VmEngine {
 
     private fun cleanup(console: ConsoleLog) {
         vm = null
+        GuestRam.release()
         console.input = null
         consoleStreams?.let { (o, i) ->
             runCatching { i.close() }

@@ -12,6 +12,7 @@ pub const COMMIT: u8 = 0x01;
 pub const COMMIT_DATA: u8 = 0x02;
 pub const ICON: u8 = 0x03;
 pub const PRESENTED: u8 = 0x10;
+pub const RELEASED: u8 = 0x11;
 pub const POINTER_MOTION: u8 = 0x20;
 pub const POINTER_BUTTON: u8 = 0x21;
 pub const POINTER_AXIS: u8 = 0x22;
@@ -36,6 +37,7 @@ pub const FORMAT_RGBX8888: u8 = 2;
 
 pub const ENCODING_RAW: u8 = 0;
 pub const ENCODING_ZSTD: u8 = 1;
+pub const ENCODING_PAGES: u8 = 2;
 
 pub const COMMIT_HEADER_SIZE: usize = 88;
 pub const MAX_RECTS: usize = 4096;

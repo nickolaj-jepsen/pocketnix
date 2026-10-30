@@ -42,6 +42,28 @@ object GuiNative : Unpacker {
      */
     @JvmStatic external fun copyRects(buffer: HardwareBuffer, src: ByteArray, srcWidth: Int, rects: IntArray?, count: Int): Int
 
+    /**
+     * Makes shared memory of [size] bytes standing for guest-physical
+     * [base, base + size) and maps it for [guestRamGather], replacing any
+     * mapped before. Returns its fd, or minus errno.
+     */
+    @JvmStatic external fun guestRamCreate(base: Long, size: Long): Int
+
+    /** Unmaps guest RAM once no gather reads it. */
+    @JvmStatic external fun guestRamRelease()
+
+    /**
+     * Copies the first [len] bytes of the guest pages [src] lists (a PAGES
+     * commit's data) into [dst]. Returns 0, or a negative error for a list
+     * that doesn't cover exactly [len] bytes of mapped guest RAM.
+     */
+    @JvmStatic external fun guestRamGather(src: ByteArray, dst: ByteArray, len: Int): Int
+
+    override fun guestPages(src: ByteArray, dst: ByteArray, len: Int) {
+        val err = guestRamGather(src, dst, len)
+        if (err != 0) throw GuiProtocolException("guest pages don't fit $len bytes of guest RAM ($err)")
+    }
+
     /** Decodes [src]'s frames side by side, each into its own part of [dst]. */
     override fun unpack(src: ByteArray, dst: ByteArray, dstOff: Int, dstLen: Int) {
         val frames = zstdFrames(src)

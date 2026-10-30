@@ -1,11 +1,17 @@
-// The GUI renderer's native half: zstd unpacking and copying pixels into
-// AHardwareBuffers, which Java can't lock. Kotlin does everything else.
+// The GUI renderer's native half: zstd unpacking, copying pixels into
+// AHardwareBuffers, which Java can't lock, and the mapping of guest RAM.
+// Kotlin does everything else.
 #include <android/hardware_buffer.h>
 #include <android/hardware_buffer_jni.h>
+#include <android/sharedmem.h>
+#include <errno.h>
 #include <jni.h>
 #include <pthread.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 // From the vendored zstddeclib.c, which has no separate header.
 typedef struct ZSTD_DCtx_s ZSTD_DCtx;
@@ -150,4 +156,74 @@ JNIEXPORT jint JNICALL Java_dev_nickolaj_pocketnix_gui_GuiNative_copyRects(
 	// A NULL fence: the unlock waits until the writes are visible to the GPU and composer.
 	AHardwareBuffer_unlock(ahb, NULL);
 	return s ? 0 : -12;
+}
+
+// Guest RAM, mapped read-only from the shared memory that backs it ([GuestRam]).
+// The lock keeps it mapped while a copy reads from it.
+#define GUEST_PAGE 4096
+static pthread_rwlock_t guest_ram_lock = PTHREAD_RWLOCK_INITIALIZER;
+static const uint8_t *guest_ram;
+static size_t guest_ram_len;
+static uint64_t guest_ram_base;
+
+// Makes and maps shared memory of `size` bytes standing for guest-physical
+// [base, base + size), replacing any mapped before. Returns its fd, or -errno.
+JNIEXPORT jint JNICALL Java_dev_nickolaj_pocketnix_gui_GuiNative_guestRamCreate(JNIEnv *env, jclass cls, jlong base, jlong size) {
+	int fd = ASharedMemory_create("pocketnix-guest-ram", (size_t)size);
+	if (fd < 0) return -errno;
+	void *m = mmap(NULL, (size_t)size, PROT_READ, MAP_SHARED, fd, 0);
+	if (m == MAP_FAILED) {
+		int e = errno;
+		close(fd);
+		return -e;
+	}
+	pthread_rwlock_wrlock(&guest_ram_lock);
+	if (guest_ram) munmap((void *)guest_ram, guest_ram_len);
+	guest_ram = m;
+	guest_ram_len = (size_t)size;
+	guest_ram_base = (uint64_t)base;
+	pthread_rwlock_unlock(&guest_ram_lock);
+	return fd;
+}
+
+JNIEXPORT void JNICALL Java_dev_nickolaj_pocketnix_gui_GuiNative_guestRamRelease(JNIEnv *env, jclass cls) {
+	pthread_rwlock_wrlock(&guest_ram_lock);
+	if (guest_ram) munmap((void *)guest_ram, guest_ram_len);
+	guest_ram = NULL;
+	guest_ram_len = 0;
+	pthread_rwlock_unlock(&guest_ram_lock);
+}
+
+static uint64_t be64(const uint8_t *p) {
+	uint64_t v = 0;
+	for (int i = 0; i < 8; i++) v = v << 8 | p[i];
+	return v;
+}
+
+// Copies the first len bytes of the guest pages that src lists (gui-protocol.md's
+// PAGES) into dst. Returns 0; -22 for a list that doesn't cover exactly len
+// bytes inside guest RAM, -19 with no guest RAM mapped.
+JNIEXPORT jint JNICALL Java_dev_nickolaj_pocketnix_gui_GuiNative_guestRamGather(JNIEnv *env, jclass cls, jbyteArray src, jbyteArray dst, jint len) {
+	size_t n = (size_t)(*env)->GetArrayLength(env, src), pages = ((size_t)len + GUEST_PAGE - 1) / GUEST_PAGE;
+	if (len < 0 || n != 4 + 8 * pages || (size_t)(*env)->GetArrayLength(env, dst) < (size_t)len) return -22;
+	pthread_rwlock_rdlock(&guest_ram_lock);
+	int err = guest_ram ? 0 : -19;
+	uint8_t *s = err ? NULL : (*env)->GetPrimitiveArrayCritical(env, src, NULL);
+	uint8_t *d = err ? NULL : (*env)->GetPrimitiveArrayCritical(env, dst, NULL);
+	if (!err && (!s || !d)) err = -12;
+	if (!err && ((uint32_t)s[0] << 24 | (uint32_t)s[1] << 16 | (uint32_t)s[2] << 8 | s[3]) != pages) err = -22;
+	for (size_t i = 0; !err && i < pages; i++) {
+		// Unsigned: an address below the base wraps past the end.
+		uint64_t at = be64(s + 4 + 8 * i) - guest_ram_base;
+		size_t chunk = (size_t)len - i * GUEST_PAGE < GUEST_PAGE ? (size_t)len - i * GUEST_PAGE : GUEST_PAGE;
+		if (at > guest_ram_len || guest_ram_len - at < chunk) {
+			err = -22;
+			break;
+		}
+		memcpy(d + i * GUEST_PAGE, guest_ram + at, chunk);
+	}
+	if (d) (*env)->ReleasePrimitiveArrayCritical(env, dst, d, 0);
+	if (s) (*env)->ReleasePrimitiveArrayCritical(env, src, s, JNI_ABORT);
+	pthread_rwlock_unlock(&guest_ram_lock);
+	return err;
 }

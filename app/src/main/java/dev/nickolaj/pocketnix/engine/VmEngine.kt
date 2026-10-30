@@ -20,7 +20,12 @@ data class VmSettings(
     val diskGb: Int,
     val network: Boolean,
     /** A virtio-snd speaker (no microphone), played through AAudio. */
-    val audio: Boolean = false
+    val audio: Boolean = false,
+    /**
+     * Guest RAM in the app's memory ([dev.nickolaj.pocketnix.gui.GuestRam]).
+     * AVF's sound device can't run on it, so [audio] wins.
+     */
+    val guestRam: Boolean = true
 )
 
 /** What runs the guest: AVF on the phone, or (debug builds) an agent on another machine. */

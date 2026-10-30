@@ -85,6 +85,9 @@ pub struct Conn {
     fresh: bool,
     ready: bool,
     pub hashes: bool,
+    /// The app maps guest RAM: big data may go as PAGES.
+    pub guest_ram: bool,
+    pub frames: crate::guestram::Frames,
     seq: u32,
     /// The last `toplevel` message sent per toplevel id, with its window.
     pub toplevels: HashMap<u32, (u32, Value)>,
@@ -161,7 +164,7 @@ fn random_id() -> String {
 
 /// Reads like `read`, also taking a descriptor sent with the bytes
 /// (`SCM_RIGHTS`); any more than one are closed.
-fn read_with_fd(stream: &UnixStream, buf: &mut [u8]) -> std::io::Result<(usize, Option<OwnedFd>)> {
+pub fn read_with_fd(stream: &UnixStream, buf: &mut [u8]) -> std::io::Result<(usize, Option<OwnedFd>)> {
     let mut iov = libc::iovec { iov_base: buf.as_mut_ptr().cast(), iov_len: buf.len() };
     // Aligned room for a few descriptors; the kernel drops what doesn't fit.
     let mut control = [0u64; 8];
@@ -254,6 +257,7 @@ struct HelloMsg {
     version: u32,
     min_version: u32,
     hashes: bool,
+    guest_ram: bool,
 }
 
 #[derive(Deserialize, Default)]
@@ -380,6 +384,8 @@ impl State {
                 fresh: true,
                 ready: false,
                 hashes: false,
+                guest_ram: false,
+                frames: Default::default(),
                 seq: 0,
                 toplevels: HashMap::new(),
                 surfaces: HashMap::new(),
@@ -534,6 +540,12 @@ impl State {
                 let (window, seq) = (f.u32()?, f.u32()?);
                 self.presented(window, seq);
             }
+            protocol::RELEASED => {
+                let seq = f.u32()?;
+                if let Some(conn) = self.gui.conns.get_mut(&id) {
+                    conn.frames.release(seq);
+                }
+            }
             protocol::POINTER_MOTION => {
                 let (window, x, y) = (f.u32()?, f.f32()?, f.f32()?);
                 self.pointer_motion(window, x, y);
@@ -606,6 +618,7 @@ impl State {
         let Some(conn) = self.gui.conns.get_mut(&id) else { return Ok(()) };
         conn.ready = true;
         conn.hashes = hello.hashes;
+        conn.guest_ram = hello.guest_ram;
         conn.send(protocol::json_frame(&json!({
             "type": "hello",
             "version": version,

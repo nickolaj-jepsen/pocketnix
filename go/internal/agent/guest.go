@@ -82,6 +82,10 @@ func (s *Server) handleGuest(c net.Conn) {
 			closeFiles(fds)
 			s.subscribeClipboard(c, r)
 			return
+		} else if req.Type == protocol.GuestFrameBuffers {
+			closeFiles(fds)
+			s.frameBuffers(c, r, req)
+			return
 		} else if req.Type == protocol.GuestNotify || req.Type == protocol.GuestNotifyClose {
 			var err error
 			if reply, err = s.guestNotify(req); err != nil {

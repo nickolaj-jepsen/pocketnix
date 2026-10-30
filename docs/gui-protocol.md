@@ -42,6 +42,7 @@ agent, the NixOS module and the app.
 | `0x03` | ICON | compositor → app |
 | `0x04` | CURSOR_IMAGE (reserved) | compositor → app |
 | `0x10` | PRESENTED | app → compositor |
+| `0x11` | RELEASED | app → compositor |
 | `0x20` | POINTER_MOTION | app → compositor |
 | `0x21` | POINTER_BUTTON | app → compositor |
 | `0x22` | POINTER_AXIS | app → compositor |
@@ -62,6 +63,8 @@ agent, the NixOS module and the app.
 1. The app sends `hello`:
    `{"type":"hello","version":2,"minVersion":2,"app":"<build>","hashes":false}`.
    `hashes: true` asks for a content hash on every commit that carries pixels.
+   `guestRam: true` says the app maps the guest's RAM (see Guest RAM), so
+   commits may be PAGES.
 2. The compositor answers with
    `{"type":"hello","version":<v>,"compositor":"<build>","instance":"<id>"}`,
    where `v` is the highest version both speak (the agent's `Negotiate` rule),
@@ -257,7 +260,8 @@ Fields:
   match `HardwareBuffer.RGBA_8888` and `RGBX_8888`, so the app copies without
   converting. The compositor converts from the client's `wl_shm` format while
   packing.
-- `encoding`: `0` raw, `1` zstd.
+- `encoding`: `0` raw, `1` zstd, `2` PAGES (see Guest RAM; only to an app
+  whose hello said `guestRam`).
 - `transform`: a `wl_output.transform` value, with `wl_surface.set_buffer_transform`'s
   meaning. 0 for nearly every client.
 - `rects`: damage, in buffer pixels of the untransformed buffer, clipped to
@@ -292,6 +296,27 @@ size or format differs from that content, is a protocol error.
 - With zstd it's one or more concatenated zstd frames; the decompressed
   concatenation is the data. The compositor may compress shards in parallel.
 - Data that doesn't fit in the COMMIT frame continues in COMMIT_DATA frames.
+
+### Guest RAM
+
+On AVF the app makes the memory the guest runs on and maps it, so it can read
+pixel data where the compositor wrote it. The compositor gets frame buffers
+the agent pins in guest RAM (see the Agent contract) and copies a commit's
+data into one of their slots instead of sending it.
+
+- PAGES data is `[count u32][address u64 × count]`: the guest-physical
+  address of each 4096-byte page holding the pixel data, in order. The pixel
+  data is those pages' bytes, cut to the commit's length (`Σ w × h × 4`);
+  `count` covers exactly that. An address outside the guest RAM the app maps
+  is a protocol error.
+- Guest RAM starts at guest-physical `0x8000_0000` (crosvm's
+  `AARCH64_PHYS_MEM_START`) and is one range of the VM's memory size.
+- A slot is the app's until it sends **RELEASED (`0x11`)**, `[seq u32]`: it
+  has copied commit `seq`'s pages, so the compositor may write them again.
+  The app sends it for every PAGES commit, after copying and whether or not
+  it shows the commit. A new connection frees every slot.
+- With no slot free, or no frame buffers, the compositor sends the data on
+  the stream as before.
 
 ### COMMIT_DATA (`0x02`)
 
@@ -943,6 +968,10 @@ directory, `$XDG_RUNTIME_DIR` (`/run/user/<uid>`).
   `app-pocketnix-*` scopes under `app.slice`, outside its own cgroup.
 - It reads `POCKETNIX_TAB` from `/proc/<pid>/environ` of its own uid's
   clients.
+- For an app that maps guest RAM, it asks the agent for frame buffers on
+  `/run/pocketnix/guest.sock` (`protocol.GuestFrameBuffers`), keeps that
+  connection open while it uses them, and sends its data as before when the
+  agent can't give them.
 
 ### Agent
 
@@ -966,6 +995,11 @@ directory, `$XDG_RUNTIME_DIR` (`/run/user/<uid>`).
   - GUI is on exactly when `gui.enable` is true. The app then keeps one `gui`
     stream open, reconnecting with backoff.
   - An older app ignores the field, and an older agent never sends it.
+- Guest request `protocol.GuestFrameBuffers` (`bytes`): the agent answers
+  with a memfd of at least that size attached and `pages`, each page's
+  guest-physical address, and keeps the pages pinned where they are until
+  the connection closes. Pinning and reading page frames need root, which
+  the compositor doesn't have.
 - Every PTY session's environment has `POCKETNIX_TAB=<tab>`, and the agent's
   PTY Hello carries the same id as `tab` (`protocol.Hello.Tab`): that's how
   the app knows each terminal tab's id. The id is 16 random lowercase hex

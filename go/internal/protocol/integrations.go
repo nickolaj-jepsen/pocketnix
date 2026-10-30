@@ -136,6 +136,11 @@ const (
 	GuestOpen   = "open"   // URL, or Path (absolute in the guest)
 	GuestCopy   = "copy"   // Text
 	GuestPaste  = "paste"  // answers Text
+	// GuestFrameBuffers asks for Bytes of pinned memory for GUI frames (the
+	// compositor's, see docs/gui-protocol.md's PAGES): answered once with a
+	// memfd attached and Pages, then pinned until the connection closes. No
+	// idle deadline applies.
+	GuestFrameBuffers = "frame-buffers"
 )
 
 // GuestRequest is a guest program's request.
@@ -163,6 +168,9 @@ type GuestRequest struct {
 	Ref      string   `json:"ref,omitempty"`
 	// Sensitive is a copy's: it reaches the app as [Event.Sensitive].
 	Sensitive bool `json:"sensitive,omitempty"`
+
+	// Frame buffers.
+	Bytes int64 `json:"bytes,omitempty"`
 }
 
 // GuestReply answers a GuestRequest: Error is set when it failed.
@@ -179,6 +187,9 @@ type GuestReply struct {
 	Types     []string `json:"types,omitempty"`
 	Ref       string   `json:"ref,omitempty"`
 	Cancelled bool     `json:"cancelled,omitempty"`
+
+	// Pages is the frame buffers' guest-physical address of each page, in order.
+	Pages []uint64 `json:"pages,omitempty"`
 }
 
 // GuestSocket is where the module's agent serves guest requests.

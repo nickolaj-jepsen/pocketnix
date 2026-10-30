@@ -216,6 +216,8 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                 val start = System.nanoTime()
                 // Decompressing is the slow part, and needs no state: keep it out of the lock.
                 val g = GuiMessage.Group(msg.commits.map { it.unpacked(GuiNative) })
+                // Copied out: the compositor may write those pages again.
+                for (c in msg.commits) if (c.encoding == Gui.ENCODING_PAGES) link.send(Gui.released(c.seq))
                 val unpacked = System.nanoTime()
                 synchronized(lock) {
                     val locked = System.nanoTime()
