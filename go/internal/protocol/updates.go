@@ -4,6 +4,8 @@ package protocol
 const (
 	SourceBuildHost = "buildHost"
 	SourcePublished = "published"
+	// SourceLocal is a managed guest's own flake, evaluated and built on the phone.
+	SourceLocal = "local"
 )
 
 // Update states.
@@ -12,6 +14,10 @@ const (
 	UpdateChecking  = "checking"
 	UpdateFetching  = "fetching"
 	UpdateSwitching = "switching"
+	// UpdateInstalling adds or removes packages, or fetches one to run.
+	UpdateInstalling = "installing"
+	// UpdateCleaning deletes old generations and collects garbage.
+	UpdateCleaning = "cleaning"
 )
 
 // Updates is the guest's update state: where updates come from, what the
@@ -33,6 +39,8 @@ type Updates struct {
 	// and Source the source it came from.
 	Available string `json:"available,omitempty"`
 	Source    string `json:"source,omitempty"`
+	// Plan is what applying Available costs, for the local source only.
+	Plan *Plan `json:"plan,omitempty"`
 	// CheckedAt is when the last check finished, in Unix seconds.
 	CheckedAt int64 `json:"checkedAt,omitempty"`
 	// Error is why the last operation failed; cleared when the next starts.
@@ -40,6 +48,29 @@ type Updates struct {
 	// Log holds the last lines of output of the running or the last operation.
 	Log         []string     `json:"log"`
 	Generations []Generation `json:"generations"`
+	// Packages are the nixpkgs attributes in a managed guest's user profile.
+	Packages []string `json:"packages,omitempty"`
+	// Run is the outcome of the last run request, once it has one.
+	Run *RunResult `json:"run,omitempty"`
+	// Blocked is what the last apply, package-add or run would have built on
+	// the phone, so it stopped; repeating it with allowBuilds builds it.
+	Blocked *Plan `json:"blocked,omitempty"`
+}
+
+// Plan is what realising a system or package costs: what it downloads, and
+// what it would build on the phone (its derivations' names). Builds of
+// configuration files and other trivial derivations aren't listed.
+type Plan struct {
+	Download int64    `json:"download"`
+	Builds   []string `json:"builds"`
+}
+
+// RunResult is how to start a package a run request fetched: the desktop
+// file ids it brings (launch one), or else Command (run it in a tab).
+type RunResult struct {
+	Package string   `json:"package"`
+	Apps    []string `json:"apps,omitempty"`
+	Command string   `json:"command,omitempty"`
 }
 
 // Generation is one entry of the system profile; [Updates] lists them newest first.

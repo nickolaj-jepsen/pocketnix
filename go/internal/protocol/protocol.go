@@ -81,6 +81,17 @@ const (
 	TypeUpdateCancel = "update-cancel"
 	// TypeHistory asks for the user's shell history, answered with [History].
 	TypeHistory = "history"
+
+	// TypeSelections writes a managed guest's [Selections] for its next
+	// rebuild, and is answered with them.
+	TypeSelections = "selections"
+	// TypePackageAdd and TypePackageRemove change a managed guest's user
+	// profile ([Request.Packages], nixpkgs attributes).
+	TypePackageAdd    = "package-add"
+	TypePackageRemove = "package-remove"
+	// TypeRun fetches [Request.Package] to run it once; its outcome arrives
+	// as [Updates.Run].
+	TypeRun = "run"
 )
 
 // Request is an app request on the control stream; fields past Type belong
@@ -114,6 +125,14 @@ type Request struct {
 
 	// Path is a resolve-path request's.
 	Path string `json:"path,omitempty"`
+	// Pin is an update-check's or update-apply's pocketnix release ("0.2.0")
+	// for a managed guest's flake; empty keeps the one it has.
+	Pin string `json:"pin,omitempty"`
+	// AllowBuilds lets an update-apply or run build what its [Plan] lists.
+	AllowBuilds bool        `json:"allowBuilds,omitempty"`
+	Selections  *Selections `json:"selections,omitempty"`
+	Packages    []string    `json:"packages,omitempty"`
+	Package     string      `json:"package,omitempty"`
 }
 
 // Envelope is the part of every JSON message a receiver reads first.
@@ -138,6 +157,9 @@ type Hello struct {
 	Profile string `json:"profile,omitempty"`
 	Rows    int    `json:"rows,omitempty"`
 	Cols    int    `json:"cols,omitempty"`
+	// Command is a PTY's to run through the login shell instead of the
+	// profile's; the app's way to start a fetched program in a tab.
+	Command string `json:"command,omitempty"`
 	// Tab is the agent's on a PTY: the session's id, unique across agent
 	// restarts, which it sees as $POCKETNIX_TAB.
 	Tab string `json:"tab,omitempty"`
@@ -179,7 +201,27 @@ type Config struct {
 	Terminal Terminal  `json:"terminal"`
 	// GUI is absent from an agent without GUI support.
 	GUI *GUI `json:"gui,omitempty"`
+	// Managed is present when the phone manages this guest: the app
+	// configures it and it rebuilds itself.
+	Managed *Managed `json:"managed,omitempty"`
 }
+
+// Managed is a managed guest's: Flake is its own flake's directory.
+type Managed struct {
+	Flake string `json:"flake"`
+}
+
+// Selections are what the app configures in a managed guest, its flake's
+// pocketnix.json: the user, and which [Services] are on.
+type Selections struct {
+	Type     string          `json:"type,omitempty"` // "selections" on the wire
+	User     string          `json:"user"`
+	Services map[string]bool `json:"services"`
+}
+
+// Services are the switches of [Selections], the options of the module's
+// pocketnix.guest.managed.selections.services.
+var Services = []string{"ssh", "tailscale", "podman", "gui"}
 
 // Forward is one port the app exposes on the phone.
 type Forward struct {

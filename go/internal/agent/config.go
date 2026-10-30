@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -42,6 +43,8 @@ type File struct {
 	GUISocket string `json:"guiSocket,omitempty"`
 	// ForwardOffers is absent, and so off, in a config the module didn't write.
 	ForwardOffers ForwardOffersConfig `json:"forwardOffers"`
+	// Managed makes the guest rebuild its own flake (pocketnix.guest.managed).
+	Managed *ManagedConfig `json:"managed,omitempty"`
 }
 
 // ForwardOffersConfig pushes the session user's TCP listeners to the app
@@ -50,6 +53,18 @@ type ForwardOffersConfig struct {
 	Enable bool `json:"enable"`
 	// LAN has the app bind an allowed forward on 0.0.0.0, not 127.0.0.1.
 	LAN bool `json:"lan"`
+}
+
+// ManagedConfig is a managed guest's: the flake it rebuilds and how.
+type ManagedConfig struct {
+	// Flake is the flake's directory, and Attr its nixosConfigurations entry.
+	Flake string `json:"flake"`
+	Attr  string `json:"attr"`
+	// CPUQuota caps evaluation (systemd's CPUQuota=).
+	CPUQuota string `json:"cpuQuota,omitempty"`
+	// AdhocProfile is the profile run requests install into, relative to
+	// the session user's home.
+	AdhocProfile string `json:"adhocProfile"`
 }
 
 // PowerConfig is how the guest keeps the phone awake.
@@ -93,10 +108,16 @@ type UpdatesConfig struct {
 	// CheckInterval is a Go duration between background checks; empty or
 	// zero checks only when the app asks.
 	CheckInterval string `json:"checkInterval,omitempty"`
+	// KeepGenerations is how many generations besides the running and the
+	// booted one survive a prune; nil never prunes.
+	KeepGenerations *int `json:"keepGenerations,omitempty"`
 
 	interval time.Duration
 	// hostname names the toplevel a source may answer (nixos-system-<hostname>-…).
 	hostname string
+	managed  *ManagedConfig
+	// user owns the packages and the ad-hoc profile.
+	user string
 }
 
 // BuildHost evaluates and builds the guest's system over ssh.
@@ -123,6 +144,9 @@ func (u *UpdatesConfig) sources() []string {
 	}
 	if u.Published != nil {
 		s = append(s, protocol.SourcePublished)
+	}
+	if u.managed != nil {
+		s = append(s, protocol.SourceLocal)
 	}
 	return s
 }
@@ -218,6 +242,17 @@ func (f *File) normalize() error {
 		return fmt.Errorf("gui: %w", err)
 	}
 	f.Updates.hostname = f.Hostname
+	f.Updates.user = f.User
+	if m := f.Managed; m != nil {
+		if !filepath.IsAbs(m.Flake) || m.Attr == "" || m.AdhocProfile == "" || filepath.IsAbs(m.AdhocProfile) {
+			return errors.New("managed needs an absolute flake, an attr and a relative adhocProfile")
+		}
+		f.Config.Managed = &protocol.Managed{Flake: m.Flake}
+		f.Updates.managed = m
+	}
+	if k := f.Updates.KeepGenerations; k != nil && *k < 0 {
+		return fmt.Errorf("updates.keepGenerations %d is negative", *k)
+	}
 	return f.Updates.normalize()
 }
 

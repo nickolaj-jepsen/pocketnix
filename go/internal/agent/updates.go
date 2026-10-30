@@ -24,8 +24,8 @@ import (
 const logLines = 60
 
 // Updater pulls finished systems from the configured sources and switches
-// to them, one operation at a time (docs/updates.md). The
-// guest never evaluates: every source yields a toplevel store path.
+// to them, one operation at a time (docs/updates.md). Only a managed guest's
+// own flake (the local source) is evaluated and built here.
 type Updater struct {
 	// Commands and paths, which tests replace with fakes.
 	SSH, NixStore, Nix, NixEnv string
@@ -38,7 +38,9 @@ type Updater struct {
 	Current, Booted string
 	// StoreDir is the store prefix a source's answer must have.
 	StoreDir string
-	HTTP     *http.Client
+	// Home replaces the session user's home (tests).
+	Home string
+	HTTP *http.Client
 
 	// Changed is called after every state change, with the mutex released.
 	Changed func()
@@ -59,6 +61,11 @@ type Updater struct {
 	log       []string
 	nextCheck time.Time
 	pushTimer *time.Timer
+	// local is the last check of a managed guest's flake.
+	local    *localCheck
+	blocked  *protocol.Plan
+	packages []string
+	run      *protocol.RunResult
 
 	// The running operation: its context and how to cancel it.
 	ctx    context.Context
@@ -129,7 +136,7 @@ func (u *Updater) Periodic(ctx context.Context) {
 			u.mu.Unlock()
 			// A busy or offline updater skips this round; the next interval tries again.
 			if run && (u.Offline == nil || !u.Offline()) {
-				u.Check()
+				u.Check(Options{})
 			}
 		}
 		if t != nil {
@@ -139,6 +146,12 @@ func (u *Updater) Periodic(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func (u *Updater) config() UpdatesConfig {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.cfg
 }
 
 // State returns the update state, with the generations read fresh.
@@ -153,6 +166,13 @@ func (u *Updater) State() protocol.Updates {
 		Source:    u.source,
 		Error:     u.err,
 		Log:       slices.Clone(u.log),
+		Packages:  slices.Clone(u.packages),
+		Run:       u.run,
+		Blocked:   u.blocked,
+	}
+	if l := u.local; l != nil && st.Source == protocol.SourceLocal && st.Available == l.out {
+		plan := l.plan
+		st.Plan = &plan
 	}
 	if !u.checkedAt.IsZero() {
 		st.CheckedAt = u.checkedAt.Unix()
@@ -172,18 +192,24 @@ func (u *Updater) State() protocol.Updates {
 
 // Check looks for a newer system in the background. It fails at once when
 // no source is configured or another operation runs.
-func (u *Updater) Check() error {
-	return u.run(protocol.UpdateChecking, func(c UpdatesConfig) error {
-		_, _, err := u.check(c)
+func (u *Updater) Check(o Options) error {
+	return u.runOp(protocol.UpdateChecking, func(c UpdatesConfig) error {
+		_, _, err := u.check(c, o)
 		return err
 	})
 }
 
 // Apply checks, then fetches and switches to what the check found, in the
-// background.
-func (u *Updater) Apply() error {
-	return u.run(protocol.UpdateChecking, func(c UpdatesConfig) error {
-		path, src, err := u.check(c)
+// background. A managed guest reuses its last check while its flake is
+// unchanged, and stops short of building what that plans unless
+// o.AllowBuilds.
+func (u *Updater) Apply(o Options) error {
+	return u.runOp(protocol.UpdateChecking, func(c UpdatesConfig) error {
+		path, src := u.reuseLocal(c, o)
+		var err error
+		if path == "" {
+			path, src, err = u.check(c, o)
+		}
 		if err != nil {
 			return err
 		}
@@ -192,7 +218,12 @@ func (u *Updater) Apply() error {
 		}
 		defer u.inhibit("Updating the system")()
 		u.setState(protocol.UpdateFetching)
-		if err := u.fetch(c, src, path); err != nil {
+		if src == protocol.SourceLocal {
+			err = u.localFetch(c, o, path)
+		} else {
+			err = u.fetch(c, src, path)
+		}
+		if err != nil {
 			return err
 		}
 		if err := switchable(path); err != nil {
@@ -210,8 +241,32 @@ func (u *Updater) Apply() error {
 		u.mu.Lock()
 		u.available, u.source = "", ""
 		u.mu.Unlock()
-		return nil
+		if src == protocol.SourceLocal {
+			if err := u.localSwitched(c); err != nil {
+				return fmt.Errorf("switched, but the flake's lock wasn't updated: %w", err)
+			}
+		}
+		return u.prune(c, false)
 	})
+}
+
+// reuseLocal returns what the last check of a managed guest's own flake
+// found, while the flake and the pin are what it checked.
+func (u *Updater) reuseLocal(c UpdatesConfig, o Options) (path, src string) {
+	if c.managed == nil || c.BuildHost != nil || c.Published != nil {
+		return "", ""
+	}
+	u.mu.Lock()
+	lc := u.local
+	u.mu.Unlock()
+	if lc == nil || lc.pin != o.Pin || lc.out == resolve(u.Current) {
+		return "", ""
+	}
+	if stamp, err := flakeStamp(c.managed.Flake); err != nil || stamp != lc.stamp {
+		return "", ""
+	}
+	u.logf("%s: %s, as checked", protocol.SourceLocal, lc.out)
+	return lc.out, protocol.SourceLocal
 }
 
 // SwitchGeneration makes generation n of the system profile current, in the
@@ -225,13 +280,16 @@ func (u *Updater) SwitchGeneration(n int) error {
 	if err := switchable(path); err != nil {
 		return err
 	}
-	op := func(UpdatesConfig) error {
+	op := func(c UpdatesConfig) error {
 		u.logf("switching to generation %d (%s)", n, path)
 		defer u.inhibit(fmt.Sprintf("Switching to generation %d", n))()
 		if err := u.cmd(envTimeout, u.NixEnv, "-p", u.Profile, "--switch-generation", strconv.Itoa(n)); err != nil {
 			return err
 		}
-		return u.switchTo(path)
+		if err := u.switchTo(path); err != nil {
+			return err
+		}
+		return u.prune(c, false)
 	}
 	u.mu.Lock()
 	if u.state == protocol.UpdateChecking || u.state == protocol.UpdateFetching {
@@ -273,7 +331,7 @@ func (u *Updater) Cancel() error {
 	return nil
 }
 
-func (u *Updater) run(state string, op func(UpdatesConfig) error) error {
+func (u *Updater) runOp(state string, op func(UpdatesConfig) error) error {
 	u.mu.Lock()
 	none := len(u.cfg.sources()) == 0
 	u.mu.Unlock()
@@ -299,7 +357,7 @@ func (u *Updater) startLocked(state string, op func(UpdatesConfig) error) error 
 	if u.state != protocol.UpdateIdle {
 		return fmt.Errorf("busy (%s)", u.state)
 	}
-	u.state, u.err, u.log = state, "", nil
+	u.state, u.err, u.log, u.blocked = state, "", nil, nil
 	u.op++
 	cfg := u.cfg
 	ctx, cancel := context.WithCancel(context.Background())
@@ -333,10 +391,10 @@ func (u *Updater) startLocked(state string, op func(UpdatesConfig) error) error 
 
 // check asks each source in turn for its system; the first answer wins.
 // It returns "" when that is the running system.
-func (u *Updater) check(c UpdatesConfig) (path, source string, err error) {
+func (u *Updater) check(c UpdatesConfig, o Options) (path, source string, err error) {
 	var errs []error
 	for _, src := range c.sources() {
-		p, err := u.target(c, src)
+		p, err := u.target(c, src, o)
 		if err != nil {
 			u.logf("%s: %v", src, err)
 			errs = append(errs, fmt.Errorf("%s: %w", src, err))
@@ -432,8 +490,10 @@ func httpsOnly(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-func (u *Updater) target(c UpdatesConfig, src string) (string, error) {
+func (u *Updater) target(c UpdatesConfig, src string, o Options) (string, error) {
 	switch src {
+	case protocol.SourceLocal:
+		return u.localTarget(c, o)
 	case protocol.SourceBuildHost:
 		b := c.BuildHost
 		u.logf("building %s on %s", b.Installable, b.Host)
@@ -503,13 +563,18 @@ func (u *Updater) inhibit(why string) func() {
 
 func (u *Updater) switchTo(path string) error {
 	u.setState(protocol.UpdateSwitching)
+	return u.activate(path, "switch")
+}
+
+// activate runs path's switch-to-configuration action.
+func (u *Updater) activate(path, action string) error {
 	stc := filepath.Join(path, "bin", "switch-to-configuration")
 	if u.SystemdRun == "" {
-		return u.cmd(switchTimeout, stc, "switch")
+		return u.cmd(switchTimeout, stc, action)
 	}
 	return u.cmd(switchTimeout, u.SystemdRun, "-E", "LOCALE_ARCHIVE", "-E", "NIXOS_INSTALL_BOOTLOADER",
 		"--collect", "--no-ask-password", "--pipe", "--quiet", "--service-type=exec",
-		"--unit=pocketnix-switch-to-configuration", stc, "switch")
+		"--unit=pocketnix-switch-to-configuration", stc, action)
 }
 
 // Deadlines per phase. They're backstops; the ssh keepalives (sshArgs) notice a

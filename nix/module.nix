@@ -11,7 +11,7 @@
   ...
 }: let
   cfg = config.pocketnix.guest;
-  inherit (lib) mkOption mkEnableOption mkIf mkDefault mkMerge types;
+  inherit (lib) mkOption mkEnableOption mkIf mkDefault mkAfter mkMerge types;
 
   extraKey = types.submodule {
     options = {
@@ -64,7 +64,8 @@
             // lib.optionalAttrs (upd.buildHost.sshKey != null) {inherit (upd.buildHost) sshKey;};
         }
         // lib.optionalAttrs (upd.published.url != null) {published = {inherit (upd.published) url;};}
-        // lib.optionalAttrs (upd.checkInterval != null) {inherit (upd) checkInterval;};
+        // lib.optionalAttrs (upd.checkInterval != null) {inherit (upd) checkInterval;}
+        // lib.optionalAttrs (upd.keepGenerations != null) {inherit (upd) keepGenerations;};
       share = lib.filterAttrs (_: v: v != null) {inherit (cfg.share) directory command;};
       power.wakeLocks = {inherit (cfg.power.wakeLocks) enable ignore;};
       host = {inherit (cfg.host) timeZone;};
@@ -72,6 +73,13 @@
     // lib.optionalAttrs (cfg.terminal.historyFile != null) {history = cfg.terminal.historyFile;}
     // lib.optionalAttrs (cfg.files.root != null) {filesRoot = cfg.files.root;}
     // lib.optionalAttrs (cfg.hostFolders.mountPoint != null) {hostFolders = {inherit (cfg.hostFolders) mountPoint;};}
+    // lib.optionalAttrs cfg.managed.enable {
+      managed = {
+        inherit (cfg.managed) flake cpuQuota;
+        attr = config.networking.hostName;
+        inherit adhocProfile;
+      };
+    }
     // lib.optionalAttrs gui.enable {
       gui = {
         enable = true;
@@ -81,6 +89,17 @@
       guiSocket = guiSocketName;
     };
   upd = cfg.updates;
+  mgd = cfg.managed;
+  # Relative to the user's home. Apps run without being kept live here; it's
+  # emptied at boot, before the garbage collection.
+  adhocProfile = ".local/state/nix/profiles/pocketnix-adhoc";
+  # The flake a managed guest starts from.
+  managedSeed = pkgs.runCommand "pocketnix-managed-seed" {} ''
+    mkdir $out
+    substitute ${./managed/flake.nix} $out/flake.nix --subst-var-by version ${lib.fileContents ../VERSION}
+    cp ${./managed/configuration.nix} $out/configuration.nix
+    echo '${builtins.toJSON {inherit (mgd.selections) user services;}}' > $out/pocketnix.json
+  '';
 
   gui = cfg.gui;
   # In the user's runtime directory, where the agent dials it as root.
@@ -540,6 +559,46 @@ in {
         example = "30m";
         description = "How often the agent checks for a newer system in the background (a Go duration); null checks only when asked in the app.";
       };
+      keepGenerations = mkOption {
+        type = types.nullOr types.ints.unsigned;
+        default = 0;
+        example = 2;
+        description = ''
+          How many system generations to keep besides the running and the
+          booted one. After each boot and each switch the agent deletes the
+          rest and collects the store's garbage; null keeps every generation.
+        '';
+      };
+    };
+
+    managed = {
+      enable = mkEnableOption ''
+        a guest the phone manages: its system is the flake at `managed.flake`,
+        configured from the app and rebuilt on the phone. `nixosModules.managed`
+        turns it on'';
+      flake = mkOption {
+        type = types.str;
+        default = "/etc/nixos";
+        description = "The guest's own flake, whose `nixosConfigurations.<hostName>` the agent rebuilds; seeded on first boot when it has no flake.nix.";
+      };
+      selections = {
+        user = mkOption {
+          type = types.strMatching "|[a-z_][a-z0-9_-]{0,31}";
+          default = "";
+          description = "The user the app set up; empty runs tabs as root until it has.";
+        };
+        services = lib.genAttrs ["ssh" "tailscale" "podman" "gui"] (name:
+          mkOption {
+            type = types.bool;
+            default = false;
+            description = "The app's ${name} switch.";
+          });
+      };
+      cpuQuota = mkOption {
+        type = types.strMatching "[0-9]+%";
+        default = "200%";
+        description = "CPU that evaluating and building the guest's system may use (systemd's `CPUQuota=`, 100% per core): the guest's vCPUs are the phone's.";
+      };
     };
 
     integrations = {
@@ -929,6 +988,72 @@ in {
         '';
       };
     })
+
+    (mkIf mgd.enable (let
+      sel = mgd.selections;
+      nixpkgs = self.inputs.nixpkgs;
+    in {
+      networking.hostName = mkDefault "pocketnix";
+      pocketnix.guest.user = mkIf (sel.user != "") sel.user;
+      users.users = mkIf (sel.user != "") {
+        ${sel.user} = {
+          isNormalUser = true;
+          extraGroups = ["wheel"];
+        };
+      };
+      security.sudo.wheelNeedsPassword = mkDefault false;
+      # Rebuilding on the phone costs minutes of evaluation: only when asked.
+      pocketnix.guest.updates.checkInterval = mkDefault null;
+
+      nix.settings = {
+        experimental-features = ["nix-command" "flakes"];
+        # pocketnix's flake.nix has the same key.
+        extra-substituters = ["https://pocketnix.cachix.org"];
+        extra-trusted-public-keys = ["pocketnix.cachix.org-1:KklXzNwjpGzopowh99lwsL3IeaidLtH+Fw7wniLw9Nw="];
+        max-jobs = mkDefault 1;
+      };
+      # Builds run in the daemon; the agent runs evaluation under the same quota.
+      nix.daemonCPUSchedPolicy = mkDefault "idle";
+      nix.daemonIOSchedClass = mkDefault "idle";
+      systemd.services.nix-daemon.serviceConfig.CPUQuota = mgd.cpuQuota;
+      # `nixpkgs#…` is the system's own nixpkgs, fetched by rev rather than kept
+      # in the closure: what the app's package index lists, and what the cache has.
+      nix.registry.nixpkgs.to = {
+        type = "github";
+        owner = "NixOS";
+        repo = "nixpkgs";
+        inherit (nixpkgs) rev narHash;
+      };
+      environment.profiles = mkAfter ["$HOME/${adhocProfile}"];
+
+      services.openssh = mkIf sel.services.ssh {
+        enable = true;
+        settings.PasswordAuthentication = mkDefault false;
+        settings.KbdInteractiveAuthentication = mkDefault false;
+      };
+      pocketnix.guest.forwards.ssh = mkIf sel.services.ssh {
+        guestPort = 22;
+        hostPort = 2022;
+      };
+      services.tailscale.enable = mkIf sel.services.tailscale true;
+      virtualisation.podman.enable = mkIf sel.services.podman true;
+      pocketnix.guest.gui.enable = mkIf sel.services.gui true;
+      environment.systemPackages = lib.optional sel.services.gui pkgs.foot;
+
+      systemd.services.pocketnix-managed-seed = {
+        description = "Seed the guest's flake";
+        wantedBy = ["multi-user.target"];
+        before = ["pocketnix-agent.service"];
+        unitConfig.ConditionPathExists = "!${mgd.flake}/flake.nix";
+        serviceConfig.Type = "oneshot";
+        script = ''
+          mkdir -p ${lib.escapeShellArg mgd.flake}
+          for f in ${managedSeed}/*; do
+            install -m 0644 "$f" ${lib.escapeShellArg mgd.flake}/
+          done
+        '';
+      };
+    }))
 
     {
       # Tabs get no login session, so only lingering starts the user manager

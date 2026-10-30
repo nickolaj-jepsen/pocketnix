@@ -82,6 +82,9 @@ func main() {
 	}()
 
 	go srv.Updates.Periodic(context.Background())
+	go srv.Updates.RefreshPackages()
+	// After the boot's own work, and once per boot across agent restarts.
+	go srv.Updates.PruneAfterBoot(context.Background(), 2*time.Minute, "/run/pocketnix/pruned")
 	go srv.WatchInhibitors(context.Background())
 	if *pollPorts {
 		srv.WatchPorts(nil)

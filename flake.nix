@@ -37,6 +37,8 @@
         pocketnix-compositor = pkgs.callPackage ./nix/compositor.nix {};
         # The example guest's disk image, assembled by this system's tools.
         example-image = self.nixosConfigurations.example.config.system.build.pocketnixImage.${pkgs.stdenv.hostPlatform.system};
+        # What the app downloads on first run: a managed guest the app hasn't configured yet.
+        base-image = self.nixosConfigurations.base.config.system.build.pocketnixImage.${pkgs.stdenv.hostPlatform.system};
         options-doc = import ./nix/options-doc.nix {inherit pkgs nixpkgs self;};
       }
       // nixpkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "aarch64-linux") {
@@ -99,6 +101,32 @@
 
     nixosModules.guest = import ./nix/module.nix {inherit self;};
     nixosModules.default = self.nixosModules.guest;
+    # A guest the phone manages (`pocketnix.guest.managed`).
+    nixosModules.managed = {
+      imports = [self.nixosModules.guest];
+      pocketnix.guest = {
+        enable = true;
+        managed.enable = true;
+      };
+    };
+
+    # A managed guest's system, as its own flake (nix/managed/flake.nix) builds it:
+    # `selections` is the app's pocketnix.json.
+    lib.managedSystem = {
+      selections,
+      modules ? [],
+    }:
+      nixpkgs.lib.nixosSystem {
+        modules =
+          [
+            self.nixosModules.managed
+            {
+              nixpkgs.hostPlatform = "aarch64-linux";
+              pocketnix.guest.managed.selections = selections;
+            }
+          ]
+          ++ modules;
+      };
     # For the desktop the guests update from (`pocketnix.guest.updates.buildHost`).
     nixosModules.buildHost = ./nix/build-host.nix;
 
@@ -110,6 +138,11 @@
         the host in `configuration.nix`, then follow docs/getting-started.md
         at https://github.com/nickolaj-jepsen/pocketnix.
       '';
+    };
+
+    nixosConfigurations.base = self.lib.managedSystem {
+      selections = {};
+      modules = [./nix/managed/configuration.nix];
     };
 
     nixosConfigurations.example = nixpkgs.lib.nixosSystem {
@@ -133,6 +166,12 @@
           diff -u ${./docs/options.md} ${own.options-doc} || { echo "docs/options.md is stale: nix run .#options-doc" >&2; exit 1; }
           touch $out
         '';
+        # Evaluates a managed guest's seed flake against this checkout, the way
+        # the app configures one: its drv path.
+        managed = let
+          outputs = (import ./nix/managed/flake.nix).outputs {pocketnix = self;};
+        in
+          pkgs.writeText "pocketnix-managed" (builtins.unsafeDiscardStringContext outputs.nixosConfigurations.pocketnix.config.system.build.toplevel.drvPath);
         # Evaluates the template against this checkout without building it: its systems' drv paths.
         template = let
           template = (import ./templates/default/flake.nix).outputs {

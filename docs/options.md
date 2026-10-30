@@ -719,6 +719,184 @@ true
 
 
 
+## pocketnix\.guest\.managed\.enable
+
+
+
+Whether to enable a guest the phone manages: its system is the flake at ` managed.flake `,
+configured from the app and rebuilt on the phone\. ` nixosModules.managed `
+turns it on\.
+
+
+
+*Type:*
+boolean
+
+
+
+*Default:*
+
+```nix
+false
+```
+
+
+
+*Example:*
+
+```nix
+true
+```
+
+
+
+## pocketnix\.guest\.managed\.cpuQuota
+
+
+
+CPU that evaluating and building the guest’s system may use (systemd’s ` CPUQuota= `, 100% per core): the guest’s vCPUs are the phone’s\.
+
+
+
+*Type:*
+string matching the pattern \[0-9]+%
+
+
+
+*Default:*
+
+```nix
+"200%"
+```
+
+
+
+## pocketnix\.guest\.managed\.flake
+
+
+
+The guest’s own flake, whose ` nixosConfigurations.<hostName> ` the agent rebuilds; seeded on first boot when it has no flake\.nix\.
+
+
+
+*Type:*
+string
+
+
+
+*Default:*
+
+```nix
+"/etc/nixos"
+```
+
+
+
+## pocketnix\.guest\.managed\.selections\.services\.gui
+
+
+
+The app’s gui switch\.
+
+
+
+*Type:*
+boolean
+
+
+
+*Default:*
+
+```nix
+false
+```
+
+
+
+## pocketnix\.guest\.managed\.selections\.services\.podman
+
+
+
+The app’s podman switch\.
+
+
+
+*Type:*
+boolean
+
+
+
+*Default:*
+
+```nix
+false
+```
+
+
+
+## pocketnix\.guest\.managed\.selections\.services\.ssh
+
+
+
+The app’s ssh switch\.
+
+
+
+*Type:*
+boolean
+
+
+
+*Default:*
+
+```nix
+false
+```
+
+
+
+## pocketnix\.guest\.managed\.selections\.services\.tailscale
+
+
+
+The app’s tailscale switch\.
+
+
+
+*Type:*
+boolean
+
+
+
+*Default:*
+
+```nix
+false
+```
+
+
+
+## pocketnix\.guest\.managed\.selections\.user
+
+
+
+The user the app set up; empty runs tabs as root until it has\.
+
+
+
+*Type:*
+string matching the pattern |\[a-z_]\[a-z0-9_-]{0,31}
+
+
+
+*Default:*
+
+```nix
+""
+```
+
+
+
 ## pocketnix\.guest\.power\.wakeLocks\.enable
 
 
@@ -1374,6 +1552,37 @@ null or string matching the pattern 0|((\[0-9]+(\\\.\[0-9]\*)?|\\\.\[0-9]+)(ns|u
 
 ```nix
 "30m"
+```
+
+
+
+## pocketnix\.guest\.updates\.keepGenerations
+
+
+
+How many system generations to keep besides the running and the
+booted one\. After each boot and each switch the agent deletes the
+rest and collects the store’s garbage; null keeps every generation\.
+
+
+
+*Type:*
+null or (unsigned integer, meaning >=0)
+
+
+
+*Default:*
+
+```nix
+0
+```
+
+
+
+*Example:*
+
+```nix
+2
 ```
 
 

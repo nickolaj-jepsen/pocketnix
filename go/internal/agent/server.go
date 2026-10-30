@@ -329,9 +329,22 @@ func (s *Server) request(req protocol.Request) (any, error) {
 	case protocol.TypeUpdates:
 		return s.Updates.State(), nil
 	case protocol.TypeUpdateCheck:
-		return ack, s.Updates.Check()
+		return ack, s.Updates.Check(Options{Pin: req.Pin})
 	case protocol.TypeUpdateApply:
-		return ack, s.Updates.Apply()
+		return ack, s.Updates.Apply(Options{Pin: req.Pin, AllowBuilds: req.AllowBuilds})
+	case protocol.TypeSelections:
+		if req.Selections != nil {
+			if _, err := s.Updates.WriteSelections(*req.Selections); err != nil {
+				return nil, err
+			}
+		}
+		return s.Updates.ReadSelections()
+	case protocol.TypePackageAdd:
+		return ack, s.Updates.AddPackages(req.Packages, req.AllowBuilds)
+	case protocol.TypePackageRemove:
+		return ack, s.Updates.RemovePackages(req.Packages)
+	case protocol.TypeRun:
+		return ack, s.Updates.Run(req.Package, req.AllowBuilds)
 	case protocol.TypeUpdateCancel:
 		return ack, s.Updates.Cancel()
 	case protocol.TypeSwitchGeneration:
