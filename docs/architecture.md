@@ -127,6 +127,8 @@ ref. With no app connected, a request fails instead of queueing.
 
 - Agent endpoints never leave the app process. Port forwards bind `127.0.0.1`
   unless a forward sets `lan = true`.
+- Forward offers come only from the session user's listeners, and an allowed
+  one binds `127.0.0.1` unless `forwardOffers.lan` is set.
 - The provision provider admits only the adb shell user.
 - Paths the root agent opens for the user (history, the share directory, the
   file provider root) go through an `os.Root`: no path or symlink leaves them.

@@ -74,6 +74,11 @@ pocketnix.guest.forwards = {
 - Forwards share the phone's ports with every other app. One that can't
   listen shows in the app and is retried.
 - A UDP forward keeps one stream per phone-side client, dropped once idle.
+- A server you start in the guest, say `npm run dev`, is offered as a
+  forward without editing the flake: the app asks in a notification
+  (`pocketnix.guest.forwardOffers`). Only `pocketnix.guest.user`'s
+  listeners are offered, and an allowed one is forgotten when the guest
+  reboots. A server on `::1` alone is reached too.
 
 ## Android integration
 
