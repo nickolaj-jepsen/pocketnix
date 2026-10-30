@@ -40,6 +40,16 @@ type File struct {
 	// GUISocket is the compositor's GUI socket: absolute, or relative to the
 	// session user's runtime directory; empty is "pocketnix-gui.sock".
 	GUISocket string `json:"guiSocket,omitempty"`
+	// ForwardOffers is absent, and so off, in a config the module didn't write.
+	ForwardOffers ForwardOffersConfig `json:"forwardOffers"`
+}
+
+// ForwardOffersConfig pushes the session user's TCP listeners to the app
+// ([protocol.PortListeners]), which offers to forward them.
+type ForwardOffersConfig struct {
+	Enable bool `json:"enable"`
+	// LAN has the app bind an allowed forward on 0.0.0.0, not 127.0.0.1.
+	LAN bool `json:"lan"`
 }
 
 // PowerConfig is how the guest keeps the phone awake.

@@ -54,6 +54,14 @@ type Server struct {
 	host      hostTracker
 	wakes     wakeTracker
 	hostfs    hostFolders
+
+	// PortPoll is how often the port watcher polls /proc without hints;
+	// zero is PortPollInterval.
+	PortPoll time.Duration
+	// ProcNet holds the tcp and tcp6 tables the port watcher reads; empty
+	// is /proc/net.
+	ProcNet string
+	ports   portWatch
 }
 
 // New loads the config file at path.
@@ -66,6 +74,7 @@ func New(path string) (*Server, error) {
 	s.Updates.Configure(cfg.Updates)
 	s.Updates.Changed = func() { s.pushLatest(func() any { return s.Updates.State() }) }
 	s.Updates.Offline = s.knownOffline
+	s.portsConfigured()
 	return s, nil
 }
 
@@ -82,6 +91,7 @@ func (s *Server) Reload() error {
 	s.pushLatest(func() any { return configMessage(s.config()) })
 	s.Updates.Configure(cfg.Updates)
 	s.wakeChanged()
+	s.portsConfigured()
 	return nil
 }
 
@@ -92,7 +102,7 @@ func (s *Server) push(msg any) {
 
 // pushLatest sends msg() to every control stream, called with the stream's
 // writer held: a stream that just opened has its snapshot out first, and
-// what follows it is never older.
+// what follows it is never older. A nil msg() sends nothing.
 func (s *Server) pushLatest(msg func() any) {
 	s.mu.Lock()
 	controls := make([]*lockedWriter, 0, len(s.controls))
@@ -102,7 +112,10 @@ func (s *Server) pushLatest(msg func() any) {
 	s.mu.Unlock()
 	for _, w := range controls {
 		w.mu.Lock()
-		err := protocol.WriteJSON(unlocked{w}, msg())
+		var err error
+		if m := msg(); m != nil {
+			err = protocol.WriteJSON(unlocked{w}, m)
+		}
 		w.mu.Unlock()
 		if err != nil {
 			log.Printf("push: %v", err)
@@ -125,8 +138,13 @@ func configMessage(f *File) protocol.Config {
 	return c
 }
 
-// Serve accepts connections on l until it fails.
+// Serve accepts connections on l until it fails. A TCP l's port is never
+// offered for forwarding.
 func (s *Server) Serve(l net.Listener) error {
+	if a, ok := l.Addr().(*net.TCPAddr); ok {
+		s.ownPort(a.Port, 1)
+		defer s.ownPort(a.Port, -1)
+	}
 	for {
 		c, err := l.Accept()
 		if err != nil {
@@ -254,6 +272,9 @@ func (s *Server) serveControl(c net.Conn) {
 	}
 	if err == nil {
 		err = protocol.WriteJSON(unlocked{w}, s.wake())
+	}
+	if p, ok := s.portSnapshot(); ok && err == nil {
+		err = protocol.WriteJSON(unlocked{w}, p)
 	}
 	w.mu.Unlock()
 	if err != nil {

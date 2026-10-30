@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/agent"
+	"github.com/nickolaj-jepsen/pocketnix/go/internal/portwatch"
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/protocol"
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/transport"
 )
@@ -34,6 +36,18 @@ func main() {
 	stateDir := flag.String("state-dir", "", "directory for state that must outlive a crash (unfinished file-provider writes); empty keeps none")
 	guestSocket := flag.String("guest-socket", "", "unix socket for guest programs (pocketnix-guest), e.g. "+protocol.GuestSocket+"; empty serves none")
 	hostState := flag.String("host-state", "", "file to keep the phone's state in as JSON, which also drives the NixOS module's pocketnix-*.target units; empty does neither")
+	// Hidden from -h: tests force the port watcher's /proc poller with it.
+	pollPorts := flag.Bool("poll-ports", false, "")
+	flag.Usage = func() {
+		visible := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+		visible.SetOutput(flag.CommandLine.Output())
+		flag.VisitAll(func(f *flag.Flag) {
+			if f.Name != "poll-ports" {
+				visible.Var(f.Value, f.Name, f.Usage)
+			}
+		})
+		visible.Usage()
+	}
 	flag.Parse()
 	if len(listen) == 0 {
 		listen = listFlag{"vsock:" + strconv.Itoa(protocol.ControlPort)}
@@ -69,6 +83,11 @@ func main() {
 
 	go srv.Updates.Periodic(context.Background())
 	go srv.WatchInhibitors(context.Background())
+	if *pollPorts {
+		srv.WatchPorts(nil)
+	} else {
+		srv.WatchPorts(loadEBPF)
+	}
 	if *guestSocket != "" {
 		l, err := agent.ListenGuest(*guestSocket)
 		if err != nil {
@@ -104,3 +123,21 @@ type systemdPower struct{}
 
 func (systemdPower) Poweroff() error { return exec.Command("systemctl", "poweroff").Start() }
 func (systemdPower) Reboot() error   { return exec.Command("systemctl", "reboot").Start() }
+
+// ebpfHints are the kernel's TCP sockets entering or leaving LISTEN.
+type ebpfHints struct{ *portwatch.EBPF }
+
+func loadEBPF() (agent.PortHints, error) {
+	w, err := portwatch.LoadEBPF()
+	if err != nil {
+		return nil, fmt.Errorf("eBPF: %w", err)
+	}
+	return ebpfHints{w}, nil
+}
+
+func (h ebpfHints) Wait() error {
+	_, err := h.Read()
+	return err
+}
+
+func (ebpfHints) String() string { return "eBPF on the inet_sock_set_state raw tracepoint" }
