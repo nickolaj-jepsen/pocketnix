@@ -335,6 +335,8 @@ func (s *Server) request(req protocol.Request) (any, error) {
 		return ack, s.guestDone(req)
 	case protocol.TypeHostFolders:
 		return ack, s.applyHostFolders(req.Folders)
+	case protocol.TypeResolvePath:
+		return s.resolvePath(req.Path)
 	default:
 		// Answered, so a newer app's later requests still pair with their replies.
 		return nil, fmt.Errorf("unknown request %q", req.Type)

@@ -111,6 +111,9 @@ type Request struct {
 
 	// Folders is a host-folders request's.
 	Folders []HostFolder `json:"folders,omitempty"`
+
+	// Path is a resolve-path request's.
+	Path string `json:"path,omitempty"`
 }
 
 // Envelope is the part of every JSON message a receiver reads first.
