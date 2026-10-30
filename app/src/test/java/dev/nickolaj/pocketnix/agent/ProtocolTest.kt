@@ -153,4 +153,12 @@ class ProtocolTest {
             "not json"
         ).forEach { assertNull(it, PortListeners.parse(it)) }
     }
+
+    @Test
+    fun portListenersKeepTheLowestWithinTheCap() {
+        val line = """{"type":"port-listeners","lan":false,"ports":[${(2000 downTo 1001).joinToString(",")}]}"""
+        val ports = PortListeners.parse(line)!!.ports
+        assertEquals(PortListeners.MAX_PORTS, ports.size)
+        assertEquals(1001, ports.first())
+    }
 }

@@ -210,11 +210,14 @@ data class Updates(
 data class PortListeners(
     /** Allowed forwards bind 0.0.0.0, not 127.0.0.1. */
     val lan: Boolean,
-    /** Guest ports, ascending. */
+    /** Guest ports, ascending, at most [MAX_PORTS]. */
     val ports: List<Int>
 ) {
     companion object {
         const val TYPE = "port-listeners"
+
+        /** Each port is a notification and a bind probe; go/internal/protocol's MaxPortListeners is the agent's side. */
+        const val MAX_PORTS = 32
 
         /** Null for anything but a well-formed port-listeners message; never throws. */
         fun parse(line: String): PortListeners? = runCatching { JSONObject(line) }.getOrNull()?.let(::parse)
@@ -225,7 +228,7 @@ data class PortListeners(
             val ports = (0 until a.length()).map { i ->
                 (a.opt(i) as? Int)?.takeIf { it in 1..65535 } ?: return null
             }
-            return PortListeners(o.optBoolean("lan"), ports.sorted().distinct())
+            return PortListeners(o.optBoolean("lan"), ports.sorted().distinct().take(MAX_PORTS))
         }
     }
 }
