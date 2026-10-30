@@ -12,8 +12,8 @@ data class ClipSnapshot(val text: String, val types: List<String>, val timestamp
 
 /**
  * What the guest has of the clipboard, which decides whether Android's
- * clipboard, seen on focus, is news to it. Each transition replaces the whole
- * state, so it's safe to apply from any thread.
+ * clipboard, seen on focus, is news to it. Immutable: each transition
+ * returns a whole new state.
  */
 data class ClipboardSync(private val sent: ClipSnapshot? = null, private val guestText: String? = null) {
     /**

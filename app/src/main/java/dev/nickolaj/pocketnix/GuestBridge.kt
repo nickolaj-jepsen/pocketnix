@@ -33,6 +33,8 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
 
     /** What the guest has of the clipboard, so a clip isn't sent twice or handed straight back. */
     @Volatile var clipSync = ClipboardSync()
+        private set
+    private val clipLock = Any()
 
     init {
         manager.createNotificationChannel(
@@ -70,7 +72,15 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
     fun setGuestClip(clip: ClipData, sensitive: Boolean, text: String?) {
         if (sensitive) clip.description.extras = PersistableBundle().apply { putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true) }
         clipboard.setPrimaryClip(clip)
-        clipSync = clipSync.guestCopied(text)
+        synchronized(clipLock) { clipSync = clipSync.guestCopied(text) }
+    }
+
+    /**
+     * Records that the guest has [clip], sent when the state was [before];
+     * a guest copy that landed meanwhile wins.
+     */
+    fun clipSent(before: ClipboardSync, clip: ClipSnapshot) = synchronized(clipLock) {
+        if (clipSync === before) clipSync = before.sent(clip)
     }
 
     private fun open(msg: JSONObject, appVisible: Boolean) {

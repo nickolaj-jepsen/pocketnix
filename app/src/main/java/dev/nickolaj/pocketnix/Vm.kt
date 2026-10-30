@@ -360,11 +360,12 @@ class Vm(private val app: Context) {
         // An image's "text" is its URI.
         val text = if (types.any { it.startsWith("text/") }) clip.getItemAt(0).coerceToText(app)?.toString().orEmpty() else ""
         val snapshot = ClipSnapshot(text, types, desc.timestamp)
-        if (!bridge.clipSync.isNew(snapshot)) return
+        val before = bridge.clipSync
+        if (!before.isNew(snapshot)) return
         if (control.link.value !is ControlChannel.Link.Up) return
         scope.launch {
             val req = JSONObject().put("type", "set-clipboard").put("text", text).put("types", JSONArray(types))
-            if (runCatching { control.call(req) }.isSuccess) bridge.clipSync = bridge.clipSync.sent(snapshot)
+            if (runCatching { control.call(req) }.isSuccess) bridge.clipSent(before, snapshot)
         }
     }
 
