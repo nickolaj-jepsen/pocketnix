@@ -252,6 +252,48 @@ in
           phone.succeed(user("systemd-run --user --unit=foot foot"))
           phone.wait_for_unit("pocketnix-compositor.service", "nixos")
 
+      with subtest("Wayland apps share the clipboard with Android"):
+          def wl(cmd):
+              return user(f"env WAYLAND_DISPLAY=wayland-0 {cmd}")
+
+          def events(kind):
+              return [e for e in map(json.loads, phone.succeed("cat /tmp/events").splitlines()) if e["type"] == kind]
+
+          def clips_are(*texts):
+              retry(lambda _: [e["text"] for e in events("guest-clipboard")] == list(texts), timeout_seconds=60)
+
+          # The compositor brings the bridge up with it.
+          phone.wait_for_unit("pocketnix-clipboard.service", "nixos")
+          phone.succeed(f"systemd-run --unit=events sh -c '{A} events > /tmp/events'")
+          # Refused until the events stream is connected.
+          phone.wait_until_succeeds(user("pocketnix-guest notify clipboard"), timeout=30)
+          phone.succeed(wl("wl-copy from-wayland"))
+          clips_are("from-wayland")
+          phone.succeed(f"{A} set-clipboard from-android")
+          phone.wait_until_succeeds(wl("wl-paste -n") + " | grep -qx from-android", timeout=30)
+          # from-android coming back would show before third.
+          phone.succeed(wl("wl-copy third"))
+          clips_are("from-wayland", "third")
+          phone.succeed(wl("wl-copy --sensitive secret"))
+          clips_are("from-wayland", "third", "secret")
+          assert events("guest-clipboard")[-1].get("sensitive") is True, events("guest-clipboard")
+
+          phone.succeed("head -c 100000 /dev/urandom >/tmp/wayland.png")
+          phone.succeed(wl("wl-copy --type image/png </tmp/wayland.png"))
+          retry(lambda _: bool(events("guest-clipboard-data")), timeout_seconds=60)
+          e = events("guest-clipboard-data")[-1]
+          assert e["mime"] == "image/png", e
+          phone.succeed(f"{A} save-answer {e['ref']} /tmp/from-wayland.png")
+          phone.succeed("cmp /tmp/wayland.png /tmp/from-wayland.png")
+
+          phone.succeed("head -c 100000 /dev/urandom >/tmp/android.png")
+          phone.succeed(f"{A} set-clipboard --type image/png \"\"")
+          retry(lambda _: bool(events("clipboard-request")), timeout_seconds=60)
+          e = events("clipboard-request")[-1]
+          assert e["mime"] == "image/png", e
+          phone.succeed(f"{A} paste-answer {e['ref']} /tmp/android.png")
+          phone.wait_until_succeeds(wl("wl-paste --type image/png") + " | cmp - /tmp/android.png", timeout=30)
+
       with subtest("the user's apps get sound, SVG images and the FileChooser portal"):
           # The user has no seat session: PipeWire finds the card only through the audio group.
           phone.wait_until_succeeds(user("wpctl inspect @DEFAULT_AUDIO_SINK@"), timeout=60)

@@ -630,8 +630,9 @@ in {
         as a socket-activated user service with `WAYLAND_DISPLAY` set for the
         user's session, and by default PipeWire (the user in `audio`),
         xdg-desktop-portal (and with it the FileChooser integration) without
-        its location and wallpaper portals, an icon theme read by librsvg and
-        a basic font set;
+        its location and wallpaper portals, an icon theme read by librsvg, a
+        basic font set, and wl-clipboard with the Wayland clipboard bridged to
+        Android's while the compositor runs;
         CJK fonts need `fonts.enableDefaultPackages` or your own
       '';
       package = mkOption {
@@ -968,6 +969,22 @@ in {
           Sockets = ["pocketnix-gui.socket" "pocketnix-wayland.socket"];
         };
       };
+      # Started with the compositor: wanted by default.target, dialing the
+      # Wayland socket would start the compositor at every boot.
+      systemd.user.services.pocketnix-clipboard = {
+        description = "pocketnix clipboard between Wayland apps and Android";
+        wantedBy = ["pocketnix-compositor.service"];
+        bindsTo = ["pocketnix-compositor.service"];
+        partOf = ["pocketnix-compositor.service"];
+        after = ["pocketnix-compositor.service"];
+        path = [pkgs.wl-clipboard];
+        environment.WAYLAND_DISPLAY = waylandDisplay;
+        serviceConfig = {
+          ExecStart = "${guestExe} clipboard";
+          Restart = "on-failure";
+          RestartSec = 1;
+        };
+      };
       # pam_env puts them in the user manager's environment too, and so in
       # user services and D-Bus-activated apps; tabs' login shells read them
       # from /etc/profile.
@@ -1028,8 +1045,9 @@ in {
       # GTK's own loaders can't read SVG, so most icons would draw blank.
       programs.gdk-pixbuf.modulePackages = [pkgs.librsvg];
       # GTK's stock icons, image-missing too, come from a theme, which NixOS
-      # installs (with its cache) only for a desktop.
-      environment.systemPackages = [pkgs.adwaita-icon-theme];
+      # installs (with its cache) only for a desktop. wl-copy and wl-paste
+      # reach the clipboard the bridge shares with Android.
+      environment.systemPackages = [pkgs.adwaita-icon-theme pkgs.wl-clipboard];
       gtk.iconCache.enable = mkDefault true;
       # enableDefaultPackages adds CJK, unifont and freefont (~145 MiB) to this.
       fonts.packages = [pkgs.dejavu_fonts pkgs.liberation_ttf pkgs.noto-fonts-color-emoji];

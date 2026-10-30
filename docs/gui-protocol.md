@@ -901,7 +901,7 @@ message.
 - POINTER_RELATIVE `0x24`, for relative-pointer and pointer
   constraints with Android's pointer capture.
 
-No clipboard: the compositor offers data-control, for a guest-side bridge to the clipboard integration.
+No clipboard: the compositor offers data-control, through which `pocketnix-guest clipboard` bridges Wayland's selection to the clipboard integration.
 
 ## Contract
 

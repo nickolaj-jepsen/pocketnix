@@ -84,6 +84,7 @@ sway, labwc or Plasma can run nested as an ordinary client, in one window.
 - Sound plays through AVF's virtio-snd only in debug builds, turned on from
   a scripted start (see [Development](development.md)).
 - No X11 apps yet.
-- No clipboard bridge between Wayland apps and Android yet; `pocketnix-guest
-  copy` and `paste` work from a terminal.
+- The clipboard crosses between Wayland apps and Android one MIME type per
+  copy, and only the regular selection, not the primary one. Android hands
+  its clipboard over only when a pocketnix window gains focus.
 - External displays and docked use get no special handling yet.

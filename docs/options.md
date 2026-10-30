@@ -375,8 +375,9 @@ Whether to enable the guest’s Wayland apps as Android windows: the pocketnix c
 as a socket-activated user service with ` WAYLAND_DISPLAY ` set for the
 user’s session, and by default PipeWire (the user in ` audio `),
 xdg-desktop-portal (and with it the FileChooser integration) without
-its location and wallpaper portals, an icon theme read by librsvg and
-a basic font set;
+its location and wallpaper portals, an icon theme read by librsvg, a
+basic font set, and wl-clipboard with the Wayland clipboard bridged to
+Android’s while the compositor runs;
 CJK fonts need ` fonts.enableDefaultPackages ` or your own
 \.
 
