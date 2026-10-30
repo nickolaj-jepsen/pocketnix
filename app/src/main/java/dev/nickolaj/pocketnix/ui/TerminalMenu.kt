@@ -18,6 +18,14 @@ const val SHARE_SELECTION = "Share selection"
 const val SHARE_TRANSCRIPT = "Share transcript"
 const val RESET_TERMINAL = "Reset terminal"
 
+// Guest output is untrusted: these bound the main-thread work and the menu a tab's text can cause.
+// A longer plain URL isn't offered (browsers stop near this length too).
+private const val MAX_URL_CHARS = 2048
+
+// Open link… shows only the newest this many, each label shortened to this.
+const val MAX_LINKS = 50
+const val MAX_LINK_LABEL = 80
+
 /** What a tap on the terminal does. */
 sealed interface TapAction {
     data class Open(val url: String) : TapAction
@@ -50,7 +58,8 @@ sealed interface LinkTarget {
 fun classifyLink(url: String, hostname: String?): LinkTarget {
     val uri = runCatching { URI(url) }.getOrNull() ?: return LinkTarget.Refused("")
     return when (val scheme = uri.scheme?.lowercase().orEmpty()) {
-        "http", "https" -> if (uri.isOpaque) LinkTarget.Refused(scheme) else LinkTarget.Web(url)
+        // Android matches schemes case-sensitively, so the launched URL carries the lowercased one.
+        "http", "https" -> if (uri.isOpaque) LinkTarget.Refused(scheme) else LinkTarget.Web(scheme + url.substring(scheme.length))
 
         "file" -> {
             // The authority, not the host: java.net.URI leaves host null for names it can't parse (an underscore).
@@ -98,7 +107,8 @@ class BufferRow(val text: String, val wraps: Boolean)
 data class LinkAt(val url: String, val row: Int, val col: Int)
 
 // Up to a character URLs never hold unescaped (RFC 3986), such as the backslash of a printf escape.
-private val URL = Regex("""(?:https?|file)://[^\s<>"'`{}|\\^]+""")
+// One more than MAX_URL_CHARS, so a longer run is seen and dropped rather than cut.
+private val URL = Regex("""(?:https?|file)://[^\s<>"'`{}|\\^]{1,${MAX_URL_CHARS + 1}}""")
 
 /** The plain-text URLs in [rows], the buffer's rows from [firstRow] on, with wrapped rows read as one line. */
 fun plainLinks(rows: List<BufferRow>, firstRow: Int): List<LinkAt> {
@@ -116,31 +126,39 @@ fun plainLinks(rows: List<BufferRow>, firstRow: Int): List<LinkAt> {
         }
         i++
         for (m in URL.findAll(line)) {
+            if (m.value.length > MAX_URL_CHARS) continue
             val url = trimUrl(m.value)
             if (url.endsWith("//")) continue
-            val k = offsets.indexOfLast { it <= m.range.first }
+            // The row the match starts in: the last whose offset is at or before it.
+            val k = offsets.binarySearch(m.range.first).let { if (it >= 0) it else -it - 2 }
             out += LinkAt(url, firstRow + start + k, m.range.first - offsets[k])
         }
     }
     return out
 }
 
-// Prose punctuation after a URL, and a closing bracket the URL didn't open.
+// Prose punctuation after a URL, and a closing bracket it didn't open; one pass, as guest output picks the length.
 private fun trimUrl(s: String): String {
-    var u = s
-    while (u.isNotEmpty()) {
-        val c = u.last()
-        val strip = c in ".,;:!?" ||
-            (c == ')' && u.count { it == '(' } < u.count { it == ')' }) ||
-            (c == ']' && u.count { it == '[' } < u.count { it == ']' })
-        if (!strip) break
-        u = u.dropLast(1)
+    var parens = s.count { it == '(' } - s.count { it == ')' }
+    var brackets = s.count { it == '[' } - s.count { it == ']' }
+    var end = s.length
+    while (end > 0) {
+        when (s[end - 1]) {
+            '.', ',', ';', ':', '!', '?' -> {}
+            ')' -> if (parens < 0) parens++ else break
+            ']' -> if (brackets < 0) brackets++ else break
+            else -> break
+        }
+        end--
     }
-    return u
+    return s.substring(0, end)
 }
 
-/** The Open link… list: [links] newest (furthest down) first, each URL once. */
-fun linkList(links: List<LinkAt>): List<String> = links.sortedWith(compareByDescending<LinkAt> { it.row }.thenByDescending { it.col }).map { it.url }.distinct()
+/** The Open link… list: [links] newest (furthest down) first, each URL once, at most [MAX_LINKS]. */
+fun linkList(links: List<LinkAt>): List<String> = links.sortedWith(compareByDescending<LinkAt> { it.row }.thenByDescending { it.col }).map { it.url }.distinct().take(MAX_LINKS)
+
+/** [url] shortened in the middle to [MAX_LINK_LABEL] characters, for a menu entry. */
+fun linkLabel(url: String): String = if (url.length <= MAX_LINK_LABEL) url else url.take(MAX_LINK_LABEL / 2) + "…" + url.takeLast(MAX_LINK_LABEL - MAX_LINK_LABEL / 2 - 1)
 
 /**
  * The terminal's context menu: [links] as Open link…'s page, and sharing the
@@ -155,7 +173,7 @@ fun terminalMenu(
     shareTranscript: () -> Unit,
     reset: () -> Unit
 ): List<MenuAction> = listOf(
-    MenuAction(OPEN_LINK, enabled = links.isNotEmpty(), children = links.map { url -> MenuAction(url) { guard("opening $url") { open(url) } } }),
+    MenuAction(OPEN_LINK, enabled = links.isNotEmpty(), children = links.map { url -> MenuAction(linkLabel(url)) { guard("opening $url") { open(url) } } }),
     MenuAction(SHARE_SELECTION, enabled = !selection.isNullOrEmpty()) { guard("sharing the selection") { selection?.let(share) } },
     MenuAction(SHARE_TRANSCRIPT) { guard("sharing the transcript") { shareTranscript() } },
     MenuAction(RESET_TERMINAL) { guard("resetting the terminal") { reset() } }
@@ -195,16 +213,20 @@ class TerminalActions(
         }
     }
 
-    /** [tab]'s Open link… list; inside a full-screen program, its screen's links come first. */
-    fun links(tab: Tab): List<String> {
-        val emulator = tab.session.emulator ?: return emptyList()
+    /**
+     * [tab]'s Open link… list; inside a full-screen program, its screen's
+     * links come first. Empty when reading the emulator fails: the menu is
+     * built during composition, where a throw would kill the app and the VM.
+     */
+    fun links(tab: Tab): List<String> = guard("listing links", emptyList()) {
+        val emulator = tab.session.emulator ?: return@guard emptyList()
         val main = emulator.mainBuffer
         val buffers = if (emulator.screen !== main) listOf(emulator.screen, main) else listOf(main)
-        return buffers.flatMap { b ->
+        buffers.flatMap { b ->
             val first = -b.activeTranscriptRows
             val rows = (first until emulator.rows).map { r -> BufferRow(b.getSelectedText(0, r, emulator.columns, r, false), b.getLineWrap(r)) }
             linkList(plainLinks(rows, first) + b.hyperlinks.map { LinkAt(it.url, it.row, it.col) })
-        }.distinct()
+        }.distinct().take(MAX_LINKS)
     }
 
     /** [tab]'s context menu, with the [selection] More… stored. */

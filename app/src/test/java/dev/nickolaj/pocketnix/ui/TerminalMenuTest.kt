@@ -82,4 +82,30 @@ class TerminalMenuTest {
             linkList(plainLinks(rows, firstRow = -4) + hyperlinks)
         )
     }
+
+    @Test
+    fun aWebLinkLaunchesWithItsSchemeLowercased() {
+        assertEquals(LinkTarget.Web("https://x.example/Path"), classifyLink("HTTPS://x.example/Path", "box"))
+    }
+
+    @Test(timeout = 2_000)
+    fun aRunawayUrlIsDroppedQuickly() {
+        val rows = listOf(BufferRow("http://a" + ")".repeat(300_000), wraps = false), BufferRow("https://ok.example)", wraps = false))
+        assertEquals(listOf("https://ok.example"), plainLinks(rows, firstRow = 0).map { it.url })
+    }
+
+    @Test
+    fun openLinkKeepsTheNewestAndShortensLongLabels() {
+        val links = (1..60).map { LinkAt("https://x.example/$it", row = it, col = 0) }
+        val list = linkList(links)
+        assertEquals(MAX_LINKS, list.size)
+        assertEquals("https://x.example/60", list.first())
+
+        val long = "https://x.example/" + "a".repeat(300)
+        val opened = mutableListOf<String>()
+        val entry = menu(links = listOf(long), opened = opened).entry("Open link…").children.single()
+        assertEquals(true, entry.label.length <= MAX_LINK_LABEL)
+        entry.run()
+        assertEquals(listOf(long), opened)
+    }
 }

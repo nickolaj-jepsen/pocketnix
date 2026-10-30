@@ -33,10 +33,10 @@ attached (`adb devices`). `pocketnix control -h` lists the commands.
 | `tab [--profile <name>] [--timeout <dur>] [<text>]` | Waits for the agent, opens a terminal tab, types `<text>` and Enter, and prints the new tab's id. |
 | `type --tab <id> <text>` | Types `<text>` and Enter into an open tab. |
 | `wait --tab <id> [--timeout <dur>] [--lines <n>] <regexp>` | Polls the tab until one of its transcript lines matches, then prints the tab's dump. Exits 1 with the last dump if nothing matches in time. |
-| `menu --tab <id> [<label>…]` | Lists the tab's context menu (the one More… and a right-click open, with no selection) as `<label><TAB><enabled\|disabled>` lines, or the page a path of labels leads to (`menu --tab 1 "Open link…"`). A path ending at an action runs it: `menu --tab 1 "Open link…" https://example.org`, `menu --tab 1 "Reset terminal"`. |
+| `menu --tab <id> [<label>…]` | Lists the tab's context menu (the one More… and a right-click open, with no selection) as `<label><TAB><enabled\|disabled>` lines, or the page a path of labels leads to (`menu --tab 1 "Open link…"`). A path ending at an action runs it: `menu --tab 1 "Open link…" https://example.org`, `menu --tab 1 "Reset terminal"`. Open link…'s entries are labelled as shown, so a long URL's label is shortened in the middle. |
 | `menu --chip <id> [<label>…]` | The same for the tab's long-press menu: `menu --chip 2 "New tab"`. Rename… opens a dialog, so it answers an error here: use `rename`. |
 | `menu --main [<label>…]` | The same for the ⋮ menu: `menu --main "Reopen ended tabs"`. Entries that open a dialog or ask first answer an error. |
-| `links --tab <id>` | Prints the tab's Open link… list, one URL per line, newest first. |
+| `links --tab <id>` | Prints the tab's Open link… list, one full URL per line, newest first. |
 | `rename --tab <id> <title>` | Gives a terminal tab its own title, which `dump` and the notifications show; `""` goes back to the shell's title. |
 | `reopen --tab <id>` | Starts an ended terminal tab again in a new session, keeping its id, place and title; the old transcript is gone. |
 | `logcat [--follow]` | Prints the log (main, system and crash buffers) of every process running as the app's uid, so it keeps lines from before a crash or restart. `--follow` streams it. Works on release builds too (`--package`). |
