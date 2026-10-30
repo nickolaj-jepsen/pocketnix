@@ -991,8 +991,8 @@ in {
           Sockets = ["pocketnix-gui.socket" "pocketnix-wayland.socket"];
         };
       };
-      # Started with the compositor: wanted by default.target, dialing the
-      # Wayland socket would start the compositor at every boot.
+      # Started with the compositor, not by default.target: dialing the Wayland
+      # socket would socket-activate the compositor at every boot.
       systemd.user.services.pocketnix-clipboard = {
         description = "pocketnix clipboard between Wayland apps and Android";
         wantedBy = ["pocketnix-compositor.service"];
