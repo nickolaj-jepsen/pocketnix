@@ -20,7 +20,7 @@ const val RESET_TERMINAL = "Reset terminal"
 
 // Guest output is untrusted: these bound the main-thread work and the menu a tab's text can cause.
 // A longer plain URL isn't offered (browsers stop near this length too).
-private const val MAX_URL_CHARS = 2048
+const val MAX_URL_CHARS = 2048
 
 // Open link… shows only the newest this many, each label shortened to this.
 const val MAX_LINKS = 50
@@ -107,8 +107,8 @@ class BufferRow(val text: String, val wraps: Boolean)
 data class LinkAt(val url: String, val row: Int, val col: Int)
 
 // Up to a character URLs never hold unescaped (RFC 3986), such as the backslash of a printf escape.
-// One more than MAX_URL_CHARS, so a longer run is seen and dropped rather than cut.
-private val URL = Regex("""(?:https?|file)://[^\s<>"'`{}|\\^]{1,${MAX_URL_CHARS + 1}}""")
+// Unbounded, so a run longer than MAX_URL_CHARS is dropped whole, not offered from its middle.
+private val URL = Regex("""(?:https?|file)://[^\s<>"'`{}|\\^]+""")
 
 /** The plain-text URLs in [rows], the buffer's rows from [firstRow] on, with wrapped rows read as one line. */
 fun plainLinks(rows: List<BufferRow>, firstRow: Int): List<LinkAt> {
@@ -154,8 +154,12 @@ private fun trimUrl(s: String): String {
     return s.substring(0, end)
 }
 
-/** The Open link… list: [links] newest (furthest down) first, each URL once, at most [MAX_LINKS]. */
-fun linkList(links: List<LinkAt>): List<String> = links.sortedWith(compareByDescending<LinkAt> { it.row }.thenByDescending { it.col }).map { it.url }.distinct().take(MAX_LINKS)
+/**
+ * The Open link… list: [links] newest (furthest down) first, each URL once,
+ * at most [MAX_LINKS], leaving out any longer than [MAX_URL_CHARS].
+ */
+fun linkList(links: List<LinkAt>): List<String> = links.filter { it.url.length <= MAX_URL_CHARS }
+    .sortedWith(compareByDescending<LinkAt> { it.row }.thenByDescending { it.col }).map { it.url }.distinct().take(MAX_LINKS)
 
 /** [url] shortened in the middle to [MAX_LINK_LABEL] characters, for a menu entry. */
 fun linkLabel(url: String): String = if (url.length <= MAX_LINK_LABEL) url else url.take(MAX_LINK_LABEL / 2) + "…" + url.takeLast(MAX_LINK_LABEL - MAX_LINK_LABEL / 2 - 1)

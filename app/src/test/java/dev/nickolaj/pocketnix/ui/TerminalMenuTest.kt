@@ -94,6 +94,26 @@ class TerminalMenuTest {
         assertEquals(listOf("https://ok.example"), plainLinks(rows, firstRow = 0).map { it.url })
     }
 
+    @Test(timeout = 2_000)
+    fun manyBracketTailsTrimInLinearTime() {
+        // At the cap, so each reaches trimUrl: quadratic trimming takes seconds here.
+        val tail = "http://a" + ")".repeat(MAX_URL_CHARS - "http://a".length)
+        val rows = List(400) { BufferRow(tail, wraps = false) }
+        assertEquals(setOf("http://a"), plainLinks(rows, firstRow = 0).map { it.url }.toSet())
+    }
+
+    @Test
+    fun anOverlongRunOffersNothingFromItsMiddle() {
+        val rows = listOf(BufferRow("https://t.example/?r=" + "a".repeat(MAX_URL_CHARS) + "https://x.example", wraps = false))
+        assertEquals(emptyList<String>(), plainLinks(rows, firstRow = 0).map { it.url })
+    }
+
+    @Test
+    fun anOverlongHyperlinkIsLeftOut() {
+        val links = listOf(LinkAt("https://x.example/" + "a".repeat(MAX_URL_CHARS), row = 1, col = 0), LinkAt("https://ok.example", row = 0, col = 0))
+        assertEquals(listOf("https://ok.example"), linkList(links))
+    }
+
     @Test
     fun openLinkKeepsTheNewestAndShortensLongLabels() {
         val links = (1..60).map { LinkAt("https://x.example/$it", row = it, col = 0) }
