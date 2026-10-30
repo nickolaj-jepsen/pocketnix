@@ -233,7 +233,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                 GuiStats.add("wireBytes", msg.commits.sumOf { it.data.size.toLong() })
                 GuiStats.add("pixelBytes", msg.commits.filter { it.buffer }.sumOf { it.pixelBytes })
                 GuiStats.record("groupWork", work)
-                hints.report(work, frameNs)
+                hints.report(work, frameNs, GuiNative.unpackTids())
             }
 
             is GuiMessage.Toplevel -> {

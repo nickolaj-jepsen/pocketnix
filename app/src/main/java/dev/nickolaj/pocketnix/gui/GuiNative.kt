@@ -1,7 +1,9 @@
 package dev.nickolaj.pocketnix.gui
 
 import android.hardware.HardwareBuffer
+import android.os.Process
 import java.util.concurrent.Callable
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
 /** The renderer's C half (app/src/main/cpp/gui.c). */
@@ -13,7 +15,17 @@ object GuiNative : Unpacker {
     // Threads besides the caller's that decode a commit's zstd frames; the compositor splits large data into up to four.
     private const val UNPACK_THREADS = 3
 
-    private val pool = Executors.newFixedThreadPool(UNPACK_THREADS) { r -> Thread(r, "gui-unpack").apply { isDaemon = true } }
+    private val poolTids = ConcurrentHashMap.newKeySet<Int>()
+
+    private val pool = Executors.newFixedThreadPool(UNPACK_THREADS) { r ->
+        Thread({
+            poolTids += Process.myTid()
+            r.run()
+        }, "gui-unpack").apply { isDaemon = true }
+    }
+
+    /** The tids of the threads that decode beside the caller, of those started so far: they belong in its hint session. */
+    fun unpackTids(): IntArray = poolTids.toIntArray().apply { sort() }
 
     @JvmStatic private external fun zstdDecompress(src: ByteArray, srcOff: Int, srcLen: Int, dst: ByteArray, off: Int, len: Int): Int
 
