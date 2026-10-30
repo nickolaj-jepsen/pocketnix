@@ -16,6 +16,7 @@
 //     loopback, one stream per client address on the phone.
 //   - font: the configured font file's bytes, then EOF.
 //   - gui: the stream itself, handed to the guest compositor ([StreamGUI]).
+//   - audio: the guest's sound as raw PCM ([StreamAudio]).
 package protocol
 
 // Version is bumped on any incompatible change. Additive changes (new
@@ -54,6 +55,11 @@ const (
 	// agent without it refuses rather than splicing datagrams into TCP.
 	StreamUDP  = "udp"
 	StreamFont = "font"
+	// StreamAudio carries the guest's sound to the app after the Hello: raw
+	// PCM, signed 16-bit little-endian, 48 kHz, 2 channels interleaved, as
+	// it plays. Nothing comes while the guest is silent. A newer audio
+	// stream ends the older one.
+	StreamAudio = "audio"
 )
 
 // Message types on the control stream, and the Hello/Error replies.

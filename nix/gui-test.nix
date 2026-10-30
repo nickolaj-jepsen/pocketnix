@@ -307,6 +307,12 @@ in
               "busctl --user get-property org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop org.freedesktop.portal.FileChooser version"
           ), timeout=60)
 
+      with subtest("sound played to the Android output reaches the agent's audio stream"):
+          phone.succeed("test -p /run/pocketnix-audio")
+          phone.succeed(f"{A} audio >/tmp/sound.raw 2>/tmp/sound.err &")
+          phone.succeed(user("systemd-run --user --unit=android-sound ${pkgs.pipewire}/bin/pw-play --target pocketnix-android ${silence}"))
+          phone.wait_until_succeeds("test $(stat -c %s /tmp/sound.raw) -ge 19200", timeout=30)
+
       with subtest("the gui stream reaches the compositor and gets the replay"):
           first = replay("--want-app", "foot")
           assert first["hello"]["version"] == 2, first["hello"]

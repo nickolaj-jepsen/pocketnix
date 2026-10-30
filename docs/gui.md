@@ -81,8 +81,10 @@ sway, labwc or Plasma can run nested as an ordinary client, in one window.
 
 - Rendering is software in the guest: the phone's GPU is reachable from a
   VM, but nothing can composite on it yet.
-- Sound plays through AVF's virtio-snd only in debug builds, turned on from
-  a scripted start (see [Development](development.md)).
+- Sound is playback only: PipeWire's "Android" output, which the app plays.
+  Debug builds can use AVF's virtio-snd instead, turned on from a scripted
+  start (see [Development](development.md)), which costs the guest-RAM frames
+  (see the [GUI protocol](gui-protocol.md)'s Guest RAM).
 - No X11 apps yet.
 - The clipboard crosses between Wayland apps and Android one MIME type per
   copy, and only the regular selection, not the primary one. Android hands

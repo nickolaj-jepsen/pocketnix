@@ -87,7 +87,8 @@
         appDefaults = lib.mapAttrs (_: a: lib.filterAttrs (_: v: v != null) {inherit (a) size input;}) gui.appDefaults;
       };
       guiSocket = guiSocketName;
-    };
+    }
+    // lib.optionalAttrs (gui.enable && config.services.pipewire.enable) {inherit audioPipe;};
   upd = cfg.updates;
   mgd = cfg.managed;
   # Relative to the user's home. Apps run without being kept live here; it's
@@ -100,6 +101,10 @@
     cp ${./managed/configuration.nix} $out/configuration.nix
     echo '${builtins.toJSON mgd.selections}' > $out/pocketnix.json
   '';
+
+  # PipeWire's pipe sink writes the guest's sound here, and the agent streams it to the app.
+  # Outside /run/pocketnix, which the agent's restarts recreate under PipeWire.
+  audioPipe = "/run/pocketnix-audio";
 
   gui = cfg.gui;
   # In the user's runtime directory, where the agent dials it as root.
@@ -1193,7 +1198,29 @@ in {
             actions.update-props."audio.format" = "S16LE";
           }
         ];
+        # Sound for the app's own player (the agent's audio stream); with AVF's
+        # sound device, its card outranks this sink.
+        extraConfig.pipewire.pocketnix-audio."context.modules" = [
+          {
+            name = "libpipewire-module-pipe-tunnel";
+            args = {
+              "tunnel.mode" = "sink";
+              "pipe.filename" = audioPipe;
+              # go/internal/protocol's StreamAudio format.
+              "audio.format" = "S16LE";
+              "audio.rate" = 48000;
+              "audio.channels" = 2;
+              "audio.position" = ["FL" "FR"];
+              "stream.props" = {
+                "node.name" = "pocketnix-android";
+                "node.description" = "Android";
+                "priority.session" = 100;
+              };
+            };
+          }
+        ];
       };
+      systemd.tmpfiles.rules = lib.mkIf config.services.pipewire.enable ["p ${audioPipe} 0600 ${cfg.user} - -"];
       # logind gives /dev/snd only to sessions on a seat, and the user manager
       # PipeWire runs in, tabs and the console have none.
       users.users.${cfg.user}.extraGroups = ["audio"];

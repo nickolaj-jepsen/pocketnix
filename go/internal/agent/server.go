@@ -189,6 +189,8 @@ func (s *Server) handle(c net.Conn) {
 		s.serveFont(c)
 	case protocol.StreamGUI:
 		s.serveGUI(c)
+	case protocol.StreamAudio:
+		s.serveAudio(c)
 	case protocol.StreamFile:
 		s.serveFile(c, hello)
 	case protocol.StreamShare:

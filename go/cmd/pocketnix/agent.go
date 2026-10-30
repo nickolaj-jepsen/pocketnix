@@ -34,6 +34,7 @@ commands:
       --input <text>       type <text> once the session printed something
   forward <port>         splice stdin/stdout to a guest TCP port (an ssh ProxyCommand)
   gui                    splice stdin/stdout to the guest compositor's GUI socket
+  audio                  write the guest's sound to stdout (S16LE, 48 kHz, stereo)
   udp [flags] <port>     send each stdin line as a datagram to a guest UDP port,
                          printing each reply as a line
       --wait <duration>    how long to wait for replies after stdin ends (default 2s)
@@ -265,6 +266,17 @@ func runAgent(args []string) error {
 			return err
 		}
 		return spliceStdio(conn)
+	case "audio":
+		if len(rest) != 0 {
+			return errUsage
+		}
+		conn, err := c.Audio()
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+		_, err = io.Copy(os.Stdout, conn)
+		return err
 	case "udp":
 		return agentUDP(c, rest)
 	case "font":

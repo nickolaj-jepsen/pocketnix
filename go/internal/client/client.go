@@ -566,6 +566,12 @@ func (c *Client) GUI() (net.Conn, error) {
 	return conn, err
 }
 
+// Audio opens a stream of the guest's sound ([protocol.StreamAudio]).
+func (c *Client) Audio() (net.Conn, error) {
+	conn, _, err := c.open(protocol.Hello{Stream: protocol.StreamAudio})
+	return conn, err
+}
+
 // UDP opens a stream of datagrams to UDP port on the guest's loopback.
 func (c *Client) UDP(port int) (*Datagrams, error) {
 	conn, _, err := c.open(protocol.Hello{Stream: protocol.StreamUDP, Port: port})

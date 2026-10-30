@@ -31,6 +31,7 @@ import dev.nickolaj.pocketnix.forward.PortForwards
 import dev.nickolaj.pocketnix.forward.pickPhonePort
 import dev.nickolaj.pocketnix.gui.GuiSession
 import dev.nickolaj.pocketnix.gui.guard
+import dev.nickolaj.pocketnix.host.GuestAudio
 import dev.nickolaj.pocketnix.host.HostMonitor
 import dev.nickolaj.pocketnix.hostfs.HostFolderLinks
 import dev.nickolaj.pocketnix.hostfs.SafFolder
@@ -88,6 +89,9 @@ class Vm(private val app: Context) {
 
     /** The guest's GUI windows, while its config turns GUI on. */
     val gui = GuiSession(app, appVersion)
+
+    /** The guest's sound, played while the agent is up. */
+    private val audio = GuestAudio(appVersion)
 
     private val avf by lazy { AvfEngine(app) }
     private val _engine = MutableStateFlow(pickEngine())
@@ -195,6 +199,8 @@ class Vm(private val app: Context) {
         scope.launch {
             control.link.map { it is ControlChannel.Link.Up }.distinctUntilChanged().collect { up ->
                 if (up) host.start() else host.stop()
+                val dialer = _engine.value.dialer
+                if (up && dialer != null) audio.start(dialer) else audio.stop()
             }
         }
         scope.launch { HostStateSync(control, host.state).run() }

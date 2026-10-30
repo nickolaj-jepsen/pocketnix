@@ -45,6 +45,9 @@ type File struct {
 	ForwardOffers ForwardOffersConfig `json:"forwardOffers"`
 	// Managed makes the guest rebuild its own flake (pocketnix.guest.managed).
 	Managed *ManagedConfig `json:"managed,omitempty"`
+	// AudioPipe is the FIFO the guest's sound is written to, in
+	// [protocol.StreamAudio]'s format; empty refuses audio streams.
+	AudioPipe string `json:"audioPipe,omitempty"`
 }
 
 // ForwardOffersConfig pushes the session user's TCP listeners to the app
