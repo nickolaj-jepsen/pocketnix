@@ -558,12 +558,13 @@ fn build_commit(
 
     let content = (m.width, m.height, m.format);
     let app_has = sent.as_ref().is_some_and(|p| p.content == Some(content));
-    let mut data = Vec::new();
+    // A whole buffer's data is the mirror as it is; anything less is packed.
+    let mut data = std::borrow::Cow::Borrowed(&[][..]);
     let pack_start = std::time::Instant::now();
     if !app_has || s.pending.full {
         commit.flags = protocol::FLAG_BUFFER | protocol::FLAG_FULL;
         commit.rects = vec![Rect { x: 0, y: 0, w: m.width, h: m.height }];
-        data = m.pack(&commit.rects);
+        data = std::borrow::Cow::Borrowed(&m.pixels);
     } else if s.pending.scroll.is_some() || !s.pending.rects.is_empty() {
         commit.flags = protocol::FLAG_BUFFER;
         if let Some(dy) = s.pending.scroll {
@@ -571,7 +572,7 @@ fn build_commit(
             commit.scroll = dy;
         }
         commit.rects = std::mem::take(&mut s.pending.rects);
-        data = m.pack(&commit.rects);
+        data = std::borrow::Cow::Owned(m.pack(&commit.rects));
     } else if sent.as_ref().map(|p| p.placement) == Some(placement) && !force {
         return None;
     }
@@ -602,11 +603,12 @@ fn build_commit(
         match packed {
             Some(packed) => {
                 commit.encoding = protocol::ENCODING_ZSTD;
-                data = packed;
+                data = std::borrow::Cow::Owned(packed);
             }
             None => stats.add("sentRaw", 1),
         }
     }
+    let data = data.into_owned();
     s.sent = Some(Sent { content: Some(content), placement });
     s.sent_gen = generation;
     Some((commit, data, content_hash))
