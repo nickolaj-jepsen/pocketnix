@@ -101,7 +101,12 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
      * Opens [url]: a guest's request through a chooser, or with [chosen] (a
      * link the user picked in the app) straight in its default app.
      */
-    fun openUrl(url: String, appVisible: Boolean, chosen: Boolean = false) = open(Intent(Intent.ACTION_VIEW, Uri.parse(url)), url, appVisible, chosen)
+    fun openUrl(url: String, appVisible: Boolean, chosen: Boolean = false) {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+        // Without a chooser, only activities that declare themselves safe for links (browsers and the like) may take it.
+        if (chosen) intent.addCategory(Intent.CATEGORY_BROWSABLE)
+        open(intent, url, appVisible, chosen)
+    }
 
     /** Opens the document at [path], relative to the files root, as [openUrl] does. */
     fun openDocument(path: String, appVisible: Boolean, chosen: Boolean = false) {
@@ -134,10 +139,12 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
             return
         }
         val dir = File(context.cacheDir, SHARE_DIR).apply { mkdirs() }
-        // A receiving app may still be reading an earlier share, so only old ones go.
         val now = System.currentTimeMillis()
-        dir.listFiles()?.filter { now - it.lastModified() > SHARE_KEEP_MS }?.forEach { it.delete() }
         val file = File(dir, "$name-$now.txt").apply { writeText(text) }
+        // A receiving app may still be reading a recent share, so only old ones, or those past the newest few, go.
+        dir.listFiles()?.sortedByDescending { it.lastModified() }?.forEachIndexed { i, f ->
+            if (f != file && (i >= SHARE_KEEP_FILES || now - f.lastModified() > SHARE_KEEP_MS)) f.delete()
+        }
         shareFiles(listOf(FileProvider.getUriForFile(context, Transfers.clipAuthority(context), file)), listOf("text/plain"), appVisible, file.name)
     }
 
@@ -196,6 +203,7 @@ class GuestBridge(private val context: Context, private val hostname: () -> Stri
         // A <cache-path> of the clip provider (res/xml/clipboard_paths.xml), apart from the clipboard's, which a guest copy empties.
         private const val SHARE_DIR = "share"
         private const val SHARE_KEEP_MS = 24 * 60 * 60 * 1000L
+        private const val SHARE_KEEP_FILES = 10
 
         fun mimeType(path: String): String = MimeTypeMap.getSingleton().getMimeTypeFromExtension(path.substringAfterLast('.', "").lowercase()) ?: "application/octet-stream"
     }
