@@ -213,8 +213,9 @@ in
 
       with subtest("a udp stream relays datagrams to a guest UDP port"):
           phone.wait_until_succeeds("ss -uln | grep -q 127.0.0.1:7777")
-          out = client.succeed(f"printf 'one\\ntwo\\n' | {A} udp 7777")
-          # Each datagram is its own socat child, so replies may cross.
+          # Each datagram is its own socat child, so replies may cross, and on a
+          # loaded build machine they come later than the CLI's default --wait.
+          out = client.succeed(f"printf 'one\\ntwo\\n' | {A} udp --wait 15s 7777")
           assert sorted(out.split()) == ["echo:one", "echo:two"], out
 
       with subtest("a switch reloads the config live, without restarting the agent"):
