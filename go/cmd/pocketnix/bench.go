@@ -436,6 +436,8 @@ func (p *phone) run(args []string) (map[string]any, error) {
 	var app0, app1 map[string]any
 	var sampleErr error
 	var power *powerSampler
+	var clocks *clockSampler
+	var clocked map[string]any
 	var taps *tapper
 	sample := func(s *androidSample, app *map[string]any) {
 		var wg sync.WaitGroup
@@ -459,12 +461,14 @@ func (p *phone) run(args []string) (map[string]any, error) {
 	res, err := clientRun(cmd, func() {
 		sample(&s0, &app0)
 		power = startPower(p.dev)
+		clocks = startClocks(p.dev, p.o.pkg)
 		if len(args) > 2 && args[2] == "touch" {
 			taps = startTaps(p.dev)
 		}
 	}, func() {
 		taps.stop()
 		power.stop()
+		clocked = clocks.stop()
 		sample(&s1, &app1)
 	})
 	if err != nil {
@@ -477,7 +481,7 @@ func (p *phone) run(args []string) (map[string]any, error) {
 	res["app"] = diffSnapshot(app0, app1)
 	res["android"] = map[string]any{
 		"cpu":    androidCPU(s0, s1),
-		"freqs":  s1.freqs,
+		"clocks": clocked,
 		"power":  power.result(),
 		"before": before,
 		"after":  p.conditions(),

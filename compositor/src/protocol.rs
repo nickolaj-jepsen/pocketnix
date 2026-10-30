@@ -303,9 +303,17 @@ const SAMPLE: usize = 16 << 10;
 /// bytes it saves on the wire.
 const INCOMPRESSIBLE: f64 = 0.9;
 
+/// One zstd frame's compression: how long it took and the CPU it ended on.
+#[derive(Clone, Copy, Debug)]
+pub struct Shard {
+    pub time: std::time::Duration,
+    pub cpu: Option<usize>,
+}
+
 /// zstd-compresses `data` as one or more concatenated frames, in parallel
-/// when it is large; None when compressing it isn't worth it.
-pub fn compress(data: &[u8]) -> Option<Vec<u8>> {
+/// when it is large; None when compressing it isn't worth it. Each frame's
+/// [Shard] goes to `timed`.
+pub fn compress(data: &[u8], timed: &mut Vec<Shard>) -> Option<Vec<u8>> {
     if data.len() > SAMPLE_ABOVE {
         let step = data.len() / SAMPLES;
         let packed: usize = (0..SAMPLES)
@@ -315,24 +323,44 @@ pub fn compress(data: &[u8]) -> Option<Vec<u8>> {
             return None;
         }
     }
-    let packed = shards(data);
+    let packed = shards(data, timed);
     (packed.len() < data.len()).then_some(packed)
 }
 
-fn shards(data: &[u8]) -> Vec<u8> {
+fn shards(data: &[u8], timed: &mut Vec<Shard>) -> Vec<u8> {
     const SHARD: usize = 1 << 20;
     if data.len() <= 2 * SHARD {
-        return zstd::bulk::compress(data, 1).expect("zstd compression of a slice can't fail");
+        return timed_compress(data, timed);
     }
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(4);
     let shard = data.len().div_ceil(threads).max(SHARD);
-    std::thread::scope(|scope| {
+    let parts: Vec<(Vec<u8>, Vec<Shard>)> = std::thread::scope(|scope| {
         let handles: Vec<_> = data
             .chunks(shard)
-            .map(|chunk| scope.spawn(move || zstd::bulk::compress(chunk, 1).expect("zstd")))
+            .map(|chunk| {
+                scope.spawn(move || {
+                    let mut t = Vec::with_capacity(1);
+                    (timed_compress(chunk, &mut t), t)
+                })
+            })
             .collect();
-        handles.into_iter().flat_map(|h| h.join().expect("zstd thread")).collect()
-    })
+        handles.into_iter().map(|h| h.join().expect("zstd thread")).collect()
+    });
+    let mut out = Vec::with_capacity(parts.iter().map(|(p, _)| p.len()).sum());
+    for (p, t) in parts {
+        out.extend_from_slice(&p);
+        timed.extend(t);
+    }
+    out
+}
+
+fn timed_compress(data: &[u8], timed: &mut Vec<Shard>) -> Vec<u8> {
+    let start = std::time::Instant::now();
+    let packed = zstd::bulk::compress(data, 1).expect("zstd compression of a slice can't fail");
+    // SAFETY: sched_getcpu takes nothing and only reads the calling thread's state.
+    let cpu = unsafe { libc::sched_getcpu() };
+    timed.push(Shard { time: start.elapsed(), cpu: usize::try_from(cpu).ok() });
+    packed
 }
 
 #[cfg(test)]
@@ -392,7 +420,7 @@ mod tests {
     #[test]
     fn sharded_compression_decodes_to_the_input() {
         let data: Vec<u8> = (0..5 * 1024 * 1024u32).map(|i| (i % 251) as u8).collect();
-        let packed = compress(&data).unwrap();
+        let packed = compress(&data, &mut Vec::new()).unwrap();
         let mut out = Vec::new();
         zstd::stream::copy_decode(&packed[..], &mut out).unwrap();
         assert_eq!(out, data);
@@ -409,8 +437,8 @@ mod tests {
                 x as u8
             })
             .collect();
-        assert_eq!(compress(&noise), None);
-        assert_eq!(compress(&noise[..4096]), None);
+        assert_eq!(compress(&noise, &mut Vec::new()), None);
+        assert_eq!(compress(&noise[..4096], &mut Vec::new()), None);
     }
 
     #[test]

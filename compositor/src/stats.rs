@@ -65,6 +65,8 @@ pub struct Stats {
     histograms: HashMap<&'static str, Histogram>,
     /// Per window, the groups sent and not yet presented: (last seq, when).
     in_flight: HashMap<u32, VecDeque<(u32, Instant)>>,
+    /// Compression time per CPU, served as `compressCpu<n>Ns` counters.
+    compress_cpu_ns: Vec<u64>,
 }
 
 impl Stats {
@@ -78,6 +80,21 @@ impl Stats {
 
     pub fn record(&mut self, name: &'static str, d: Duration) {
         self.histograms.entry(name).or_default().record(d);
+    }
+
+    /// One compression's shards: the slowest sets its time, the rest wait.
+    pub fn shards(&mut self, shards: &[crate::protocol::Shard]) {
+        let Some(slowest) = shards.iter().map(|s| s.time).max() else { return };
+        self.time("compressShardMaxNs", slowest);
+        self.time("compressShardNs", shards.iter().map(|s| s.time).sum());
+        self.add("compressShards", shards.len() as u64);
+        for s in shards {
+            let Some(cpu) = s.cpu else { continue };
+            if self.compress_cpu_ns.len() <= cpu {
+                self.compress_cpu_ns.resize(cpu + 1, 0);
+            }
+            self.compress_cpu_ns[cpu] += s.time.as_nanos() as u64;
+        }
     }
 
     /// A group for `window` ending at `seq` went to the writer.
@@ -118,6 +135,9 @@ impl Stats {
         let (user, system) = cpu_time();
         counters.insert("cpuUserNs".into(), json!(user));
         counters.insert("cpuSystemNs".into(), json!(system));
+        for (cpu, ns) in self.compress_cpu_ns.iter().enumerate().filter(|(_, ns)| **ns > 0) {
+            counters.insert(format!("compressCpu{cpu}Ns"), json!(ns));
+        }
         let histograms: serde_json::Map<String, Value> =
             self.histograms.iter().map(|(k, v)| ((*k).to_owned(), v.to_json())).collect();
         json!({
@@ -155,6 +175,23 @@ mod tests {
         assert!((1000..1200).contains(&bound), "bound {bound}");
         assert_eq!(json["count"], 1);
         assert_eq!(json["sumUs"], 1000);
+    }
+
+    #[test]
+    fn shards_count_the_slowest_and_each_cpu() {
+        use crate::protocol::Shard;
+        let mut s = Stats::default();
+        s.shards(&[
+            Shard { time: Duration::from_millis(3), cpu: Some(2) },
+            Shard { time: Duration::from_millis(5), cpu: Some(7) },
+            Shard { time: Duration::from_millis(1), cpu: None },
+        ]);
+        let c = &s.to_json("test", json!([]))["counters"];
+        assert_eq!(c["compressShardMaxNs"], 5_000_000);
+        assert_eq!(c["compressShardNs"], 9_000_000);
+        assert_eq!(c["compressShards"], 3);
+        assert_eq!(c["compressCpu7Ns"], 5_000_000);
+        assert!(c.get("compressCpu0Ns").is_none());
     }
 
     #[test]

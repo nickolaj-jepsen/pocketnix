@@ -595,8 +595,10 @@ fn build_commit(
     if !data.is_empty() {
         stats.add("pixelBytes", data.len() as u64);
         let compress_start = std::time::Instant::now();
-        let packed = protocol::compress(&data);
+        let mut shards = Vec::new();
+        let packed = protocol::compress(&data, &mut shards);
         stats.time("compressNs", compress_start.elapsed());
+        stats.shards(&shards);
         match packed {
             Some(packed) => {
                 commit.encoding = protocol::ENCODING_ZSTD;
