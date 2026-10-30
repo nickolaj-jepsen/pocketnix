@@ -136,17 +136,20 @@ func runAgent(args []string) error {
 		case "events":
 			enc := json.NewEncoder(os.Stdout)
 			events, ports := ctl.Events(), ctl.PortListeners()
-			for {
+			// Until both close, so neither loses what it buffered when the stream ends.
+			for events != nil || ports != nil {
 				var v any
 				select {
 				case ev, ok := <-events:
 					if !ok {
-						return errors.New("control stream closed")
+						events = nil
+						continue
 					}
 					v = ev
 				case p, ok := <-ports:
 					if !ok {
-						return errors.New("control stream closed")
+						ports = nil
+						continue
 					}
 					v = p
 				}
@@ -154,6 +157,7 @@ func runAgent(args []string) error {
 					return err
 				}
 			}
+			return errors.New("control stream closed")
 		case "set-clipboard":
 			var types []string
 			for len(rest) >= 2 && rest[0] == "--type" {
