@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
@@ -35,11 +36,18 @@ func LoadEBPF() (*EBPF, error) {
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return nil, fmt.Errorf("memlock: %w", err)
 	}
+	spec, err := loadPortwatch()
+	if err != nil {
+		return nil, err
+	}
+	// A ring buffer is a whole number of pages, which vary by kernel (4 to 64 KiB on arm64).
+	if ev := spec.Maps["events"]; ev.MaxEntries%uint32(os.Getpagesize()) != 0 {
+		ev.MaxEntries = uint32(os.Getpagesize())
+	}
 	w := &EBPF{}
-	if err := loadPortwatchObjects(&w.objs, nil); err != nil {
+	if err := spec.LoadAndAssign(&w.objs, nil); err != nil {
 		return nil, fmt.Errorf("load: %w", err)
 	}
-	var err error
 	if w.link, err = link.AttachRawTracepoint(link.RawTracepointOptions{
 		Name:    "inet_sock_set_state",
 		Program: w.objs.InetSockSetState,

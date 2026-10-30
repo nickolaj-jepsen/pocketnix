@@ -35,6 +35,7 @@ struct event {
 // Keeps struct event in the BTF for bpf2go's -type.
 const struct event *unused_event __attribute__((unused));
 
+// Rounded up to the kernel's page size at load.
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 12);
