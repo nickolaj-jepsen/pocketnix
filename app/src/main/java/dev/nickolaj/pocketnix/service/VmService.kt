@@ -47,7 +47,7 @@ class VmService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Every start must reach startForeground, or the system kills the app.
-        startForeground(NOTIFICATION, notification(notificationText(VmPhase.Starting)), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        startForeground(NOTIFICATION, notification(lastText), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         lastStartId = startId
         vm.serviceStarted()
         if (watch == null) {
