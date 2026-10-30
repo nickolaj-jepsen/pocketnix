@@ -76,7 +76,9 @@ which the adb shell has). Send scripted actions there, never to
 `MainActivity` (see `AGENTS.md`).
 
 The actions are `dev.nickolaj.pocketnix.action.START` and `STOP`, and in debug
-builds `DEBUG_LAUNCH` (launch a GUI app). Their extras are the `EXTRA_*`
+builds `DEBUG_LAUNCH` (launch a GUI app), `DEBUG_SETUP` (the setup form's
+button) and `DEBUG_MANAGED` (Configure's and the launcher's operations on a
+managed guest; `pocketnix control dump` shows their outcome). Their extras are the `EXTRA_*`
 constants in `ControlActivity`; `start` reads `START`'s and gates the
 debug-only ones on `BuildConfig.DEBUG`.
 
@@ -163,6 +165,12 @@ A fork signs with its own key, so `provision` needs to know it:
   and upstream's don't collide on a phone.
 
 Without a release, `provision --apk <file>` installs any APK you built.
+
+A release also publishes the base image and the package index that the app's
+setup and package search download. A debug build reads them from Settings'
+release files URL instead: serve `nix build .#base-image`'s image, gzipped
+with its `.sha256`, and `nix run .#package-index -- <file>`, under the names
+`managed/Release.kt` gives them.
 
 ## Pitfalls
 

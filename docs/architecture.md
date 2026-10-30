@@ -145,10 +145,14 @@ ref. With no app connected, a request fails instead of queueing.
 
 ## Design rules
 
-- The VM is cattle: it rebuilds from the flake and a cache. Back up user state
-  from inside the guest.
-- The phone never evaluates or builds Nix ([Updates](updates.md)).
-- No setup wizard in the app: `provision` does setup, and the first-run
-  screen only lists what's missing.
+- The VM is cattle: it rebuilds from the flake and a cache. A managed guest's
+  flake is the app's selections, which the app keeps, so a fresh disk rebuilds
+  to the same system. Back up user state from inside the guest.
+- Only a managed guest evaluates on the phone, under a CPU quota, and nothing
+  compiles there unless the user says yes. Every other guest's updates arrive
+  built ([Updates](updates.md)).
+- Setup is either the first-run screen's one form (a managed guest from the
+  release's base image) or `provision` (your own flake). The AVF permissions
+  need adb once either way, since only the shell user can grant them.
 - What changes with the system lives in the module and applies live; what
   must exist before boot, or only the phone knows, lives in the app.

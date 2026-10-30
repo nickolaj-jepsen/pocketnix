@@ -8,6 +8,10 @@ Two places hold configuration:
   and network) and what only the phone can name (which Android folders to
   share).
 
+A guest the app sets up (`nixosModules.managed`) is configured from the app;
+its `/etc/nixos/configuration.nix` takes the options below for anything
+else ([A managed guest](updates.md#a-managed-guest)).
+
 Every option, with its default and description, is in
 [Options](options.md), generated from [`nix/module.nix`](../nix/module.nix).
 This page shows them by topic.

@@ -1,9 +1,10 @@
 # Updates
 
-The phone never evaluates or builds Nix: a real config needs more memory and
-time than the guest has. Every update arrives as a finished system path, from
-a build host, a URL your CI publishes, or both. The app's System menu checks,
-updates, rolls back and lists generations.
+A guest you configure in your own flake never evaluates or builds Nix on the
+phone: every update arrives as a finished system path, from a build host, a
+URL your CI publishes, or both. A guest the app manages is the exception: it
+rebuilds its own flake (see [A managed guest](#a-managed-guest)). The app's
+System menu checks, updates, rolls back and lists generations.
 
 ```mermaid
 flowchart TD
@@ -75,6 +76,34 @@ advance (see [Configuration](configuration.md#secrets)).
   restarting it, so open tabs survive.
 - A new agent binary takes over at the next boot. The app offers a reboot
   when the running system isn't the booted one.
+
+## A managed guest
+
+`nixosModules.managed` is the guest the app sets up from the release's base
+image. Its system is the flake in `/etc/nixos`, seeded on first boot:
+
+- `pocketnix.json` holds what the app's Configure screen sets (the user and
+  the service switches). The app owns it and keeps a copy, and a disk that
+  lacks it is rebuilt from that copy when it connects.
+- `configuration.nix` is yours, for anything the switches don't cover.
+- `flake.nix` pins one pocketnix release, whose nixpkgs the guest uses, so
+  the cache has what it needs. Update moves the pin to the app's own version.
+
+A check evaluates the flake under a CPU quota
+(`pocketnix.guest.managed.cpuQuota`) and plans the build: what it downloads,
+and which packages it would compile because no cache has them. Update asks
+before compiling anything; configuration files build without asking.
+
+Packages added in the app go to the user's Nix profile (`nixpkgs#<attr>`,
+the system's own nixpkgs), with no rebuild. Running one from the launcher
+fetches it into a profile the next boot empties.
+
+## Old generations
+
+After each boot, and after each switch, the agent deletes the system
+generations beyond the running and the booted one and collects the garbage;
+`pocketnix.guest.updates.keepGenerations` keeps more. A managed guest sets it
+from the app's Configure screen.
 
 ## Rollback
 

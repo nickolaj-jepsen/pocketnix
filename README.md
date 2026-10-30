@@ -12,7 +12,9 @@ pocketnix boots a NixOS disk image under the Android Virtualization Framework
 - A CLI that provisions a phone over adb and injects secrets into the image.
 - Integration with Android: notifications, `xdg-open`, the clipboard, the share
   sheet, the Files app, shared Android folders, and port forwards.
-- Updates and rollbacks from the app. The phone never evaluates or builds Nix.
+- Setup from the app: it downloads a NixOS image and configures it (user,
+  services, packages), no Nix knowledge needed. Or provision your own flake.
+- Updates and rollbacks from the app. Your own flake's updates arrive built.
 - Optional Wayland apps shown as Android windows.
 
 > [!WARNING]

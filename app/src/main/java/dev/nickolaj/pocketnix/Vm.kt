@@ -564,6 +564,9 @@ class Vm(private val app: Context) {
 
     val config: StateFlow<GuestConfig?> get() = control.config
 
+    /** Debug builds, over adb: where scripted operations run, outliving the activity that started them. */
+    val debugScope: CoroutineScope get() = scope
+
     /** Debug builds, over adb: opens a tab once the agent is up and types [input] into it; returns its id. */
     suspend fun debugOpenTab(profile: String?, input: String, enter: Boolean): Int = withContext(Dispatchers.Main) {
         control.link.first { it is ControlChannel.Link.Up }
@@ -581,12 +584,19 @@ class Vm(private val app: Context) {
 
     /**
      * Debug builds, over adb, on the main thread: the VM's state and [phase], the
-     * terminal background and where it came from, the last [lines] of every tab's
+     * terminal background and where it came from, the setup and the updates
+     * (with their log's last [lines]), the last [lines] of every tab's
      * transcript (only tab [only]'s if given) and, for all tabs, the GUI windows.
      */
     fun debugDump(only: Int?, lines: Int): List<String> = buildList {
         add("state=${state.value} phase=${phase.value} link=${control.link.value} host=${control.config.value?.hostname}")
         add("theme background=#%06x source=$themeSource".format(TerminalTheme.background and 0xffffff))
+        add("setup=${managed.setup.value} managed=${control.config.value?.managedFlake}")
+        updates.value?.let { u ->
+            add("updates state=${u.state} op=${u.op} available=${u.available} plan=${u.plan} blocked=${u.blocked} error=${u.error}")
+            add("updates packages=${u.packages} run=${u.run} generations=${u.generations.map { "${it.number}${if (it.current) "*" else ""}" }}")
+            for (line in u.log.takeLast(lines)) add("|log| $line")
+        }
         val shown = tabs.all().filter { only == null || it.id == only }
         if (shown.isEmpty()) error("no tab $only")
         for (tab in shown) {
