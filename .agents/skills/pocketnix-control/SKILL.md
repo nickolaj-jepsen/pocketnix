@@ -29,7 +29,7 @@ attached (`adb devices`). `pocketnix control -h` lists the commands.
 
 | command | does |
 |---|---|
-| `dump [--tab <id>] [--lines <n>]` | Prints the VM state (`state=… link=… host=…`), then each tab as `tab <id> <kind> '<title>' running=<bool>` followed by its last lines as `\|<id>\| <line>`, then `gui …` lines for the GUI connection and each window. `--tab` limits it to one tab and leaves out the GUI. |
+| `dump [--tab <id>] [--lines <n>]` | Prints the VM state (`state=… phase=… link=… host=…`), then each tab as `tab <id> <kind> '<title>' running=<bool>` followed by its last lines as `\|<id>\| <line>`, then `gui …` lines for the GUI connection and each window. `--tab` limits it to one tab and leaves out the GUI. |
 | `tab [--profile <name>] [--timeout <dur>] [<text>]` | Waits for the agent, opens a terminal tab, types `<text>` and Enter, and prints the new tab's id. |
 | `type --tab <id> <text>` | Types `<text>` and Enter into an open tab. |
 | `wait --tab <id> [--timeout <dur>] [--lines <n>] <regexp>` | Polls the tab until one of its transcript lines matches, then prints the tab's dump. Exits 1 with the last dump if nothing matches in time. |
@@ -66,6 +66,9 @@ command it rejected there, and `--no-enter` leaves text behind, so the next
 ## Reading the state
 
 - A tab's `running=false` means its session ended (shell exited, agent gone).
+- On the state line, `phase=` is what the app's status surfaces show
+  (`VmPhase`, from `state=`, `link=` and the app's own flags): wait for
+  `phase=Running` rather than reading `state=` and `link=` apart.
 - On the state line, `link=` is the agent control channel. `tab` waits until
   it is up, so it fails with "the agent wasn't up within …" while the VM is
   still booting or stopped.

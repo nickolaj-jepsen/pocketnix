@@ -436,12 +436,12 @@ class Vm(private val app: Context) {
     }
 
     /**
-     * Debug builds, over adb, on the main thread: the VM's state, the last
+     * Debug builds, over adb, on the main thread: the VM's state and [phase], the last
      * [lines] of every tab's transcript (only tab [only]'s if given) and,
      * for all tabs, the GUI windows.
      */
     fun debugDump(only: Int?, lines: Int): List<String> = buildList {
-        add("state=${state.value} link=${control.link.value} host=${control.config.value?.hostname}")
+        add("state=${state.value} phase=${phase.value} link=${control.link.value} host=${control.config.value?.hostname}")
         val shown = tabs.all().filter { only == null || it.id == only }
         if (shown.isEmpty()) error("no tab $only")
         for (tab in shown) {
