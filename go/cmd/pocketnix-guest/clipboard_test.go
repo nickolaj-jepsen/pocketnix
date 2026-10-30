@@ -77,8 +77,11 @@ func (f *fakeWayland) read(t string, limit int64) ([]byte, error) {
 
 // fakeWlClipboard puts a wl-copy and wl-paste on PATH that keep the
 // selection in a directory. wl-copy takes it only after reading its data,
-// later for "slow", the way the real one waits on the compositor.
-func fakeWlClipboard(t *testing.T) {
+// later for "slow", the way the real one waits on the compositor. Pasting
+// "stall" writes part of it and never ends, from a child that holds stdout
+// as the real wl-paste's cat does; the child's pid goes to the file it
+// returns.
+func fakeWlClipboard(t *testing.T) (stalled string) {
 	dir := t.TempDir()
 	sel := filepath.Join(dir, "selection")
 	scripts := map[string]string{
@@ -93,7 +96,14 @@ rm -rf ` + sel + ` && mv ` + sel + `.new ` + sel + `
 [ -d ` + sel + ` ] || { echo "Nothing is copied" >&2; exit 1; }
 case "$1" in
 --list-types) cat ` + sel + `/types ;;
---no-newline) cat ` + sel + `/data ;;
+--no-newline)
+	if [ "$(cat ` + sel + `/data)" = stall ]; then
+		printf st
+		sleep 1000 &
+		echo $! >` + filepath.Join(dir, "stalled") + `
+		wait
+	fi
+	cat ` + sel + `/data ;;
 *) exit 2 ;;
 esac
 `,
@@ -104,6 +114,7 @@ esac
 		}
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return filepath.Join(dir, "stalled")
 }
 
 func (f *fakeWayland) offer(t string, data []byte) error {
@@ -478,5 +489,38 @@ func TestDrainIsBounded(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("drain didn't stop at its limit or its wait")
+	}
+}
+
+func TestBridgeGivesUpOnAStalledSource(t *testing.T) {
+	stalled := fakeWlClipboard(t)
+	sock, _, ctl := startAgent(t)
+	wl := wlClipboard{wait: 200 * time.Millisecond}
+	b := &bridge{sock: sock, wl: wl, logf: t.Logf}
+	must(t, wl.offer("text/plain", []byte("stall")))
+	if err := b.fromWayland("data"); !errors.Is(err, errStalled) {
+		t.Fatalf("a source that never ends its data: %v", err)
+	}
+	// Killed with wl-paste: the copying child.
+	pid, err := os.ReadFile(stalled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		stat, err := os.ReadFile("/proc/" + strings.TrimSpace(string(pid)) + "/stat")
+		if err != nil || strings.Contains(string(stat), ") Z ") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the stalled child %s still runs", pid)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The next change still crosses.
+	must(t, wl.offer("text/plain", []byte("after")))
+	must(t, b.fromWayland("data"))
+	if ev := appEvent(t, ctl); ev.Text != "after" {
+		t.Errorf("app event = %+v", ev)
 	}
 }

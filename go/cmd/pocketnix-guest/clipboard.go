@@ -43,9 +43,17 @@ const (
 	hookDrainWait = 5 * time.Second
 	// offerWait bounds wl-copy's taking of the selection.
 	offerWait = 10 * time.Second
+	// pasteWait bounds a wl-paste: a client may offer data it never ends,
+	// and the bridge serves both directions in one loop.
+	pasteWait = 10 * time.Second
+	// maxTypeList bounds the bytes of an offer's type list.
+	maxTypeList = 64 << 10
 )
 
-var errTooLarge = errors.New("too large to cross")
+var (
+	errTooLarge = errors.New("too large to cross")
+	errStalled  = errors.New("the client offering it stopped sending")
+)
 
 // clipboardBridge runs the bridge until wl-paste ends (the compositor went away).
 func clipboardBridge(args []string) error {
@@ -369,36 +377,59 @@ func pickType(types []string) string {
 }
 
 // wlClipboard is the Wayland selection through wl-clipboard's programs.
-type wlClipboard struct{}
+type wlClipboard struct {
+	// wait bounds each wl-paste; zero is pasteWait.
+	wait time.Duration
+}
 
-func (wlClipboard) types() ([]string, error) {
-	out, err := exec.Command("wl-paste", "--list-types").Output()
+func (c wlClipboard) types() ([]string, error) {
+	out, err := c.paste(maxTypeList, "--list-types")
 	if err != nil {
-		return nil, fmt.Errorf("wl-paste --list-types: %w", err)
+		return nil, err
 	}
 	// One per line; a type's parameters may hold spaces.
 	return strings.FieldsFunc(string(out), func(r rune) bool { return r == '\n' }), nil
 }
 
-func (wlClipboard) read(t string, limit int64) ([]byte, error) {
-	cmd := exec.Command("wl-paste", "--no-newline", "--type", t)
-	out, err := cmd.StdoutPipe()
+func (c wlClipboard) read(t string, limit int64) ([]byte, error) {
+	return c.paste(limit, "--no-newline", "--type", t)
+}
+
+// paste runs wl-paste with args and returns its output, failing with
+// errTooLarge past limit bytes and errStalled once its wait is up.
+func (c wlClipboard) paste(limit int64, args ...string) ([]byte, error) {
+	r, w, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
-	if err := cmd.Start(); err != nil {
+	defer r.Close()
+	cmd := exec.Command("wl-paste", args...)
+	cmd.Stdout = w
+	cmd.Stderr = os.Stderr
+	// wl-paste leaves the copying to a cat holding w, which a kill must reach too.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	err = cmd.Start()
+	w.Close()
+	if err != nil {
 		return nil, err
 	}
-	data, err := io.ReadAll(io.LimitReader(out, limit+1))
-	if int64(len(data)) > limit {
-		cmd.Process.Kill()
-		cmd.Wait()
+	r.SetReadDeadline(time.Now().Add(cmp.Or(c.wait, pasteWait)))
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil || int64(len(data)) > limit {
+		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	werr := cmd.Wait()
+	switch {
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		return nil, errStalled
+	case err != nil:
+		return nil, err
+	case int64(len(data)) > limit:
 		return nil, errTooLarge
+	case werr != nil:
+		return nil, fmt.Errorf("wl-paste %s: %w", args[0], werr)
 	}
-	if werr := cmd.Wait(); err == nil && werr != nil {
-		err = fmt.Errorf("wl-paste: %w", werr)
-	}
-	return data, err
+	return data, nil
 }
 
 // offer runs wl-copy, which exits once the compositor has its selection and
