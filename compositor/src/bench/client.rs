@@ -82,6 +82,7 @@ struct Opts {
     res: f64,
     scroll: u32,
     rect: u32,
+    full_damage: bool,
     fullscreen: bool,
     timeout: f64,
     stats: Vec<(String, PathBuf)>,
@@ -96,6 +97,7 @@ fn parse(args: &[String]) -> Result<Opts> {
         res: 1.0,
         scroll: 8,
         rect: 64,
+        full_damage: false,
         fullscreen: false,
         timeout: 60.0,
         stats: Vec::new(),
@@ -121,6 +123,7 @@ fn parse(args: &[String]) -> Result<Opts> {
             "--res" => o.res = parsed(&mut it, arg)?,
             "--scroll" => o.scroll = parsed(&mut it, arg)?,
             "--rect" => o.rect = parsed(&mut it, arg)?,
+            "--full-damage" => o.full_damage = true,
             "--fullscreen" => o.fullscreen = true,
             "--timeout" => o.timeout = parsed(&mut it, arg)?,
             "--no-default-stats" => default_stats = false,
@@ -470,6 +473,8 @@ impl Bench {
             let px = buffers.pixels(i);
             match self.opts.mode {
                 Mode::Noise => noise(px, 0x9e37_79b9_7f4a_7c15 ^ (i as u64 + 1) * 0x1234_5678_9abc_def1),
+                // Buffers that differ outside the rect would change every row they show.
+                Mode::Rect if self.opts.full_damage => gradient(px, w, h, 0),
                 Mode::Gradient | Mode::Rect | Mode::Idle => gradient(px, w, h, i * 37),
                 Mode::Touch => fill(px, COLORS[0]),
                 Mode::Scroll => {}
@@ -532,7 +537,7 @@ impl Bench {
                         p.copy_from_slice(&c);
                     }
                 }
-                (x0, y0, side, side)
+                if self.opts.full_damage { (0, 0, w, h) } else { (x0, y0, side, side) }
             }
             Mode::Scroll => {
                 let row = w as usize * 4;

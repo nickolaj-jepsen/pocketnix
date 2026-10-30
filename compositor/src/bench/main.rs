@@ -24,7 +24,7 @@ const USAGE: &str = "usage: pocketnix-gui-bench <command> [flags]
 
 commands:
   client [--mode noise|gradient|scroll|rect|idle|touch] [--duration SECS] [--warmup SECS]
-         [--rate HZ] [--res FACTOR] [--scroll PX] [--rect PX] [--fullscreen]
+         [--rate HZ] [--res FACTOR] [--scroll PX] [--rect PX] [--full-damage] [--fullscreen]
          [--stats NAME=SOCKET]... [--no-default-stats] [--timeout SECS]
       Opens one window and draws into it: a new frame on every frame callback
       (--rate 0, the default) or at most HZ a second. Prints one JSON object
@@ -35,7 +35,9 @@ commands:
         gradient  every frame a whole buffer of a shifted gradient
         scroll    text-like rows scrolling --scroll PX a frame, damaging the
                   whole buffer (as terminals do)
-        rect      a --rect PX square changing colour, damaging only it
+        rect      a --rect PX square changing colour, damaging only it, or
+                  the whole buffer with --full-damage (as clients that don't
+                  track damage do)
         idle      one frame, then nothing
         touch     a new colour on each touch or button press: the input's
                   latency to its frame callback

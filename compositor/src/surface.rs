@@ -208,23 +208,31 @@ impl Surf {
         }
         let area: u64 = rects.iter().map(Rect::area).sum();
         let whole = width as u64 * height as u64;
-        if area as f64 >= whole as f64 * MAX_PATCH_FRACTION {
-            let scrollable = self.pending.scroll.is_none() && self.pending.rects.is_empty();
-            let old_hashes = scrollable.then(|| m.row_hashes.clone());
+        let rects = if area as f64 >= whole as f64 * MAX_PATCH_FRACTION {
+            let old_hashes = m.row_hashes.clone();
             m.take_whole(src, stride);
-            if let Some(old_hashes) = old_hashes {
+            // Damage that overstates the change: send the rows that differ.
+            let same: Vec<bool> = old_hashes.iter().zip(&m.row_hashes).map(|(a, b)| a == b).collect();
+            let unchanged = same.iter().filter(|s| **s).count();
+            // A scroll is relative to the app's content, which pending changes have left behind.
+            if self.pending.scroll.is_none() && self.pending.rects.is_empty() {
                 let (dy, matched) = detect_scroll(&old_hashes, &m.row_hashes);
                 let n = matched.iter().filter(|m| **m).count();
-                if dy != 0 && n * 2 > height as usize {
+                if dy != 0 && n > unchanged && n * 2 > height as usize {
                     self.pending.scroll = Some(dy as i32);
                     self.pending.rects = unmatched_rows(&matched, width);
                     return;
                 }
             }
-            self.pending.full = true;
-            return;
-        }
-        m.copy_rects(src, stride, &rects);
+            if unchanged * 2 <= height as usize {
+                self.pending.full = true;
+                return;
+            }
+            unmatched_rows(&same, width)
+        } else {
+            m.copy_rects(src, stride, &rects);
+            rects
+        };
         self.pending.rects.extend(rects);
         if self.pending.rects.len() > protocol::MAX_RECTS {
             self.pending.rects = vec![bounding(&self.pending.rects)];
@@ -493,6 +501,38 @@ mod tests {
         s.apply_buffer(scrolled, w, h, stride, 1, vec![Rect { x: 0, y: 0, w, h }], true);
         assert_eq!(s.pending.scroll, Some(7));
         assert_eq!(apply_as_app(&app, &s), wire(scrolled));
+    }
+
+    #[test]
+    fn whole_damage_sends_only_the_rows_that_changed() {
+        let (w, h) = (16, 40);
+        let stride = w as usize * 4;
+        let first = image(w, h, 0);
+        let mut s = Surf::new(1);
+        s.apply_buffer(&first, w, h, stride, 1, vec![], false);
+        let app = s.mirror.as_ref().unwrap().pixels.clone();
+        s.pending = Pending::default();
+
+        let mut next = first.clone();
+        for b in &mut next[12 * stride + 8..12 * stride + 12] {
+            *b ^= 0xff;
+        }
+        s.apply_buffer(&next, w, h, stride, 1, vec![Rect { x: 0, y: 0, w, h }], true);
+        assert!(!s.pending.full);
+        assert_eq!(s.pending.scroll, None);
+        assert_eq!(s.pending.rects, vec![Rect { x: 0, y: 12, w, h: 1 }]);
+        assert_eq!(apply_as_app(&app, &s), wire(&next));
+    }
+
+    #[test]
+    fn whole_damage_without_a_change_sends_no_pixels() {
+        let (w, h) = (16, 40);
+        let first = image(w, h, 0);
+        let mut s = Surf::new(1);
+        s.apply_buffer(&first, w, h, w as usize * 4, 1, vec![], false);
+        s.pending = Pending::default();
+        s.apply_buffer(&first, w, h, w as usize * 4, 1, vec![Rect { x: 0, y: 0, w, h }], true);
+        assert!(!s.pending.full && s.pending.scroll.is_none() && s.pending.rects.is_empty());
     }
 
     #[test]
