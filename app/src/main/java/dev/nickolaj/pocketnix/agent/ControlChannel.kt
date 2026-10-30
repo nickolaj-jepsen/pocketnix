@@ -56,6 +56,15 @@ class ControlChannel(
     /** The agent's last wake push; it comes on connect, so a stale one only outlives a dropped stream. */
     val wake: StateFlow<Wake?> = _wake.asStateFlow()
 
+    private val _portListeners = MutableStateFlow<PortListeners?>(null)
+
+    /**
+     * The agent's last listener snapshot, pushed on connect and on change
+     * while forwardOffers is on. A dropped stream, or a reload that turns
+     * offers off, leaves the last one in place.
+     */
+    val portListeners: StateFlow<PortListeners?> = _portListeners.asStateFlow()
+
     private val _events = MutableSharedFlow<JSONObject>(extraBufferCapacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     /** The agent's other pushes (go/internal/protocol/integrations.go). */
@@ -179,6 +188,8 @@ class ControlChannel(
 
             type == "wake" -> _wake.value = Wake.parse(msg)
 
+            type == PortListeners.TYPE -> PortListeners.parse(msg)?.let { _portListeners.value = it } ?: Log.w(TAG, "malformed $type push")
+
             type == "error" -> p?.takeIf { it.answers(msg) }?.answer?.complete(Result.failure(AgentException(msg.optString("message"))))
                 ?: Log.w(TAG, "agent error: ${msg.optString("message")}")
 
@@ -247,6 +258,7 @@ class ControlChannel(
         _config.value = null
         _updates.value = null
         _wake.value = null
+        _portListeners.value = null
     }
 
     private companion object {
