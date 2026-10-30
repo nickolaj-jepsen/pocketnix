@@ -31,6 +31,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -68,6 +69,7 @@ import dev.nickolaj.pocketnix.gui.TabStripItem
 import dev.nickolaj.pocketnix.gui.WindowMenu
 import dev.nickolaj.pocketnix.gui.WindowSurface
 import dev.nickolaj.pocketnix.gui.closingWindows
+import dev.nickolaj.pocketnix.gui.guard
 import dev.nickolaj.pocketnix.gui.stopQuestion
 import dev.nickolaj.pocketnix.gui.tabStrip
 import dev.nickolaj.pocketnix.gui.windowMenu
@@ -123,7 +125,6 @@ fun MainScreen(vm: Vm) {
     val keyboardHeight = (imeBottom - WindowInsets.systemBars.getBottom(density)).coerceAtLeast(0)
     SideEffect { windowSurface?.keyboardHeight = keyboardHeight }
     LaunchedEffect(imeBottom > 0, windowSurface) { if (imeBottom == 0) windowSurface?.ime?.keyboardHidden() }
-    var keepScreenOn by remember { mutableStateOf(vm.settings.keepScreenOn) }
 
     // Resumes count: `pocketnix provision` grants and pushes while the app is open.
     var resumes by remember { mutableIntStateOf(0) }
@@ -152,14 +153,15 @@ fun MainScreen(vm: Vm) {
         )
     }
 
+    // The terminal tab being renamed, from its long-press menu.
+    var renaming by remember { mutableStateOf<Tab?>(null) }
+    renaming?.let { tab -> RenameDialog(tab.title, onDismiss = { renaming = null }) { vm.tabs.rename(tab.id, it) } }
+
     if (showSettings) SettingsDialog(vm) { showSettings = false }
     if (showUpdates) UpdatesDialog(vm) { showUpdates = false }
     if (showPalette) PaletteDialog(vm, controller) { showPalette = false }
 
     val running = state == VmState.Running || state == VmState.Starting
-    val agentUp = link is ControlChannel.Link.Up
-    // The debug TCP backend has no console, so no boot menu.
-    val ownsGuest = vm.engine.collectAsState().value.ownsGuest
     Column(
         Modifier
             .fillMaxSize()
@@ -180,51 +182,19 @@ fun MainScreen(vm: Vm) {
             onComposer = { composerOpen = !composerOpen },
             updateAvailable = updates?.available != null,
             onUpdates = { showUpdates = true }
-        ) { dismiss ->
-            if (config?.gui?.enable == true || vm.gui.catalog.apps.isNotEmpty()) {
-                MenuItem("Apps") {
-                    dismiss()
-                    context.startActivity(Intent(context, LauncherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                }
-            }
-            if (shownWindow != 0) {
-                MenuItem(MOVE_OUT) {
-                    dismiss()
-                    vm.gui.move(shownWindow, "")
-                }
-            }
-            MenuItem("Commands", enabled = agentUp) {
-                dismiss()
-                showPalette = true
-            }
-            MenuItem("System and updates", enabled = agentUp) {
-                dismiss()
-                showUpdates = true
-            }
-            MenuItem("Settings") {
-                dismiss()
-                showSettings = true
-            }
-            MenuItem(if (keepScreenOn) "✓ Keep screen on" else "Keep screen on") {
-                dismiss()
-                keepScreenOn = !keepScreenOn
-                controller.setKeepScreenOn(keepScreenOn)
-            }
-            if (running) {
-                MenuItem("Reboot", enabled = agentUp) {
-                    dismiss()
-                    confirm = "Reboot the guest? Every tab ends. ${closingWindows(vm.gui.windowTitles())}".trim() to vm::reboot
-                }
-                if (ownsGuest) {
-                    MenuItem("Restart with boot menu") {
-                        dismiss()
-                        confirm = "Restart into the boot menu? This stops the guest at once, without shutting it down." to vm::restartWithBootMenu
-                    }
-                }
-            } else if (ownsGuest) {
-                MenuItem("Start with boot menu", enabled = missing.isEmpty()) {
-                    dismiss()
-                    vm.start(bootMenu = true)
+        ) {
+            mainMenu(mainMenuState(context, vm, shownWindow)) { item ->
+                when (item) {
+                    MainItem.APPS -> context.startActivity(Intent(context, LauncherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    MainItem.MOVE_OUT -> vm.gui.move(shownWindow, "")
+                    MainItem.REOPEN_ENDED -> vm.reopenEndedTabs()
+                    MainItem.COMMANDS -> showPalette = true
+                    MainItem.UPDATES -> showUpdates = true
+                    MainItem.SETTINGS -> showSettings = true
+                    MainItem.KEEP_SCREEN_ON -> controller.setKeepScreenOn(!vm.settings.keepScreenOn)
+                    MainItem.REBOOT -> confirm = "Reboot the guest? Every tab ends. ${closingWindows(vm.gui.windowTitles())}".trim() to vm::reboot
+                    MainItem.RESTART_BOOT_MENU -> confirm = "Restart into the boot menu? This stops the guest at once, without shutting it down." to vm::restartWithBootMenu
+                    MainItem.START_BOOT_MENU -> vm.start(bootMenu = true)
                 }
             }
         }
@@ -269,6 +239,7 @@ fun MainScreen(vm: Vm) {
             onSelectWindow = vm.tabs::selectWindow,
             // The client decides: it may ask about unsaved work first.
             onCloseWindow = vm.gui::requestClose,
+            tabMenu = { tab -> chipMenu(vm, tab) { renaming = tab } },
             windowMenu = { id ->
                 windowMenu(
                     vm.gui,
@@ -344,9 +315,22 @@ internal fun statusText(phase: VmPhase): String = when (phase) {
     VmPhase.Booting -> "Booting (waiting for the agent)"
 }
 
+/** Asks for a tab's new title, starting from [current]; an empty one clears the user's. */
 @Composable
-private fun MenuItem(text: String, enabled: Boolean = true, onClick: () -> Unit) {
-    DropdownMenuItem(text = { Text(text) }, enabled = enabled, onClick = onClick)
+private fun RenameDialog(current: String, onDismiss: () -> Unit, onRename: (String) -> Unit) {
+    var title by remember { mutableStateOf(current) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rename tab") },
+        text = { OutlinedTextField(title, { title = it }, singleLine = true, modifier = Modifier.fillMaxWidth()) },
+        confirmButton = {
+            TextButton(onClick = {
+                onDismiss()
+                guard("renaming the tab") { onRename(title) }
+            }) { Text("Rename") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 @Composable
@@ -360,17 +344,18 @@ private fun StatusBar(
     onComposer: () -> Unit,
     updateAvailable: Boolean,
     onUpdates: () -> Unit,
-    menuItems: @Composable (dismiss: () -> Unit) -> Unit
+    /** The ⋮ menu, read when it opens. */
+    menu: () -> List<MenuAction>
 ) {
-    var menu by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(status, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         if (updateAvailable) TextButton(onClick = onUpdates) { Text("Update") }
         TextButton(onClick = onComposer) { Text(if (composerOpen) "Keys" else "Compose") }
         Box {
             // A TextButton tints its text with the accent; the menu glyph stays the text colour.
-            TextButton(onClick = { menu = true }) { Text("⋮", color = MaterialTheme.colorScheme.onBackground) }
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) { menuItems { menu = false } }
+            TextButton(onClick = { menuOpen = true }) { Text("⋮", color = MaterialTheme.colorScheme.onBackground) }
+            WindowMenu(menuOpen, onDismiss = { menuOpen = false }, items = menu)
         }
         if (running) {
             OutlinedButton(onClick = onStop) { Text("Stop") }
@@ -391,6 +376,8 @@ private fun TabRow(
     onClose: (Int) -> Unit,
     onSelectWindow: (Int) -> Unit,
     onCloseWindow: (Int) -> Unit,
+    /** A terminal tab's long-press menu, read when it opens. */
+    tabMenu: (Tab) -> List<MenuAction>,
     /** A window tab's menu, read when it opens. */
     windowMenu: (Int) -> List<MenuAction>,
     onOpen: (String?) -> Unit
@@ -406,14 +393,18 @@ private fun TabRow(
             when (item) {
                 is TabStripItem.Terminal -> {
                     val tab = item.tab
-                    val ended = !tab.session.isRunning && tab.kind != Tab.Kind.Console
-                    TabChip(
-                        mark = if (tab.attention) "● " else "",
-                        title = tab.title + if (ended) " (ended)" else "",
-                        selected = selectedWindow == 0 && tab.id == selected,
-                        onSelect = { onSelect(tab.id) },
-                        onClose = if (tab.kind != Tab.Kind.Console) ({ onClose(tab.id) }) else null
-                    )
+                    var tabMenuOpen by remember(tab.id) { mutableStateOf(false) }
+                    Box {
+                        TabChip(
+                            mark = if (tab.attention) "● " else "",
+                            title = tab.title + if (tab.ended) " (ended)" else "",
+                            selected = selectedWindow == 0 && tab.id == selected,
+                            onSelect = { onSelect(tab.id) },
+                            onLongPress = { tabMenuOpen = true },
+                            onClose = if (tab.kind != Tab.Kind.Console) ({ onClose(tab.id) }) else null
+                        )
+                        WindowMenu(tabMenuOpen, onDismiss = { tabMenuOpen = false }) { tabMenu(tab) }
+                    }
                 }
 
                 is TabStripItem.Window -> {
