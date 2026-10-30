@@ -3,6 +3,7 @@ package dev.nickolaj.pocketnix
 import android.content.Context
 import androidx.core.content.edit
 import dev.nickolaj.pocketnix.engine.VmSettings
+import org.json.JSONObject
 
 /** What the app UI owns: set-once hardware, and in debug builds the backend. */
 class Settings(context: Context) {
@@ -63,6 +64,13 @@ class Settings(context: Context) {
     var wakeLocks: Boolean
         get() = prefs.getBoolean("wakeLocks", true)
         set(v) = prefs.edit { putBoolean("wakeLocks", v) }
+
+    /** The module's last terminal colours, so a cold start draws them before the agent sends them; null before the first. */
+    var terminalColors: Map<String, String>?
+        get() = prefs.getString("terminalColors", null)?.let { s ->
+            runCatching { JSONObject(s).let { o -> o.keys().asSequence().associateWith { o.getString(it) } } }.getOrNull()
+        }
+        set(v) = prefs.edit { if (v == null) remove("terminalColors") else putString("terminalColors", JSONObject(v).toString()) }
 
     fun vm() = VmSettings(memoryMb = memoryMb, cpus = cpus, diskGb = diskGb, network = network, audio = audio)
 

@@ -102,6 +102,9 @@ class Vm(private val app: Context) {
     private val _themeRevision = MutableStateFlow(0)
     val themeRevision: StateFlow<Int> = _themeRevision.asStateFlow()
 
+    /** Where the terminal colours came from: default, saved or module. */
+    private var themeSource = "default"
+
     private val _agentLate = MutableStateFlow(false)
 
     /** The guest runs but its agent hasn't answered in [AGENT_LATE_MS]: maybe a generation that won't boot. */
@@ -139,6 +142,7 @@ class Vm(private val app: Context) {
     val hostFolders = HostFolderLinks(control, appVersion) { SafFolder(app.contentResolver, android.net.Uri.parse(it.uri)) }
 
     init {
+        settings.terminalColors?.let { applyColors(it, "saved") }
         tabs.alerts = TabAlerts(app) { control.config.value?.hostname }
         gui.selectTab = tabs::selectWindow
         scope.launch { gui.tabWindows.collect { ws -> tabs.windowsChanged(ws.map { it.id }) } }
@@ -236,7 +240,8 @@ class Vm(private val app: Context) {
         scope.launch {
             control.config.map { it?.theme }.distinctUntilChanged().collect { theme ->
                 if (theme == null) return@collect
-                applyColors(theme.colors)
+                applyColors(theme.colors, "module")
+                settings.terminalColors = theme.colors
                 loadFont(theme.font, theme.fontSha256)
             }
         }
@@ -436,12 +441,13 @@ class Vm(private val app: Context) {
     }
 
     /**
-     * Debug builds, over adb, on the main thread: the VM's state and [phase], the last
-     * [lines] of every tab's transcript (only tab [only]'s if given) and,
-     * for all tabs, the GUI windows.
+     * Debug builds, over adb, on the main thread: the VM's state and [phase], the
+     * terminal background and where it came from, the last [lines] of every tab's
+     * transcript (only tab [only]'s if given) and, for all tabs, the GUI windows.
      */
     fun debugDump(only: Int?, lines: Int): List<String> = buildList {
         add("state=${state.value} phase=${phase.value} link=${control.link.value} host=${control.config.value?.hostname}")
+        add("theme background=#%06x source=$themeSource".format(TerminalTheme.background and 0xffffff))
         val shown = tabs.all().filter { only == null || it.id == only }
         if (shown.isEmpty()) error("no tab $only")
         for (tab in shown) {
@@ -455,7 +461,8 @@ class Vm(private val app: Context) {
     /** Debug builds, over adb: the GUI link's [GuiSession.stats] as JSON. */
     fun debugStats(): String = gui.stats().toString()
 
-    private fun applyColors(colors: Map<String, String>) {
+    private fun applyColors(colors: Map<String, String>, source: String) {
+        themeSource = source
         TerminalTheme.apply(colors)
         for (tab in tabs.all()) tab.session.emulator?.mColors?.reset()
         _themeRevision.value++
