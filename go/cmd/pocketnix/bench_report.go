@@ -158,6 +158,7 @@ func runMetrics(r map[string]any) map[string]float64 {
 		"bufferH":     num(c("window", "bufferHeight")),
 		"appInput50":  quantileMs(dig(r, "app", "histograms", "inputToCommitted"), 0.5),
 		"appCommit50": quantileMs(dig(r, "app", "histograms", "applyToCommitted"), 0.5),
+		"mainLock95":  quantileMs(dig(r, "app", "histograms", "mainLockWait"), 0.95),
 	}
 	// The app's work a group, or the sink's on the desktop.
 	if app, ok := dig(r, "app", "counters").(map[string]any); ok {
@@ -286,13 +287,13 @@ func benchReport(dir, baseline string) (string, error) {
 	t.Flush()
 	fmt.Fprintf(&sb, "\nstages, ms a frame (compositor: take = shm copy and scroll detection per buffer, pack, compress; app: decode, buffer copy, fence wait), and latencies in ms\n\n")
 	t = tabwriter.NewWriter(&sb, 0, 0, 2, ' ', tabwriter.AlignRight)
-	fmt.Fprintln(t, "workload\ttake\tpack\tcompress\tslowest shard\tall shards\tdecode\tcopy\tfence\tsent→presented p50\tSF commit p50\tapp input→shown p50\t")
+	fmt.Fprintln(t, "workload\ttake\tpack\tcompress\tslowest shard\tall shards\tdecode\tcopy\tfence\tsent→presented p50\tSF commit p50\tapp input→shown p50\tmain thread's lock wait p95\t")
 	for _, w := range runs {
-		fmt.Fprintf(t, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\n", w.name,
+		fmt.Fprintf(t, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\n", w.name,
 			f1(w.median("takeMs")), f1(w.median("packMs")), f1(w.median("compressMs")),
 			f1(w.median("shardMaxMs")), f1(w.median("shardSumMs")),
 			f1(w.median("decodeMs")), f1(w.median("copyMs")), f1(w.median("fenceMs")),
-			f1(w.median("present50")), f1(w.median("appCommit50")), f1(w.median("appInput50")))
+			f1(w.median("present50")), f1(w.median("appCommit50")), f1(w.median("appInput50")), f2(w.median("mainLock95")))
 	}
 	t.Flush()
 	if policies := vmPolicies(runs); len(policies) > 0 {
