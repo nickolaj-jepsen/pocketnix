@@ -260,13 +260,13 @@ null
 
 
 
-Offer a phone forward for each TCP port that ` pocketnix.guest.user `
-listens on, from 1024 up, on an address a forward reaches (` 0.0.0.0 `,
-` :: `, ` 127.0.0.1 ` or ` ::1 `) and not already in ` forwards `\. The app
-asks in a notification and picks the phone port: the same one, or
-the next free one above it\. An allowed forward lasts until its
-listener has been gone for a while or the guest reboots; put a port
-wanted for good in ` forwards `\.
+Offer a phone forward for each unprivileged TCP port that
+` pocketnix.guest.user ` listens on where a forward reaches it (any
+address, or loopback), unless another user listens there too or it
+is already in ` forwards `\. The app asks in a notification and picks
+the phone port: the same one, or the next free one above it\. An
+allowed forward lasts until its listener has been gone for a while
+or the guest reboots; put a port wanted for good in ` forwards `\.
 
 
 
