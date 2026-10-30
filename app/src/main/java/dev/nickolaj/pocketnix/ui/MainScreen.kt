@@ -25,9 +25,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -71,7 +71,6 @@ import dev.nickolaj.pocketnix.gui.tabStrip
 import dev.nickolaj.pocketnix.gui.windowMenu
 import dev.nickolaj.pocketnix.terminal.Modifiers
 import dev.nickolaj.pocketnix.terminal.Tab
-import dev.nickolaj.pocketnix.terminal.TerminalTheme
 
 @Composable
 fun MainScreen(vm: Vm) {
@@ -126,10 +125,6 @@ fun MainScreen(vm: Vm) {
         onPauseOrDispose {}
     }
     val missing = remember(state, showSettings, resumes) { missingRequirements(context, vm) }
-    // Recomputed on theme changes: the module's background frames the terminal.
-    val background = remember(themeRevision) { Color(TerminalTheme.background) }
-    val foreground = remember(themeRevision) { Color(TerminalTheme.foreground) }
-
     LaunchedEffect(selected, tabs, shownWindow) { if (shownWindow == 0) controller.show(vm.tabs.current()) }
     LaunchedEffect(typeface) { controller.setTypeface(typeface) }
     LaunchedEffect(themeRevision) { controller.redraw() }
@@ -161,7 +156,8 @@ fun MainScreen(vm: Vm) {
     Column(
         Modifier
             .fillMaxSize()
-            .background(background)
+            // The theme's background is the terminal's, so it frames the terminal.
+            .background(MaterialTheme.colorScheme.background)
             .safeDrawingPadding()
             .imePadding()
     ) {
@@ -169,7 +165,6 @@ fun MainScreen(vm: Vm) {
             status = statusText(phase),
             running = running,
             canStart = missing.isEmpty(),
-            foreground = foreground,
             onStart = { vm.start() },
             onStop = {
                 confirm = stopQuestion(vm.gui.windowTitles()) to vm::stop
@@ -227,12 +222,12 @@ fun MainScreen(vm: Vm) {
             }
         }
         for (e in forwardErrors) {
-            Text(e, color = foreground.copy(alpha = 0.8f), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 8.dp))
+            Text(e, color = LocalContentColor.current.copy(alpha = 0.8f), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 8.dp))
         }
         if (serviceRefused && running) {
             Text(
                 "Android refused the foreground service, so it may kill the VM with the app. Reopening the app retries.",
-                color = foreground.copy(alpha = 0.8f),
+                color = LocalContentColor.current.copy(alpha = 0.8f),
                 fontSize = 12.sp,
                 modifier = Modifier.padding(horizontal = 8.dp)
             )
@@ -241,7 +236,7 @@ fun MainScreen(vm: Vm) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "The agent hasn't answered. A generation that won't boot? The console tab shows the boot.",
-                    color = foreground.copy(alpha = 0.8f),
+                    color = LocalContentColor.current.copy(alpha = 0.8f),
                     fontSize = 12.sp,
                     modifier = Modifier.weight(1f)
                 )
@@ -249,7 +244,7 @@ fun MainScreen(vm: Vm) {
             }
         }
         if (missing.isNotEmpty() && state == VmState.Stopped) {
-            Requirements(missing, foreground, Modifier.padding(16.dp))
+            Requirements(missing, Modifier.padding(16.dp))
         }
         // Read for its side effect: titles and finished states redraw the row.
         revision.let {}
@@ -259,7 +254,6 @@ fun MainScreen(vm: Vm) {
             selectedWindow = shownWindow,
             profiles = config?.profiles?.map { it.name }.orEmpty(),
             canOpen = link is ControlChannel.Link.Up,
-            foreground = foreground,
             onSelect = vm.tabs::select,
             onClose = { id ->
                 val tab = tabs.firstOrNull { it.id == id }
@@ -305,7 +299,6 @@ fun MainScreen(vm: Vm) {
                 rows = extraKeyRows(config),
                 modifiers = ime.modifiers,
                 revision = modifierRevision,
-                foreground = foreground,
                 onKey = ime::extraKey
             )
         }
@@ -315,10 +308,9 @@ fun MainScreen(vm: Vm) {
                 rows = extraKeyRows(config),
                 modifiers = controller.modifiers,
                 revision = modifierRevision,
-                foreground = foreground,
                 onKey = controller::press
             )
-            if (composerOpen) Composer(controller, foreground)
+            if (composerOpen) Composer(controller)
         }
     }
 }
@@ -345,7 +337,6 @@ private fun StatusBar(
     status: String,
     running: Boolean,
     canStart: Boolean,
-    foreground: Color,
     onStart: () -> Unit,
     onStop: () -> Unit,
     composerOpen: Boolean,
@@ -356,16 +347,16 @@ private fun StatusBar(
 ) {
     var menu by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(status, color = foreground, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text(status, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         if (updateAvailable) TextButton(onClick = onUpdates) { Text("Update") }
         TextButton(onClick = onComposer) { Text(if (composerOpen) "Keys" else "Compose") }
         Box {
-            TextButton(onClick = { menu = true }) { Text("⋮", color = foreground) }
+            // A TextButton tints its text with the accent; the menu glyph stays the text colour.
+            TextButton(onClick = { menu = true }) { Text("⋮", color = MaterialTheme.colorScheme.onBackground) }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) { menuItems { menu = false } }
         }
         if (running) {
-            // The module's background may be dark under a light Material scheme.
-            OutlinedButton(onClick = onStop, colors = ButtonDefaults.outlinedButtonColors(contentColor = foreground)) { Text("Stop") }
+            OutlinedButton(onClick = onStop) { Text("Stop") }
         } else {
             Button(onClick = onStart, enabled = canStart) { Text("Start") }
         }
@@ -379,7 +370,6 @@ private fun TabRow(
     selectedWindow: Int,
     profiles: List<String>,
     canOpen: Boolean,
-    foreground: Color,
     onSelect: (Int) -> Unit,
     onClose: (Int) -> Unit,
     onSelectWindow: (Int) -> Unit,
@@ -389,6 +379,7 @@ private fun TabRow(
     onOpen: (String?) -> Unit
 ) {
     var menu by remember { mutableStateOf(false) }
+    val foreground = LocalContentColor.current
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -403,7 +394,6 @@ private fun TabRow(
                         mark = if (tab.attention) "● " else "",
                         title = tab.title + if (ended) " (ended)" else "",
                         selected = selectedWindow == 0 && tab.id == selected,
-                        foreground = foreground,
                         onSelect = { onSelect(tab.id) },
                         onClose = if (tab.kind != Tab.Kind.Console) ({ onClose(tab.id) }) else null
                     )
@@ -417,7 +407,6 @@ private fun TabRow(
                             mark = "▣ ",
                             title = w.title,
                             selected = w.id == selectedWindow,
-                            foreground = foreground,
                             onSelect = { onSelectWindow(w.id) },
                             onLongPress = { windowMenuOpen = true },
                             onClose = { onCloseWindow(w.id) }
@@ -453,11 +442,11 @@ private fun TabChip(
     mark: String,
     title: String,
     selected: Boolean,
-    foreground: Color,
     onSelect: () -> Unit,
     onClose: (() -> Unit)?,
     onLongPress: (() -> Unit)? = null
 ) {
+    val foreground = LocalContentColor.current
     Row(
         Modifier
             .background(if (selected) foreground.copy(alpha = 0.18f) else Color.Transparent, RoundedCornerShape(6.dp))
@@ -494,12 +483,12 @@ fun missingRequirements(context: Context, vm: Vm): List<Requirement> {
 }
 
 @Composable
-private fun Requirements(missing: List<Requirement>, foreground: Color, modifier: Modifier = Modifier) {
+private fun Requirements(missing: List<Requirement>, modifier: Modifier = Modifier) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Before the VM can start:", color = foreground, style = MaterialTheme.typography.titleMedium)
+        Text("Before the VM can start:", style = MaterialTheme.typography.titleMedium)
         for (r in missing) {
-            Text("✗ ${r.name}", color = foreground)
-            Text(r.fix, color = foreground.copy(alpha = 0.7f), style = MaterialTheme.typography.bodySmall)
+            Text("✗ ${r.name}")
+            Text(r.fix, color = LocalContentColor.current.copy(alpha = 0.7f), style = MaterialTheme.typography.bodySmall)
         }
         Spacer(Modifier.padding(4.dp))
     }

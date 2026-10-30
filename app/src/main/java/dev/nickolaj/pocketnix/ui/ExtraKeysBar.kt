@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -48,14 +50,14 @@ val defaultExtraKeys = listOf(
 /** The module's rows, or [defaultExtraKeys] while it has declared none. */
 fun extraKeyRows(config: GuestConfig?): List<List<ExtraKey>> = config?.extraKeys?.takeIf { it.isNotEmpty() } ?: defaultExtraKeys
 
-/** The module's extra-keys rows: tap a key, swipe up for its popup, hold to repeat. */
+/** The module's extra-keys rows, in the content colour: tap a key, swipe up for its popup, hold to repeat. */
 @Composable
-fun ExtraKeysBar(rows: List<List<ExtraKey>>, modifiers: Modifiers, revision: Int, foreground: Color, onKey: (String) -> Unit) {
+fun ExtraKeysBar(rows: List<List<ExtraKey>>, modifiers: Modifiers, revision: Int, onKey: (String) -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 2.dp)) {
         for (row in rows) {
             Row(Modifier.fillMaxWidth().height(40.dp)) {
                 for (key in row) {
-                    ExtraKeyButton(key, modifiers, revision, foreground, onKey, Modifier.weight(1f).fillMaxHeight())
+                    ExtraKeyButton(key, modifiers, revision, onKey, Modifier.weight(1f).fillMaxHeight())
                 }
             }
         }
@@ -63,7 +65,8 @@ fun ExtraKeysBar(rows: List<List<ExtraKey>>, modifiers: Modifiers, revision: Int
 }
 
 @Composable
-private fun ExtraKeyButton(key: ExtraKey, modifiers: Modifiers, revision: Int, foreground: Color, onKey: (String) -> Unit, modifier: Modifier) {
+private fun ExtraKeyButton(key: ExtraKey, modifiers: Modifiers, revision: Int, onKey: (String) -> Unit, modifier: Modifier) {
+    val foreground = LocalContentColor.current
     val scope = rememberCoroutineScope()
     val action = remember(key.key) { ExtraKeys.action(key.key) }
     val modState = (action as? KeyAction.Toggle)?.let { revision.let { _ -> modifiers.state(it.modifier) } }
@@ -133,7 +136,7 @@ private fun ExtraKeyButton(key: ExtraKey, modifiers: Modifiers, revision: Int, f
  * dictation; its text goes to the terminal as a bracketed paste.
  */
 @Composable
-fun Composer(controller: TerminalController, foreground: Color) {
+fun Composer(controller: TerminalController) {
     var text by rememberSaveable { mutableStateOf("") }
 
     // Kept when no running tab took it, so a dictated paragraph isn't lost to an ended tab.
@@ -146,7 +149,7 @@ fun Composer(controller: TerminalController, foreground: Color) {
             onValueChange = { text = it },
             modifier = Modifier.weight(1f),
             maxLines = 4,
-            placeholder = { Text("Compose", color = foreground.copy(alpha = 0.5f)) },
+            placeholder = { Text("Compose", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)) },
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = true)
         )
         TextButton(onClick = { send(submit = false) }) { Text("Paste") }

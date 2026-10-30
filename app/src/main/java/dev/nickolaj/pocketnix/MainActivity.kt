@@ -4,17 +4,26 @@ import android.Manifest
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color.TRANSPARENT
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import dev.nickolaj.pocketnix.terminal.TerminalTheme
 import dev.nickolaj.pocketnix.ui.MainScreen
-import dev.nickolaj.pocketnix.ui.PocketnixTheme
+import dev.nickolaj.pocketnix.ui.TerminalChromeTheme
+import dev.nickolaj.pocketnix.ui.isDarkBackground
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        // Through vm: making it applies the saved terminal colours.
+        systemBars(dark = vm.let { isDarkBackground(TerminalTheme.background) })
         openTab(intent)
         guestNotificationOpened(intent)
         // Tab notifications; `pocketnix provision` grants it, this asks otherwise. Asked once.
@@ -22,7 +31,13 @@ class MainActivity : ComponentActivity() {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
         }
         setContent {
-            PocketnixTheme {
+            val themeRevision by vm.themeRevision.collectAsState()
+            // TerminalTheme isn't snapshot state: the revision says when it changed.
+            val background = remember(themeRevision) { TerminalTheme.background }
+            val foreground = remember(themeRevision) { TerminalTheme.foreground }
+            val dark = isDarkBackground(background)
+            LaunchedEffect(dark) { systemBars(dark) }
+            TerminalChromeTheme(background, foreground) {
                 MainScreen(vm)
             }
         }
@@ -52,6 +67,12 @@ class MainActivity : ComponentActivity() {
         if (!hasFocus) return
         val clip = getSystemService(ClipboardManager::class.java)?.primaryClip?.takeIf { it.itemCount > 0 } ?: return
         vm.syncClipboard(clip)
+    }
+
+    /** Edge to edge, with bar icons that read on a [dark] or light terminal background. */
+    private fun systemBars(dark: Boolean) {
+        val style = if (dark) SystemBarStyle.dark(TRANSPARENT) else SystemBarStyle.light(TRANSPARENT, TRANSPARENT)
+        enableEdgeToEdge(style, style)
     }
 
     /** A tab notification opens its tab. */

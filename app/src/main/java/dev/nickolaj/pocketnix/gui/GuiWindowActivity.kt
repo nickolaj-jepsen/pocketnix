@@ -29,7 +29,9 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
@@ -176,13 +178,15 @@ class GuiWindowActivity :
         val typingRow: (@Composable () -> Unit)? = if (typing) {
             {
                 modifierRevision.let {}
-                ExtraKeysBar(
-                    rows = extraKeyRows(config),
-                    modifiers = s.ime.modifiers,
-                    revision = modifierRevision,
-                    foreground = BAR_TEXT,
-                    onKey = s.ime::extraKey
-                )
+                // The bar is dark whatever the system theme.
+                CompositionLocalProvider(LocalContentColor provides BAR_TEXT) {
+                    ExtraKeysBar(
+                        rows = extraKeyRows(config),
+                        modifiers = s.ime.modifiers,
+                        revision = modifierRevision,
+                        onKey = s.ime::extraKey
+                    )
+                }
             }
         } else {
             null
