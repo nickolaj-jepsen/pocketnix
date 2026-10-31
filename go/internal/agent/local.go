@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math/rand/v2"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -334,7 +334,7 @@ type drvInfo struct {
 func (u *Updater) showDerivations(drvs ...string) (map[string]drvInfo, error) {
 	info := map[string]drvInfo{}
 	for chunk := range slices.Chunk(drvs, 200) {
-		out, _, err := u.capture(envTimeout, append([]string{u.Nix}, nixArgs(append([]string{"derivation", "show"}, chunk...)...)...))
+		out, _, err := u.capture(envTimeout, opCmd{argv: append([]string{u.Nix}, nixArgs(append([]string{"derivation", "show"}, chunk...)...)...)})
 		if err != nil {
 			return nil, err
 		}
@@ -401,13 +401,20 @@ func nixArgs(args ...string) []string {
 	return append([]string{"--extra-experimental-features", "nix-command flakes"}, args...)
 }
 
-// throttled is the command line running name under the managed guest's
-// CPU quota, as user when set; without systemd-run (tests) it's name itself.
-func (u *Updater) throttled(m *ManagedConfig, user, name string, args ...string) []string {
+// opCmd is a command line and the transient unit it runs in, if any.
+type opCmd struct {
+	argv []string
+	unit string
+}
+
+// throttled is the command running name under the managed guest's CPU
+// quota, as user when set; without systemd-run (tests) it's name itself.
+func (u *Updater) throttled(m *ManagedConfig, user, name string, args ...string) opCmd {
 	if u.SystemdRun == "" {
-		return append([]string{name}, args...)
+		return opCmd{argv: append([]string{name}, args...)}
 	}
-	run := []string{u.SystemdRun, "--pipe", "--wait", "--collect", "--quiet", "--service-type=exec", "-p", "Nice=19", "-p", "IOSchedulingClass=idle"}
+	unit := fmt.Sprintf("pocketnix-op-%x", rand.Uint64())
+	run := []string{u.SystemdRun, "--unit=" + unit, "--pipe", "--wait", "--collect", "--quiet", "--service-type=exec", "-p", "Nice=19", "-p", "IOSchedulingClass=idle"}
 	if m != nil && m.CPUQuota != "" {
 		run = append(run, "-p", "CPUQuota="+m.CPUQuota)
 	}
@@ -416,16 +423,16 @@ func (u *Updater) throttled(m *ManagedConfig, user, name string, args ...string)
 	} else {
 		run = append(run, "-E", "HOME=/root")
 	}
-	return append(append(run, "--", name), args...)
+	return opCmd{argv: append(append(run, "--", name), args...), unit: unit}
 }
 
 // capture runs a command and returns its stdout and stderr, logging stderr
 // only when it fails.
-func (u *Updater) capture(timeout time.Duration, argv []string) (stdout, stderr string, err error) {
+func (u *Updater) capture(timeout time.Duration, c opCmd) (stdout, stderr string, err error) {
 	ctx, cancel := context.WithTimeout(u.opContext(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.WaitDelay = 5 * time.Second
+	argv := c.argv
+	cmd := u.command(ctx, c.unit, argv[0], argv[1:]...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
@@ -438,9 +445,9 @@ func (u *Updater) capture(timeout time.Duration, argv []string) (stdout, stderr 
 	return out.String(), errb.String(), nil
 }
 
-// runArgv is runCmd for a command line.
-func (u *Updater) runArgv(timeout time.Duration, out io.Writer, argv []string) error {
-	return u.runCmd(timeout, out, nil, argv[0], argv[1:]...)
+// runArgv is runCmd for an opCmd.
+func (u *Updater) runArgv(timeout time.Duration, out io.Writer, c opCmd) error {
+	return u.runIn(timeout, out, nil, c.unit, c.argv[0], c.argv[1:]...)
 }
 
 // block records what an operation stopped short of building.

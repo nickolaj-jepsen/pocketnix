@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/client"
@@ -459,5 +460,54 @@ func TestPruneAfterBootOncePerMarker(t *testing.T) {
 	h.srv.Updates.PruneAfterBoot(context.Background(), 0, marker)
 	if again, _ := ctl.Updates(); again.Op != u.Op {
 		t.Errorf("pruned again: op %d, then %d", u.Op, again.Op)
+	}
+}
+
+// A cancel stops the transient unit a throttled command runs in: killing
+// systemd-run's client alone leaves the command running.
+func TestManagedCancelStopsTheCommandsUnit(t *testing.T) {
+	g := newManagedGuest(t)
+	g.script(t, g.bin("nix"), fmt.Sprintf("echo $$ > %s/nix.pid\nexec sleep 600\n", g.dir))
+	// The unit's command outlives the client, as under systemd.
+	g.script(t, g.bin("systemd-run"), fmt.Sprintf(`
+for a; do
+  shift
+  case "$a" in --unit=*) unit=${a#--unit=} ;; --) break ;; esac
+done
+"$@" &
+echo $! > %[1]s/unit-$unit
+wait $!
+`, g.dir))
+	g.script(t, g.bin("systemctl"), fmt.Sprintf(`
+[ "$1" = stop ] || exit 2
+for unit; do :; done
+pid=$(cat %[1]s/unit-$unit)
+kill $pid
+while kill -0 $pid 2>/dev/null; do sleep 0.1; done
+`, g.dir))
+	ctl, h := startManaged(t, g)
+	h.srv.Updates.SystemdRun, h.srv.Updates.Systemctl = g.bin("systemd-run"), g.bin("systemctl")
+
+	if err := ctl.UpdateCheck(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctl.WaitUpdates(func(u protocol.Updates) bool { return u.State == protocol.UpdateChecking }); err != nil {
+		t.Fatal(err)
+	}
+	var pid int
+	eventually(t, "the evaluation to start", func() bool {
+		_, err := fmt.Sscan(g.read(t, "nix.pid"), &pid)
+		return err == nil
+	})
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+	if err := ctl.UpdateCancel(); err != nil {
+		t.Fatal(err)
+	}
+	u, err := ctl.WaitUpdates(func(u protocol.Updates) bool { return u.State == protocol.UpdateIdle })
+	if err != nil || u.Error != "cancelled" {
+		t.Fatalf("after cancel: %q, %v", u.Error, err)
+	}
+	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Errorf("the cancelled evaluation still runs (kill -0: %v)", err)
 	}
 }

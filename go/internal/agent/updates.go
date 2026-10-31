@@ -32,6 +32,8 @@ type Updater struct {
 	// SystemdRun runs switch-to-configuration in its own unit, as
 	// nixos-rebuild does, so it outlives the agent; empty runs it directly.
 	SystemdRun string
+	// Systemctl stops the units an operation's cancel leaves behind.
+	Systemctl string
 	// Profile is the system profile; generations are its "-<n>-link"s.
 	Profile string
 	// Current and Booted resolve to the running and the booted system.
@@ -84,6 +86,7 @@ func NewUpdater() *Updater {
 		Nix:        "nix",
 		NixEnv:     "nix-env",
 		SystemdRun: "systemd-run",
+		Systemctl:  "systemctl",
 		Profile:    "/nix/var/nix/profiles/system",
 		Current:    "/run/current-system",
 		Booted:     "/run/booted-system",
@@ -619,6 +622,11 @@ func (u *Updater) opContext() context.Context {
 // line; stdout goes to out instead when out is set. A cancel ends it, except
 // during a switch, which must not stop halfway.
 func (u *Updater) runCmd(timeout time.Duration, out io.Writer, env []string, name string, args ...string) error {
+	return u.runIn(timeout, out, env, "", name, args...)
+}
+
+// runIn is runCmd for a command that runs in unit, when unit is set.
+func (u *Updater) runIn(timeout time.Duration, out io.Writer, env []string, unit, name string, args ...string) error {
 	ctx := u.opContext()
 	u.mu.Lock()
 	if u.state == protocol.UpdateSwitching {
@@ -627,9 +635,7 @@ func (u *Updater) runCmd(timeout time.Duration, out io.Writer, env []string, nam
 	u.mu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...)
-	// A child that keeps the output pipe open mustn't hold the updater after a kill.
-	cmd.WaitDelay = 5 * time.Second
+	cmd := u.command(ctx, unit, name, args...)
 	if env != nil {
 		cmd.Env = append(os.Environ(), env...)
 	}
@@ -656,6 +662,24 @@ func (u *Updater) runCmd(timeout time.Duration, out io.Writer, env []string, nam
 		return fmt.Errorf("%s: %w", filepath.Base(cmd.Path), err)
 	}
 	return nil
+}
+
+// command is exec.CommandContext for an operation's command. When ctx ends,
+// it also stops unit, the transient unit the command runs in: killing
+// systemd-run's client leaves that running.
+func (u *Updater) command(ctx context.Context, unit, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	// A child that keeps the output pipe open mustn't hold the updater after a kill.
+	cmd.WaitDelay = 5 * time.Second
+	if unit != "" {
+		cmd.Cancel = func() error {
+			if out, err := exec.Command(u.Systemctl, "stop", "--no-ask-password", unit).CombinedOutput(); err != nil {
+				u.logf("stopping %s: %v: %s", unit, err, strings.TrimSpace(string(out)))
+			}
+			return cmd.Process.Kill()
+		}
+	}
+	return cmd
 }
 
 func (u *Updater) setState(s string) {
