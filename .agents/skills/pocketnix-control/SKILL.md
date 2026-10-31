@@ -29,7 +29,7 @@ attached (`adb devices`). `pocketnix control -h` lists the commands.
 
 | command | does |
 |---|---|
-| `dump [--tab <id>] [--lines <n>]` | Prints the VM state (`state=… phase=… link=… host=…`), the chrome's colours (`theme background=#rrggbb source=<default\|saved\|module>`: `saved` is the last module theme, applied before the agent answers), then each tab as `tab <id> <kind> '<title>' running=<bool>` followed by its last lines as `\|<id>\| <line>`, then `gui …` lines for the GUI connection and each window. `--tab` limits it to one tab and leaves out the GUI. |
+| `dump [--tab <id>] [--lines <n>]` | Prints the VM state (`state=… phase=… link=… host=…`), the chrome's colours (`theme background=#rrggbb source=<default\|saved\|module>`: `saved` is the last module theme, applied before the agent answers), the managed guest's setup and updates (`setup=… managed=<flake\|null>`, `updates …` lines once the agent reports updates, and their log's last lines as `\|log\| <line>`), then each tab as `tab <id> <kind> '<title>' running=<bool>` followed by its last lines as `\|<id>\| <line>`, then `gui …` lines for the GUI connection and each window. `--tab` limits it to one tab and leaves out the GUI. |
 | `tab [--profile <name>] [--timeout <dur>] [<text>]` | Waits for the agent, opens a terminal tab, types `<text>` and Enter, and prints the new tab's id. |
 | `type --tab <id> <text>` | Types `<text>` and Enter into an open tab. |
 | `wait --tab <id> [--timeout <dur>] [--lines <n>] <regexp>` | Polls the tab until one of its transcript lines matches, then prints the tab's dump. Exits 1 with the last dump if nothing matches in time. |
