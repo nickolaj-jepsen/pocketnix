@@ -74,8 +74,11 @@
             name = "package-index";
             runtimeInputs = [pkgs.nix pkgs.jq pkgs.gzip];
             text = ''
-              nix-env -f ${nixpkgs} -qaP --json --meta --arg config '{}' --argstr system aarch64-linux \
-                | jq -r 'to_entries[] | [.key, (.value.version // ""), (.value.meta.description // "")] | @tsv' \
+              # Only what installs on the guest: unfree, broken and x86-only packages fail
+              # its evaluation, and aliases repeat the attributes they name.
+              nix-env -f ${nixpkgs} -qaP --json --meta --arg config '{ allowAliases = false; }' --argstr system aarch64-linux \
+                | jq -r 'to_entries[] | select(.value.meta.available != false)
+                    | [.key, (.value.version // ""), (.value.meta.description // "")] | @tsv' \
                 | gzip -9 > "$1"
             '';
           });
