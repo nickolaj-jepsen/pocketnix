@@ -184,8 +184,9 @@
           touch $out
         '';
         # Evaluates a managed guest's seed flake against this checkout, the way
-        # the app configures one: its drv path. nix/managed has no pocketnix.json
-        # (the seed writes the module's selections), so its readFile gets these.
+        # the app configures one, and checks that its switches reach the system:
+        # its drv path. nix/managed has no pocketnix.json (the seed writes the
+        # module's selections), so its readFile gets these.
         managed = let
           selections = {
             user = "alice";
@@ -207,8 +208,19 @@
             }
             ./nix/managed/flake.nix;
           outputs = flake.outputs {pocketnix = self;};
+          system = outputs.nixosConfigurations.pocketnix.config;
+          guest = system.pocketnix.guest;
+          reached = {
+            "the user" = guest.user == selections.user;
+            "ssh's forward" = guest.forwards ? ssh;
+            "Desktop apps" = guest.gui.enable;
+            "Desktop apps' clipboard bridge" = system.systemd.user.services ? pocketnix-clipboard;
+            "Desktop apps' Android sound output" = system.services.pipewire.extraConfig.pipewire ? pocketnix-audio;
+          };
+          missing = builtins.attrNames (nixpkgs.lib.filterAttrs (_: ok: !ok) reached);
         in
-          pkgs.writeText "pocketnix-managed" (builtins.unsafeDiscardStringContext outputs.nixosConfigurations.pocketnix.config.system.build.toplevel.drvPath);
+          assert nixpkgs.lib.assertMsg (missing == []) "a managed guest's selections don't reach the system: ${nixpkgs.lib.concatStringsSep ", " missing}";
+            pkgs.writeText "pocketnix-managed" (builtins.unsafeDiscardStringContext system.system.build.toplevel.drvPath);
         # Evaluates the template against this checkout without building it: its systems' drv paths.
         template = let
           template = (import ./templates/default/flake.nix).outputs {
