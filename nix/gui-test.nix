@@ -14,15 +14,19 @@
   # after the replay that has that entry. With --type, it focuses that app's
   # window, presents its commits, commits "héllo " through its text input
   # and then types "wörld\n", waiting each time for the client to move its
-  # cursor.
+  # cursor. With --guest-ram, it says it maps guest RAM and asks for hashes,
+  # lists each PAGES commit's page addresses, and never releases them: after
+  # printing, it holds the connection, so the pages stay pinned, until killed.
   probe = pkgs.writers.writePython3Bin "gui-probe" {flakeIgnore = ["E501"];} ''
     import json
     import struct
     import subprocess
     import sys
+    import time
 
     JSON, COMMIT, COMMIT_DATA, ICON, PRESENTED = 0x00, 0x01, 0x02, 0x03, 0x10
     GROUPED = 1 << 4
+    PAGES = 2
     HEADER = ">HHIIIHBBBBHiiIIIIIIIIiIIIQ"
 
 
@@ -48,6 +52,9 @@
 
     args = sys.argv[1:]
     want = launch = wait_app = type_app = None
+    guest_ram = args[:1] == ["--guest-ram"]
+    if guest_ram:
+        args = args[1:]
     while args[:1] in (["--want-app"], ["--launch"], ["--wait-app"], ["--type"]):
         if args[0] == "--want-app":
             want = args[1]
@@ -59,7 +66,7 @@
             launch = args[1]
         args = args[2:]
     p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-    send_json(p.stdin, {"type": "hello", "version": 2, "minVersion": 2, "app": "gui-probe", "hashes": False})
+    send_json(p.stdin, {"type": "hello", "version": 2, "minVersion": 2, "app": "gui-probe", "hashes": guest_ram, "guestRam": guest_ram})
     out = {"toplevels": [], "surfaces": [], "commits": []}
     pending = None
     ready = False
@@ -148,7 +155,12 @@
             header_size, flags, surface, window, seq = f[:5]
             rects, length = f[22], f[23]
             c = {"surface": surface, "window": window, "seq": seq, "flags": flags, "dataLength": length}
-            c["received"] = len(payload) - header_size - 16 * rects
+            data = payload[header_size + 16 * rects:]
+            c["received"] = len(data)
+            if f[7] == PAGES:
+                c["data"] = bytearray(data)
+                c["hash"] = f[25]
+                c["pixelBytes"] = sum(w * h * 4 for _, _, w, h in struct.iter_unpack(">IIII", payload[header_size:header_size + 16 * rects]))
             out["commits"].append(c)
             # Typing needs the client to redraw, which waits for its frame callbacks.
             if type_app and not flags & GROUPED:
@@ -161,16 +173,22 @@
             if pending is None or pending["seq"] != seq:
                 sys.exit(f"COMMIT_DATA for {seq} outside its commit")
             pending["received"] += len(payload) - 4
+            if "data" in pending:
+                pending["data"] += payload[4:]
             if pending["received"] >= pending["dataLength"]:
                 pending = None
     for c in out["commits"]:
         if c["received"] != c["dataLength"]:
             sys.exit(f"commit {c['seq']}: {c['received']} bytes, dataLength {c['dataLength']}")
-    p.stdin.close()
-    p.terminate()
+        if "data" in c:
+            c["pages"] = [a for (a,) in struct.iter_unpack(">Q", c.pop("data")[4:])]
     if want and not any(t.get("appId") == want for t in out["toplevels"]):
         sys.exit(f"no {want} toplevel in {out['toplevels']}")
-    print(json.dumps(out))
+    print(json.dumps(out), flush=True)
+    while guest_ram:
+        time.sleep(60)
+    p.stdin.close()
+    p.terminate()
   '';
 in
   pkgs.testers.runNixOSTest {
@@ -178,7 +196,7 @@ in
     # gui.enable sets an overlay.
     node.pkgsReadOnly = false;
 
-    nodes.phone = {
+    nodes.phone = {config, ...}: {
       imports = [self.nixosModules.default ../example/configuration.nix];
       pocketnix.guest = {
         avf.enable = false;
@@ -191,17 +209,40 @@ in
       };
       environment.systemPackages = [pkgs.foot];
       virtualisation.memorySize = 2048;
-      # The phone's sound card, played nowhere.
-      virtualisation.qemu.options = ["-audiodev none,id=snd0" "-device virtio-sound-pci,audiodev=snd0"];
+      virtualisation.qemu.options = [
+        # The phone's sound card, played nowhere.
+        "-audiodev none,id=snd0"
+        "-device virtio-sound-pci,audiodev=snd0"
+        # RAM the host reads, as the app maps a phone guest's: the file guest-ram in the
+        # machine's state directory, QEMU's working directory.
+        "-object memory-backend-file,id=guest-ram,size=${toString config.virtualisation.memorySize}M,mem-path=guest-ram,share=on"
+        "-machine memory-backend=guest-ram"
+      ];
+      # Its memfd would take over guest RAM; the file above is shared memory too.
+      virtualisation.qemu.enableSharedMemory = false;
       # Test VMs leave it out unless asked; the switch subtest needs it.
       system.switch.enable = true;
     };
 
     testScript = {nodes, ...}: ''
       import json
+      import os
       import time
 
       A = "${cli}/bin/pocketnix agent --connect tcp:127.0.0.1:9100"
+
+
+      def content_hash(b):
+          """docs/gui-protocol.md's Content hash."""
+          m = (1 << 64) - 1
+          h = 0xcbf29ce484222325
+          whole = len(b) // 8 * 8
+          for i in range(0, whole, 8):
+              h = (h ^ int.from_bytes(b[i:i + 8], "little")) * 0x100000001b3 & m
+              h = (h << 29 | h >> 35) & m
+          for x in b[whole:]:
+              h = (h ^ x) * 0x100000001b3 & m
+          return h
 
 
       def user(cmd):
@@ -320,6 +361,19 @@ in
           foot = next(t for t in first["toplevels"] if t["appId"] == "foot")
           full = [c for c in first["commits"] if c["window"] == foot["id"] and c["flags"] & 0b11 == 0b11]
           assert full and all(c["dataLength"] > 0 for c in full), first["commits"]
+
+      with subtest("big frames cross as pages the agent pins, where the host reads them"):
+          phone.succeed(f"${probe}/bin/gui-probe --guest-ram --want-app foot {A} gui >/tmp/pages.json 2>/tmp/pages.err &")
+          phone.wait_until_succeeds("test -s /tmp/pages.json", timeout=60)
+          paged = json.loads(phone.succeed("cat /tmp/pages.json"))["commits"]
+          full = [c for c in paged if "pages" in c and c["flags"] & 0b11 == 0b11]
+          assert full, paged
+          # On x86's pc machine, guest RAM below 4 GiB is the file at its guest-physical address.
+          with open(phone.state_dir / "guest-ram", "rb") as ram:
+              for c in full:
+                  data = b"".join(os.pread(ram.fileno(), 4096, a) for a in c["pages"])[:c["pixelBytes"]]
+                  assert content_hash(data) == c["hash"], c["seq"]
+          phone.succeed("pkill -f 'gui-probe --guest-ram'")
 
       with subtest("windows outlive the agent"):
           phone.succeed("systemctl restart pocketnix-agent.service")
