@@ -45,15 +45,20 @@ func (s *Server) frameBuffers(c net.Conn, r *bufio.Reader, req protocol.GuestReq
 
 // writeWithFd writes v as a JSON line carrying fd (SCM_RIGHTS).
 func writeWithFd(c net.Conn, v any, fd int) error {
-	uc, ok := c.(*net.UnixConn)
-	if !ok {
-		return fmt.Errorf("a %T can't carry a descriptor", c)
-	}
 	line, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
-	_, _, err = uc.WriteMsgUnix(append(line, '\n'), unix.UnixRights(fd), nil)
+	return sendFd(c, append(line, '\n'), fd)
+}
+
+// sendFd writes payload to c, a unix socket, with a copy of fd attached (SCM_RIGHTS).
+func sendFd(c net.Conn, payload []byte, fd int) error {
+	uc, ok := c.(*net.UnixConn)
+	if !ok {
+		return fmt.Errorf("a %T can't carry a descriptor", c)
+	}
+	_, _, err := uc.WriteMsgUnix(payload, unix.UnixRights(fd), nil)
 	return err
 }
 

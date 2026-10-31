@@ -45,17 +45,13 @@ func handOver(c, g net.Conn) error {
 	if !ok {
 		return fmt.Errorf("a %T has no descriptor", c)
 	}
-	uc, ok := g.(*net.UnixConn)
-	if !ok {
-		return fmt.Errorf("the GUI socket is a %T", g)
-	}
 	rc, err := sc.SyscallConn()
 	if err != nil {
 		return err
 	}
 	var werr error
 	if err := rc.Control(func(fd uintptr) {
-		_, _, werr = uc.WriteMsgUnix([]byte{0}, unix.UnixRights(int(fd)), nil)
+		werr = sendFd(g, []byte{0}, int(fd))
 	}); err != nil {
 		return err
 	}
