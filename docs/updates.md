@@ -105,16 +105,17 @@ fetches it into a profile the next boot empties.
 ## Old generations
 
 After each boot, and after each switch, the agent deletes the system
-generations beyond the running and the booted one and collects the garbage;
-`pocketnix.guest.updates.keepGenerations` keeps more. A managed guest sets it
-from the app's Configure screen.
+generations besides the running and the booted one that
+`pocketnix.guest.updates.keepGenerations` doesn't keep (null keeps them all),
+and collects the garbage. A managed guest sets it from the app's Configure
+screen.
 
 ## Rollback
 
 Generations come from the system profile. Rolling back switches to an older
-one (`nix-env --switch-generation`, then `switch`). With the default
-`keepGenerations` of 0, the only older one is the booted system, and once a
-boot of the new one prunes, there is none.
+one (`nix-env --switch-generation`, then `switch`). With `keepGenerations`
+at 0, the only older one is the booted system, and once a boot of the new one
+prunes, there is none.
 
 ## A generation that won't boot
 
