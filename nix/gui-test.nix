@@ -277,15 +277,23 @@ in
           assert "NIXOS_OZONE_WL=1" in env, env
 
       with subtest("a switch brings GUI up in a user manager that's already running"):
-          # As before a switch that turns GUI on: no sockets, no Wayland display.
+          # As before a switch that turns GUI on, from a generation with the GPU on:
+          # no sockets, no Wayland display, and the GPU's variable.
           phone.succeed(user("systemctl --user stop pocketnix-gui.socket pocketnix-wayland.socket"))
           phone.succeed(user("systemctl --user unset-environment WAYLAND_DISPLAY NIXOS_OZONE_WL"))
+          phone.succeed(user("systemctl --user set-environment MESA_VK_WSI_DEBUG=sw POCKETNIX_SESSION_ENV=MESA_VK_WSI_DEBUG"))
           phone.succeed("/run/current-system/bin/switch-to-configuration test")
           phone.wait_for_unit("pocketnix-gui.socket", "nixos")
           phone.wait_for_unit("pocketnix-wayland.socket", "nixos")
           env = phone.succeed(user("systemctl --user show-environment"))
           assert "WAYLAND_DISPLAY=wayland-0" in env, env
           assert "NIXOS_OZONE_WL=1" in env, env
+          # Unset when this generation has the GPU off.
+          assert ("MESA_VK_WSI_DEBUG=sw" in env) == ${
+        if nodes.phone.pocketnix.guest.gpu.enable
+        then "True"
+        else "False"
+      }, env
 
       with subtest("a Wayland client starts the compositor"):
           phone.fail(user("systemctl --user is-active pocketnix-compositor.service"))

@@ -118,6 +118,24 @@
   # In the user's runtime directory, where the agent dials it as root.
   guiSocketName = "pocketnix-gui.sock";
   waylandDisplay = "wayland-0";
+
+  # The session variables the module sets, by what turns each on. pam_env
+  # puts them in the user manager's environment too, and so in user services
+  # and D-Bus-activated apps; tabs' login shells read them from /etc/profile.
+  sessionEnvs = [
+    {
+      on = cfg.gui.enable;
+      vars = {
+        WAYLAND_DISPLAY = waylandDisplay;
+        NIXOS_OZONE_WL = "1";
+      };
+    }
+    # Mesa's WSI copies each frame into a wl_shm buffer, the only kind the compositor takes.
+    {
+      on = cfg.gpu.enable;
+      vars.MESA_VK_WSI_DEBUG = "sw";
+    }
+  ];
   # gui.defaults' options, or with inheriting an app's, where null takes the default.
   appSettings = inheriting: let
     opt = values: default: description:
@@ -1129,6 +1147,32 @@ in {
       };
     })
 
+    (let
+      on = lib.foldl' (vars: e: vars // lib.optionalAttrs e.on e.vars) {} sessionEnvs;
+      # Each of them the system sets, this module or not.
+      kept = lib.concatStringsSep "," (lib.attrNames config.environment.sessionVariables);
+      systemctl = "${config.systemd.package}/bin/systemctl";
+    in {
+      environment.sessionVariables = on;
+      # A switch finds the user manager running, its environment set by pam_env
+      # when it started. The manager's POCKETNIX_SESSION_ENV lists what this
+      # set, so a switch turning an option off unsets only what the module set.
+      system.userActivationScripts.pocketnix-env = ''
+        was=$(${systemctl} --user show-environment | ${pkgs.gnused}/bin/sed -n 's/^POCKETNIX_SESSION_ENV=//p')
+        for n in ''${was//,/ }; do
+          case ",${kept}," in
+            *",$n,"*) ;;
+            *) ${systemctl} --user unset-environment "$n" ;;
+          esac
+        done
+        ${
+          if on == {}
+          then "${systemctl} --user unset-environment POCKETNIX_SESSION_ENV"
+          else "${systemctl} --user set-environment ${lib.escapeShellArgs (lib.mapAttrsToList (n: v: "${n}=${v}") on)} POCKETNIX_SESSION_ENV=${lib.concatStringsSep "," (lib.attrNames on)}"
+        }
+      '';
+    })
+
     (mkIf gui.enable {
       # A client or the app connecting starts the compositor, which holds both
       # sockets: clients outlive the app's connection.
@@ -1187,26 +1231,21 @@ in {
           RestartSec = 1;
         };
       };
-      # pam_env puts them in the user manager's environment too, and so in
-      # user services and D-Bus-activated apps; tabs' login shells read them
-      # from /etc/profile.
-      environment.sessionVariables = {
-        WAYLAND_DISPLAY = waylandDisplay;
-        NIXOS_OZONE_WL = "1";
-      };
-      # A switch turning GUI on finds the user manager running: pam_env set its
-      # environment when it started, and an older switch-to-configuration starts
-      # no new user units. Every boot and switch runs this in each user's manager,
-      # and a running compositor rescans the apps the switch changed.
+      # A switch turning GUI on finds the user manager running, and an older
+      # switch-to-configuration starts no new user units. Every boot and switch
+      # runs this in each user's manager, and a running compositor rescans the
+      # apps the switch changed.
       system.userActivationScripts.pocketnix-gui = let
         systemctl = "${config.systemd.package}/bin/systemctl";
-      in ''
-        ${systemctl} --user set-environment WAYLAND_DISPLAY=${waylandDisplay} NIXOS_OZONE_WL=1
-        ${systemctl} --user start --no-block pocketnix-gui.socket pocketnix-wayland.socket
-        if ${systemctl} --user --quiet is-active pocketnix-compositor.service; then
-          ${systemctl} --user reload --no-block pocketnix-compositor.service || true
-        fi
-      '';
+      in {
+        deps = ["pocketnix-env"];
+        text = ''
+          ${systemctl} --user start --no-block pocketnix-gui.socket pocketnix-wayland.socket
+          if ${systemctl} --user --quiet is-active pocketnix-compositor.service; then
+            ${systemctl} --user reload --no-block pocketnix-compositor.service || true
+          fi
+        '';
+      };
 
       services.pipewire = {
         enable = mkDefault true;
@@ -1283,10 +1322,6 @@ in {
       relinquish = lib.optional (kernelPackages.kernel ? kernelSource) (kernelPackages.callPackage ./vgpu-relinquish/package.nix {});
     in {
       hardware.graphics.enable = true;
-      # Mesa's WSI copies each frame into a wl_shm buffer, the only kind the compositor takes.
-      environment.sessionVariables.MESA_VK_WSI_DEBUG = "sw";
-      # As pocketnix-gui's: a switch finds the user manager running.
-      system.userActivationScripts.pocketnix-gpu = "${config.systemd.package}/bin/systemctl --user set-environment MESA_VK_WSI_DEBUG=sw";
       boot.extraModulePackages = relinquish;
       boot.kernelModules = lib.optional (relinquish != []) "vgpu_relinquish";
     }))
