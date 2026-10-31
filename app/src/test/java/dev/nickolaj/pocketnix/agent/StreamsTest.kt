@@ -6,8 +6,10 @@ import java.io.IOException
 import java.io.OutputStream
 import java.net.ServerSocket
 import java.nio.ByteBuffer
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -40,6 +42,17 @@ class StreamsTest {
         release.countDown()
         assertTrue("the guest's session stayed open", hungUp.await(5, TimeUnit.SECONDS))
         assertTrue(sink.exited.await(5, TimeUnit.SECONDS))
+    }
+
+    @Test
+    fun aCommandTabAsksTheAgentToRunItsCommand() {
+        val hello = ArrayBlockingQueue<JSONObject>(1)
+        val agent = FakeAgent { c -> hello.add(c.hello) }.also { servers += it }
+        val pty = PtyBackend(agent.dialer, "shell", "test", command = "/nix/store/x-hello/bin/hello")
+        pty.start(80, 24, 1, 1, RecordingSink())
+        val sent = hello.poll(5, TimeUnit.SECONDS) ?: error("no Hello")
+        assertEquals("/nix/store/x-hello/bin/hello", sent.optString("command"))
+        pty.close()
     }
 
     @Test

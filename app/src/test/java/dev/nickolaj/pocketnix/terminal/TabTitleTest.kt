@@ -16,4 +16,10 @@ class TabTitleTest {
         assertEquals("vim notes.md", tabTitle(" ", "vim notes.md", "shell"))
         assertEquals("shell", tabTitle("", "  ", "shell"))
     }
+
+    @Test
+    fun aCommandTabIsNamedForItsProgramAndAProfileTabForItsProfile() {
+        assertEquals("hello", Tab.Kind.Pty("shell", "/nix/store/x-hello/bin/hello").name)
+        assertEquals("dev", Tab.Kind.Pty("dev").name)
+    }
 }
