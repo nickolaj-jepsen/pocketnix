@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -168,12 +169,30 @@ class ManagedGuest(
 
     private fun withPin(req: JSONObject): JSONObject = req.apply { Release.pin?.let { put("pin", it) } }
 
-    /** Starts an agent operation and waits for it to end. */
+    /**
+     * Starts an agent operation and waits for it to end. An agent that
+     * refused it, or went away before it ended, answers with its last state
+     * and why in [Updates.error].
+     */
     private suspend fun runOp(req: JSONObject): Updates = ops.withLock {
-        val before = control.updates.filterNotNull().first().op
-        control.call(req)
-        control.updates.filterNotNull().first { it.op > before && !it.busy }
+        try {
+            val before = upState().first().second
+            control.call(req)
+            // A restarted agent counts its operations from 0 again: a dropped link ends the wait.
+            val (up, u) = upState().first { (up, u) -> !up || u.op < before.op || (u.op > before.op && !u.busy) }
+            if (!up || u.op < before.op) throw IOException("the agent went away")
+            u
+        } catch (e: IOException) {
+            val why = e.message ?: e.toString()
+            control.updates.value?.copy(error = why, blocked = null, run = null) ?: noState(why)
+        }
     }
+
+    private fun noState(why: String) = Updates(emptyList(), "idle", 0, "", "", null, null, 0, why, emptyList(), emptyList())
+
+    /** Whether the link is up, with the latest update state; throws while the agent isn't connected. */
+    private fun upState() = combine(control.link, control.updates.filterNotNull()) { link, u -> (link is ControlChannel.Link.Up) to u }
+        .onStart { if (control.link.value !is ControlChannel.Link.Up) throw IOException("the agent isn't connected") }
 
     private companion object {
         const val TAG = "ManagedGuest"
