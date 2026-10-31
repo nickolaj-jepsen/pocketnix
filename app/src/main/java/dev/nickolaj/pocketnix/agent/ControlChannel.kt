@@ -1,6 +1,7 @@
 package dev.nickolaj.pocketnix.agent
 
 import android.util.Log
+import dev.nickolaj.pocketnix.engine.VmState
 import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -251,6 +252,20 @@ class ControlChannel(
         stream = null
         pending?.answer?.complete(Result.failure(IOException("control stream closed")))
         _link.value = Link.Down
+    }
+
+    /**
+     * Talks to [dialer]'s agent while the VM is [VmState.Running]. In any other
+     * state, a reboot's Starting included, it stops and forgets what the last
+     * boot's agent said: none of it is the next boot's.
+     */
+    fun follow(state: VmState, dialer: AgentDialer?) {
+        if (state == VmState.Running) {
+            dialer?.let { start(it) }
+        } else {
+            stop()
+            clear()
+        }
     }
 
     /** Forgets the last config, for a VM that stopped. */

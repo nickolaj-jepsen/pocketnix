@@ -224,20 +224,7 @@ class Vm(private val app: Context) {
                     }
                 }
         }
-        scope.launch {
-            state.collect { s ->
-                when (s) {
-                    VmState.Running -> _engine.value.dialer?.let { control.start(it) }
-
-                    VmState.Starting -> {}
-
-                    else -> {
-                        control.stop()
-                        control.clear()
-                    }
-                }
-            }
-        }
+        scope.launch { state.collect { s -> control.follow(s, _engine.value.dialer) } }
         scope.launch {
             // An agent restart keeps the windows; the reconnect's replay restores them. A stopped guest takes them along.
             combine(control.config, control.link, state) { cfg, link, s ->
