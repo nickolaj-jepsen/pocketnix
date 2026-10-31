@@ -84,7 +84,9 @@ image. Its system is the flake in `/etc/nixos`, seeded on first boot:
 
 - `pocketnix.json` holds what the app's Configure screen sets (the user and
   the service switches). The app owns it and keeps a copy, and a disk that
-  lacks it is rebuilt from that copy when it connects.
+  lacks it is rebuilt from that copy when it connects. Desktop apps is
+  `pocketnix.guest.gui.enable`, so with it the guest's windows also bring
+  their sound and share the clipboard ([GUI apps](gui.md)).
 - `configuration.nix` is yours, for anything the switches don't cover. The
   app doesn't keep a copy, so a fresh disk starts from the seed's: back it
   up like the rest of the guest's state.

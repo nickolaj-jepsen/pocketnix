@@ -12,7 +12,7 @@ val SERVICES = listOf(
     Service("ssh", "SSH", "Log in from your computer: phone port 2022, keys only"),
     Service("tailscale", "Tailscale", "Join your tailnet"),
     Service("podman", "Podman", "Run containers"),
-    Service("gui", "Desktop apps", "Show Linux apps as Android windows")
+    Service("gui", "Desktop apps", "Show Linux apps as Android windows, with their sound and the clipboard")
 )
 
 /** What the app configures in a managed guest: its flake's pocketnix.json (go/internal/protocol Selections). */

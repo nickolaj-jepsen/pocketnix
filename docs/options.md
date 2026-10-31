@@ -457,8 +457,8 @@ true
 
 Whether to enable the guest’s Wayland apps as Android windows: the pocketnix compositor
 as a socket-activated user service with ` WAYLAND_DISPLAY ` set for the
-user’s session, and by default PipeWire (the user in ` audio `),
-xdg-desktop-portal (and with it the FileChooser integration) without
+user’s session, and by default PipeWire (the user in ` audio `) with
+an “Android” output the app plays, xdg-desktop-portal (and with it the FileChooser integration) without
 its location and wallpaper portals, an icon theme read by librsvg, a
 basic font set, and wl-clipboard with the Wayland clipboard bridged to
 Android’s while the compositor runs;
