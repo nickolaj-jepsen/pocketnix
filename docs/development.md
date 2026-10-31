@@ -132,12 +132,8 @@ report's input latencies are its.
 
 ## Permissions by hand
 
-`provision` grants these:
-
-```bash
-adb shell pm grant dev.nickolaj.pocketnix.debug android.permission.MANAGE_VIRTUAL_MACHINE
-adb shell pm grant dev.nickolaj.pocketnix.debug android.permission.USE_CUSTOM_VIRTUAL_MACHINE
-```
+`provision` grants them. By hand, they are [Getting started's](getting-started.md#permissions),
+for the debug build's package, `dev.nickolaj.pocketnix.debug`.
 
 ## Releasing
 
