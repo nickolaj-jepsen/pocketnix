@@ -89,7 +89,7 @@ All on by default.
 | `notify-send`, any libnotify program | notification, with actions |
 | `xdg-open <url>`, `gio open` | opens in an Android app |
 | `xdg-open <file>` (under `files.root`) | opens through the Files provider |
-| `pocketnix-guest copy` / `paste`, OSC 52 | the clipboard |
+| `pocketnix-guest copy` / `paste`, OSC 52, Wayland apps (`gui.enable`) | the clipboard |
 | `pocketnix-guest share <file>` | the share sheet |
 | `pocketnix-guest pick` / `save`, the FileChooser portal | the document pickers |
 | `files.root` | the Files app and every file picker |

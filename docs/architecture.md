@@ -16,7 +16,7 @@ flowchart TB
   end
   subgraph guest[NixOS guest]
     agent[pocketnix-agent<br/>root, vsock]
-    guestcli[pocketnix-guest<br/>xdg-open, notifyd, portal]
+    guestcli[pocketnix-guest<br/>xdg-open, notifyd, portal,<br/>clipboard bridge]
     comp[pocketnix-compositor<br/>user service]
     shells[tabs: $SHELL -l]
   end
@@ -108,7 +108,10 @@ ref. With no app connected, a request fails instead of queueing.
 - Clipboard: a guest copy sets Android's. Android only lets an app read the
   clipboard while focused, so the app sends it when it gains focus. Types
   other than text are lazy both ways: only the MIME types cross until a paste
-  asks for the bytes.
+  asks for the bytes. Wayland apps' selection is bridged by
+  `pocketnix-guest clipboard`, which copies theirs out like any guest copy and
+  takes Android's from a `subscribe-clipboard` connection. A password
+  manager's copy stays marked sensitive on Android.
 - File provider: a `DocumentsProvider` over `files.root`. Reads are ranged
   over one stream per open descriptor. Writes go to a temporary file beside
   the target, which the writer's close fsyncs and renames over it, so readers
