@@ -36,11 +36,11 @@ import dev.nickolaj.pocketnix.managed.Selections
 
 /**
  * First run without a disk: who the user is and what the guest runs, then
- * the release's base image becomes the disk and the VM boots ([canStart]:
- * nothing else is missing). The guest's first rebuild applies the rest.
+ * the release's base image becomes the disk and the VM boots, if by then
+ * nothing else is missing. The guest's first rebuild applies the rest.
  */
 @Composable
-fun SetupCard(vm: Vm, canStart: Boolean, modifier: Modifier = Modifier) {
+fun SetupCard(vm: Vm, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val setup by vm.managed.setup.collectAsState()
     var user by rememberSaveable { mutableStateOf("") }
@@ -106,7 +106,8 @@ fun SetupCard(vm: Vm, canStart: Boolean, modifier: Modifier = Modifier) {
             enabled = !working && user.isNotEmpty() && userError == null && diskSize is DiskSize.Ok,
             onClick = {
                 vm.settings.diskGb = (diskSize as DiskSize.Ok).gb
-                vm.managed.install(Selections(user, services)) { if (canStart) vm.start() }
+                // Asked when the download ends: the permissions may have come meanwhile.
+                vm.managed.install(Selections(user, services)) { if (missingRequirements(context, vm).isEmpty()) vm.start() }
             }
         ) { Text(if (setup is ManagedGuest.Setup.Failed) "Try again" else "Download and set up") }
         Text(

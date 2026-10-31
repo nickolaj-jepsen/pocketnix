@@ -84,6 +84,7 @@ fun MainScreen(vm: Vm) {
     val phase by vm.phase.collectAsState()
     val config by vm.config.collectAsState()
     val syncError by vm.managed.syncError.collectAsState()
+    val setup by vm.managed.setup.collectAsState()
     val tabs by vm.tabs.tabs.collectAsState()
     val selected by vm.tabs.selected.collectAsState()
     val revision by vm.tabs.revision.collectAsState()
@@ -128,13 +129,13 @@ fun MainScreen(vm: Vm) {
     SideEffect { windowSurface?.keyboardHeight = keyboardHeight }
     LaunchedEffect(imeBottom > 0, windowSurface) { if (imeBottom == 0) windowSurface?.ime?.keyboardHidden() }
 
-    // Resumes count: `pocketnix provision` grants and pushes while the app is open.
+    // Resumes count: `pocketnix provision` grants and pushes while the app is open. A setup that ends made the disk.
     var resumes by remember { mutableIntStateOf(0) }
     LifecycleResumeEffect(Unit) {
         resumes++
         onPauseOrDispose {}
     }
-    val missing = remember(state, showSettings, resumes) { missingRequirements(context, vm) }
+    val missing = remember(state, showSettings, resumes, setup) { missingRequirements(context, vm) }
     LaunchedEffect(selected, tabs, shownWindow) { if (shownWindow == 0) controller.show(vm.tabs.current()) }
     LaunchedEffect(typeface) { controller.setTypeface(typeface) }
     LaunchedEffect(themeRevision) { controller.redraw() }
@@ -253,7 +254,7 @@ fun MainScreen(vm: Vm) {
             val others = missing.filter { it.name != DISK_REQUIREMENT }
             Column(Modifier.weight(1f, fill = false).padding(16.dp)) {
                 if (others.isNotEmpty()) Requirements(others)
-                if (needDisk) SetupCard(vm, canStart = others.isEmpty())
+                if (needDisk) SetupCard(vm)
             }
         }
         // Read for its side effect: titles and finished states redraw the row.
