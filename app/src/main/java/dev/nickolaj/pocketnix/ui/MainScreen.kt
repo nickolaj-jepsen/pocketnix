@@ -83,6 +83,7 @@ fun MainScreen(vm: Vm) {
     val link by vm.control.link.collectAsState()
     val phase by vm.phase.collectAsState()
     val config by vm.config.collectAsState()
+    val syncError by vm.managed.syncError.collectAsState()
     val tabs by vm.tabs.tabs.collectAsState()
     val selected by vm.tabs.selected.collectAsState()
     val revision by vm.tabs.revision.collectAsState()
@@ -228,16 +229,22 @@ fun MainScreen(vm: Vm) {
         }
         // A guest the phone is working on (its first rebuild, say): what it does, and the way to the details.
         val u = updates
-        if (config?.managedFlake != null && u != null && (u.busy || u.blocked != null)) {
+        val failed = syncError?.takeIf { u != null && !u.busy && u.blocked == null }
+        if (config?.managedFlake != null && u != null && (u.busy || u.blocked != null || failed != null)) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (u.busy) "${updateStatus(u)} ${u.log.lastOrNull().orEmpty()}" else "An update waits for your yes to compile on the phone.",
+                    when {
+                        u.busy -> "${updateStatus(u)} ${u.log.lastOrNull().orEmpty()}"
+                        failed != null -> "Your settings aren't applied yet: $failed"
+                        else -> "An update waits for your yes to compile on the phone."
+                    },
                     color = LocalContentColor.current.copy(alpha = 0.8f),
                     fontSize = 12.sp,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
+                if (failed != null) TextButton(onClick = vm.managed::retrySync) { Text("Retry") }
                 TextButton(onClick = { showUpdates = true }) { Text("Details") }
             }
         }

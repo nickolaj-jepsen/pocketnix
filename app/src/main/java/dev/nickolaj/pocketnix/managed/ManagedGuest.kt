@@ -56,6 +56,11 @@ class ManagedGuest(
     private val _setup = MutableStateFlow<Setup>(Setup.Idle)
     val setup: StateFlow<Setup> = _setup.asStateFlow()
 
+    private val _syncError = MutableStateFlow<String?>(null)
+
+    /** Why the guest isn't running the app's selections yet; the next connect tries again. */
+    val syncError: StateFlow<String?> = _syncError.asStateFlow()
+
     // One operation at a time from here; the agent refuses a second anyway.
     private val ops = Mutex()
 
@@ -65,6 +70,11 @@ class ManagedGuest(
                 .distinctUntilChanged()
                 .collectLatest { up -> if (up) runCatching { sync() }.onFailure { Log.w(TAG, "sync: ${it.message}") } }
         }
+    }
+
+    /** Runs the sync a connect runs again, after [syncError]. */
+    fun retrySync() {
+        scope.launch { runCatching { sync() }.onFailure { Log.w(TAG, "sync: ${it.message}") } }
     }
 
     /**
@@ -80,6 +90,7 @@ class ManagedGuest(
             try {
                 withContext(Dispatchers.IO) { installImage() }
                 store.selections = selections
+                store.rebuildPending = true
                 _setup.value = Setup.Idle
                 onReady()
             } catch (e: Exception) {
@@ -105,16 +116,21 @@ class ManagedGuest(
 
     /**
      * Brings a guest that just connected in line with [store]: a disk that
-     * didn't have these selections rebuilds (without building on the phone;
-     * the System dialog offers that), then gets the packages it lacks.
+     * didn't have these selections, or whose rebuild to them didn't finish,
+     * rebuilds (without building on the phone: the agent's blocked plan asks
+     * for that), then gets the packages it lacks.
      */
     private suspend fun sync() {
         val sel = store.selections ?: return
         val answer = writeSelections(sel)
-        if (answer.optBoolean("changed")) {
-            val err = rebuild(sel) { false }
+        if (answer.optBoolean("changed") || store.rebuildPending) {
+            store.rebuildPending = true
+            // An agent that just booted may be pruning: wait rather than fail as busy.
+            control.updates.filterNotNull().first { !it.busy }
+            val err = rebuild(sel, null)
+            _syncError.value = err
             if (err != null) {
-                Log.w(TAG, "first rebuild: $err")
+                Log.w(TAG, "rebuild to the app's selections: $err")
                 return
             }
         }
@@ -130,25 +146,35 @@ class ManagedGuest(
      * release: checks, then asks [confirm] about anything it would compile on
      * the phone, then switches. Returns why it failed, or null.
      */
-    suspend fun rebuild(sel: Selections, confirm: suspend (Plan) -> Boolean): String? {
+    suspend fun rebuild(sel: Selections, confirm: (suspend (Plan) -> Boolean)?): String? {
         store.selections = sel
-        return try {
+        val err = try {
             writeSelections(sel)
             update(confirm)
         } catch (e: IOException) {
             e.message ?: e.toString()
         }
+        if (err == null && control.updates.value?.blocked == null) {
+            store.rebuildPending = false
+            _syncError.value = null
+        }
+        return err
     }
 
-    /** Checks for and applies an update, as [rebuild] does without new selections. Returns why it failed, or null. */
-    suspend fun update(confirm: suspend (Plan) -> Boolean): String? {
+    /**
+     * Checks for and applies an update, as [rebuild] does without new
+     * selections. A null [confirm] applies without building on the phone,
+     * so the agent records what it stopped short of. Returns why it failed,
+     * or null (also when [confirm] said no).
+     */
+    suspend fun update(confirm: (suspend (Plan) -> Boolean)?): String? {
         var u = runOp(withPin(JSONObject().put("type", "update-check")))
         u.error?.let { return it }
         if (u.available == null) return null
         val plan = u.plan ?: Plan(0, emptyList())
-        val allow = plan.builds.isNotEmpty()
-        if (allow && !confirm(plan)) return null
-        u = runOp(withPin(JSONObject().put("type", "update-apply").put("allowBuilds", allow)))
+        val builds = plan.builds.isNotEmpty()
+        if (builds && confirm != null && !confirm(plan)) return null
+        u = runOp(withPin(JSONObject().put("type", "update-apply").put("allowBuilds", builds && confirm != null)))
         return u.error
     }
 

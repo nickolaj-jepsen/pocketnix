@@ -50,6 +50,11 @@ class ManagedStore(context: Context) {
         }
         set(v) = prefs.edit { putString("selections", v?.toJson()?.toString()) }
 
+    /** The guest may not run [selections] yet: set until a rebuild to them finishes. */
+    var rebuildPending: Boolean
+        get() = prefs.getBoolean("rebuildPending", false)
+        set(v) = prefs.edit { putBoolean("rebuildPending", v) }
+
     var packages: Set<String>
         get() {
             val a = JSONArray(prefs.getString("packages", "[]"))
