@@ -217,7 +217,8 @@ object AvfReflect {
      * virtmgr sees it, for fields the Java config never sets; null applies
      * nothing. Wraps the binder of the virtmgr connection `VirtualMachine.run`
      * takes. False when this AVF's internals differ: the VM then starts with
-     * its plain config, as it does when [edit] throws or the config isn't raw.
+     * its plain config. When [edit] throws or the config isn't raw, `run`
+     * fails with [RawEditFailed] in its causes, before virtmgr creates a VM.
      */
     fun editRawConfig(edit: ((Any) -> Unit)?): Boolean {
         rawEdit = edit
@@ -231,11 +232,14 @@ object AvfReflect {
             if (Proxy.isProxyClass(binder.javaClass)) return@runCatching
             val iface = Class.forName("android.system.virtualizationservice.IVirtualizationService")
             val handler = InvocationHandler { _, method, args ->
-                if (method.name == "createVm") {
+                val e = rawEdit
+                if (method.name == "createVm" && e != null) {
                     // A union: only a raw config has one.
                     val raw = runCatching { args!![0].javaClass.getMethod("getRawConfig").invoke(args[0]) }.getOrNull()
-                    rawEdit?.let { e ->
-                        raw?.let { r -> runCatching { e(r) }.onFailure { Log.w(TAG, "editing the raw VM config failed; it starts as it is", it) } }
+                    try {
+                        e(raw ?: error("the VM config isn't raw"))
+                    } catch (t: Throwable) {
+                        throw RawEditFailed(t)
                     }
                 }
                 try {
@@ -250,6 +254,9 @@ object AvfReflect {
             Log.w(TAG, "can't edit the raw VM config", it)
         }.isSuccess
     }
+
+    /** The edit [editRawConfig] was given failed, so the VM didn't start: what it needed isn't there. */
+    class RawEditFailed(cause: Throwable) : IllegalStateException("editing the raw VM config failed: ${cause.message}", cause)
 
     /** Backs guest-physical [start, start + size) of [raw]'s VM with [file] (crosvm `--file-backed-mapping`). */
     fun addMemoryBackingFile(raw: Any, file: ParcelFileDescriptor, start: Long, size: Long) {

@@ -60,6 +60,9 @@ class AvfEngine(private val context: Context) : VmEngine {
     // answers: later launches in this process go without the GPU, so it can't keep the VM from booting.
     private var gpuRefused = false
 
+    // Set once AVF couldn't take guest RAM in the app's memory: later launches in this process leave it to crosvm.
+    private var sharedRamRefused = false
+
     @Volatile override var launched: Launched? = null
         private set
 
@@ -153,15 +156,17 @@ class AvfEngine(private val context: Context) : VmEngine {
                 },
                 gpuAsked = settings.gpu,
                 gpuRefused = gpuRefused,
-                guestRam = launchSharedRam,
+                guestRam = GuestRam.mapped,
                 virtioSnd = settings.audio
             )
             _state.value = VmState.Running
-            Log.i(TAG, "VM running (${settings.memoryMb} MB, cpus=${settings.cpus}, network=${settings.network}, gpu=$launchGpu, guestRam=$launchSharedRam, audio=${settings.audio})")
+            Log.i(TAG, "VM running (${settings.memoryMb} MB, cpus=${settings.cpus}, network=${settings.network}, gpu=$launchGpu, guestRam=${GuestRam.mapped}, audio=${settings.audio})")
         } catch (e: Throwable) {
             val cause = (e as? java.lang.reflect.InvocationTargetException)?.cause ?: e
             Log.e(TAG, "VM start failed", cause)
             cleanup(console)
+            // Its balloon is off: a VM on crosvm's own RAM must start again with it.
+            if (launchSharedRam && generateSequence(e) { it.cause }.any { it is AvfReflect.RawEditFailed }) return withoutSharedRam(settingsOf, console)
             if (launchGpu && avfTried) return withoutGpu(settingsOf, console)
             _state.value = VmState.Failed(cause.message ?: cause.javaClass.simpleName)
         }
@@ -173,7 +178,7 @@ class AvfEngine(private val context: Context) : VmEngine {
      */
     private fun shareRam(settings: VmSettings): Boolean {
         GuestRam.release()
-        if (!settings.guestRam || settings.audio) {
+        if (!settings.guestRam || settings.audio || sharedRamRefused) {
             AvfReflect.editRawConfig(null)
             return false
         }
@@ -193,6 +198,14 @@ class AvfEngine(private val context: Context) : VmEngine {
         if (!edited) GuestRam.release()
         Log.i(TAG, if (edited) "guest RAM in app memory" else "guest RAM stays in crosvm")
         return edited
+    }
+
+    private fun withoutSharedRam(settings: () -> VmSettings, console: ConsoleLog) {
+        Log.w(TAG, "AVF couldn't take guest RAM in app memory; starting the VM on crosvm's")
+        console.append("\r\n[pocketnix: guest RAM stays in crosvm; GUI frames go over the stream]\r\n")
+        sharedRamRefused = true
+        _state.value = VmState.Starting
+        launch(settings, console)
     }
 
     private fun withoutGpu(settings: () -> VmSettings, console: ConsoleLog) {
