@@ -52,13 +52,18 @@ func writeWithFd(c net.Conn, v any, fd int) error {
 	return sendFd(c, append(line, '\n'), fd)
 }
 
-// sendFd writes payload to c, a unix socket, with a copy of fd attached (SCM_RIGHTS).
+// sendFd writes all of payload to c, a unix socket, with a copy of fd
+// attached (SCM_RIGHTS) to its first byte.
 func sendFd(c net.Conn, payload []byte, fd int) error {
 	uc, ok := c.(*net.UnixConn)
 	if !ok {
 		return fmt.Errorf("a %T can't carry a descriptor", c)
 	}
-	_, _, err := uc.WriteMsgUnix(payload, unix.UnixRights(fd), nil)
+	// WriteMsgUnix returns a short count, not an error, once the send buffer fills.
+	n, _, err := uc.WriteMsgUnix(payload, unix.UnixRights(fd), nil)
+	if err == nil && n < len(payload) {
+		_, err = uc.Write(payload[n:])
+	}
 	return err
 }
 

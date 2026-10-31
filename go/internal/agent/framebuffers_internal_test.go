@@ -1,8 +1,13 @@
 package agent
 
 import (
+	"bytes"
+	"io"
+	"net"
 	"os"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestPinFramesRefusesSizesOutOfRange(t *testing.T) {
@@ -33,5 +38,57 @@ func TestPinFramesListsEveryPage(t *testing.T) {
 			t.Errorf("page address %#x: unaligned or repeated", p)
 		}
 		seen[p] = true
+	}
+}
+
+func TestSendFdWritesAPayloadLargerThanTheSendBuffer(t *testing.T) {
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := func(fd int) *net.UnixConn {
+		f := os.NewFile(uintptr(fd), "socketpair")
+		defer f.Close()
+		c, err := net.FileConn(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.(*net.UnixConn)
+	}
+	sender, receiver := conn(fds[0]), conn(fds[1])
+	defer receiver.Close()
+	payload := bytes.Repeat([]byte("0123456789abcdef"), 1<<16) // 1 MiB
+	sent := make(chan error, 1)
+	go func() {
+		defer sender.Close()
+		sent <- sendFd(sender, payload, int(os.Stdin.Fd()))
+	}()
+
+	buf := make([]byte, len(payload))
+	oob := make([]byte, unix.CmsgSpace(4))
+	n, oobn, _, _, err := receiver.ReadMsgUnix(buf, oob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := unix.ParseSocketControlMessage(oob[:oobn])
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("control messages %v, %v: want the descriptor", msgs, err)
+	}
+	got, err := unix.ParseUnixRights(&msgs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fd := range got {
+		unix.Close(fd)
+	}
+	rest, err := io.ReadAll(receiver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-sent; err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(append(buf[:n], rest...), payload) {
+		t.Errorf("received %d bytes, want the %d sent", n+len(rest), len(payload))
 	}
 }
