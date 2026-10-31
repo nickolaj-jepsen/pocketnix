@@ -213,6 +213,9 @@ type Config struct {
 	// GPU asks the app to give the VM the phone's GPU (gfxstream) from its
 	// next start.
 	GPU bool `json:"gpu,omitempty"`
+	// Audio says the agent serves [StreamAudio]: the guest has a sound
+	// pipe. The agent sets it; a reload may turn it on or off.
+	Audio bool `json:"audio,omitempty"`
 }
 
 // Managed is a managed guest's: Flake is its own flake's directory.

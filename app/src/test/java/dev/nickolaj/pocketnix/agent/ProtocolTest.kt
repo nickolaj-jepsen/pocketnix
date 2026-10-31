@@ -95,6 +95,12 @@ class ProtocolTest {
     }
 
     @Test
+    fun parsesAudio() {
+        assertEquals(true, GuestConfig.parse("""{"type":"config","audio":true}""").audio)
+        assertEquals(false, GuestConfig.parse("""{"type":"config"}""").audio)
+    }
+
+    @Test
     fun ignoresUnknownFields() {
         val c = GuestConfig.parse("""{"type":"config","future":1,"terminal":{"profiles":[{"name":"a","new":true}]}}""")
         assertEquals(listOf(Profile("a", null)), c.profiles)

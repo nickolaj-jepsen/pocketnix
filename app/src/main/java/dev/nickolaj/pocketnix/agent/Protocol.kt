@@ -111,7 +111,9 @@ data class GuestConfig(
     /** The flake of a guest the app manages, or null. */
     val managedFlake: String? = null,
     /** The module asks for the phone's GPU from the VM's next start. */
-    val gpu: Boolean = false
+    val gpu: Boolean = false,
+    /** The agent serves the `audio` stream (go/internal/protocol's Config.Audio). */
+    val audio: Boolean = false
 ) {
     companion object {
         fun parse(json: String): GuestConfig = parse(JSONObject(json))
@@ -147,7 +149,8 @@ data class GuestConfig(
                 },
                 gui = o.optJSONObject("gui")?.let(GuiConfig::parse),
                 managedFlake = o.optJSONObject("managed")?.optStringOrNull("flake"),
-                gpu = o.optBoolean("gpu")
+                gpu = o.optBoolean("gpu"),
+                audio = o.optBoolean("audio")
             )
         }
     }

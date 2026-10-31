@@ -127,3 +127,26 @@ func TestAudioRefused(t *testing.T) {
 		})
 	}
 }
+
+func TestTheConfigSaysWhetherThereIsSound(t *testing.T) {
+	pipe, _ := soundPipe(t)
+	for name, tc := range map[string]struct {
+		cfg  map[string]any
+		want bool
+	}{
+		"a pipe": {audioConfig(pipe), true},
+		"none":   {baseConfig(), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := start(t, tc.cfg, unixAddr)
+			ctl, err := h.client.Control()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ctl.Close()
+			if got := recvConfig(t, ctl).Audio; got != tc.want {
+				t.Errorf("config audio = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

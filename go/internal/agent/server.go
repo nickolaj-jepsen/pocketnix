@@ -132,6 +132,7 @@ func (s *Server) config() *File {
 func configMessage(f *File) protocol.Config {
 	c := f.Config
 	c.Type = protocol.TypeConfig
+	c.Audio = f.AudioPipe != ""
 	if c.Hostname == "" {
 		c.Hostname, _ = os.Hostname()
 	}

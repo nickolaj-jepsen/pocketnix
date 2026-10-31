@@ -200,9 +200,16 @@ class Vm(private val app: Context) {
         scope.launch {
             control.link.map { it is ControlChannel.Link.Up }.distinctUntilChanged().collect { up ->
                 if (up) host.start() else host.stop()
-                val dialer = _engine.value.dialer
-                if (up && dialer != null) audio.start(dialer) else audio.stop()
             }
+        }
+        scope.launch {
+            // On the config's word, not the link's: a reload can bring sound with the link up.
+            combine(control.link, control.config) { link, cfg -> link is ControlChannel.Link.Up && cfg?.audio == true }
+                .distinctUntilChanged()
+                .collect { on ->
+                    val dialer = _engine.value.dialer
+                    if (on && dialer != null) audio.start(dialer) else audio.stop()
+                }
         }
         scope.launch { HostStateSync(control, host.state).run() }
         scope.launch {
