@@ -151,6 +151,7 @@ class AvfEngine(private val context: Context) : VmEngine {
         val edited = AvfReflect.editRawConfig { raw ->
             check(AvfReflect.rawMemoryMib(raw).toLong() shl 20 == bytes) { "the VM's RAM isn't the ${settings.memoryMb} MiB shared" }
             AvfReflect.addMemoryBackingFile(raw, fd, GuestRam.BASE, bytes)
+            GuestRam.backsVm()
         }
         if (!edited) GuestRam.release()
         Log.i(TAG, if (edited) "guest RAM in app memory" else "guest RAM stays in crosvm")

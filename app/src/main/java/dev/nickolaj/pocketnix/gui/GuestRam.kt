@@ -11,7 +11,10 @@ object GuestRam {
     /** Guest-physical address of RAM's first byte: crosvm's `AARCH64_PHYS_MEM_START`. */
     const val BASE = 0x8000_0000L
 
-    /** Whether guest RAM is mapped, so the GUI link may ask for PAGES commits. */
+    /**
+     * Whether the VM runs on the RAM this maps ([backsVm]), so the GUI link
+     * may ask for PAGES commits.
+     */
     @Volatile var mapped = false
         private set
 
@@ -26,14 +29,20 @@ object GuestRam {
         release()
         val n = GuiNative.guestRamCreate(BASE, bytes)
         check(n >= 0) { "shared memory for guest RAM: errno ${-n}" }
-        mapped = true
         return ParcelFileDescriptor.adoptFd(n).also { fd = it }
+    }
+
+    /** The VM's config carries [create]'s descriptor as its RAM. */
+    @Synchronized
+    fun backsVm() {
+        check(fd != null) { "no guest RAM made" }
+        mapped = true
     }
 
     /** Unmaps guest RAM, after any copy from it ends. */
     @Synchronized
     fun release() {
-        if (!mapped) return
+        if (fd == null) return
         mapped = false
         GuiNative.guestRamRelease()
         fd?.close()

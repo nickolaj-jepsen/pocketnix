@@ -178,7 +178,7 @@ object AvfReflect {
      * virtmgr sees it, for fields the Java config never sets; null applies
      * nothing. Wraps the binder of the virtmgr connection `VirtualMachine.run`
      * takes. False when this AVF's internals differ: the VM then starts with
-     * its plain config.
+     * its plain config, as it does when [edit] throws or the config isn't raw.
      */
     fun editRawConfig(edit: ((Any) -> Unit)?): Boolean {
         rawEdit = edit
@@ -195,7 +195,9 @@ object AvfReflect {
                 if (method.name == "createVm") {
                     // A union: only a raw config has one.
                     val raw = runCatching { args!![0].javaClass.getMethod("getRawConfig").invoke(args[0]) }.getOrNull()
-                    rawEdit?.let { e -> raw?.let(e) }
+                    rawEdit?.let { e ->
+                        raw?.let { r -> runCatching { e(r) }.onFailure { Log.w(TAG, "editing the raw VM config failed; it starts as it is", it) } }
+                    }
                 }
                 try {
                     method.invoke(binder, *(args ?: emptyArray()))
