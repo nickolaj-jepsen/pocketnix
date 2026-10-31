@@ -49,8 +49,9 @@ flowchart TB
 - Each job gets a stream of its own: one `control` stream (newline-delimited
   JSON: config, requests, events pushed by the guest), one `pty` stream per
   tab, one per forwarded connection or file operation, one per shared folder,
-  and the compositor's ([GUI protocol](gui-protocol.md)). The kinds are the
-  `Stream*` constants in `go/internal/protocol`.
+  one for the guest's sound, and the compositor's
+  ([GUI protocol](gui-protocol.md)). The kinds are the `Stream*` constants in
+  `go/internal/protocol`.
 - A vsock stream carries about 110 MB/s on a phone, far short of full-screen
   frames at display rate. So the app makes the memory the guest runs on, and
   big frames cross as the addresses of the guest pages holding them (the GUI
