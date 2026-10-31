@@ -41,6 +41,7 @@ attached (`adb devices`). `pocketnix control -h` lists the commands.
 | `reopen --tab <id>` | Starts an ended terminal tab again in a new session, keeping its id, place and title; the old transcript is gone. |
 | `offers` | Prints the port forward offers of this guest boot, one `port=<guest> state=<offered\|dismissed\|allowed> phone=<port\|->` line per guest port the agent reported (`forwardOffers` must be on). An allowed port stays listed through the grace period after its listener goes, then drops out. |
 | `offer <port> allow\|dismiss` | Answers an offer as its notification's buttons do. `allow` returns once the phone port listens, and fails with the reason when it couldn't. |
+| `stats` | Prints the GUI link's counters and latency histograms, with the last launch's `guestRam` and `gpu`, as one line of JSON (what `pocketnix bench` samples). |
 | `logcat [--follow]` | Prints the log (main, system and crash buffers) of every process running as the app's uid, so it keeps lines from before a crash or restart. `--follow` streams it. Works on release builds too (`--package`). |
 
 `tab` and `type` take `--no-enter` to type without pressing Enter. Tab 0 is
@@ -83,6 +84,21 @@ command it rejected there, and `--no-enter` leaves text behind, so the next
 - The `gui connected=… ready=…` line and the `gui window …` lines show what
   the app knows about guest windows: title, app, size, scale and surfaces.
   Use them to check GUI changes without screenshots.
+- The `engine …` line says what the VM got, which may be less than it asked
+  for: `gpu=` is what it runs with, `gpuAsked=` what the guest's config
+  wants, and `gpuRefused=true` means a GPU launch failed, so the process's
+  later starts go without. `pocketnix control logcat | grep -E 'VM running|GPU'`
+  shows each launch and fallback with its `guestRam=`, so a crosvm death
+  under the GPU and guest RAM together shows both.
+
+## A managed guest
+
+Setup and Configure's operations have no provider command: they are
+`ControlActivity` actions over `adb shell am start` (`docs/development.md`,
+"Scripted control"; the extras are `ControlActivity`'s `EXTRA_*` constants).
+Read their outcome from `dump`: `setup=` while a disk is set up, then the
+`updates …` lines and their `|log|` lines for the rebuild or package
+operation, which hold its error.
 
 ## Without the CLI
 
