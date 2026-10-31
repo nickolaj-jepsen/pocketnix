@@ -27,6 +27,7 @@ flowchart TB
   agent --> shells
   guestcli -- /run/pocketnix/guest.sock --> agent
   agent -- gui stream, handed over --> comp
+  comp -- guest.sock: frame buffers --> agent
   ui --- android
 ```
 
@@ -63,7 +64,9 @@ flowchart TB
   hung guest shows as "agent absent", never as running.
 - Guest programs reach the agent on `/run/pocketnix/guest.sock`, which admits
   root and the session user by peer credentials. Requests can pass file
-  descriptors, so the root agent never opens a path on a user's behalf.
+  descriptors, so the root agent never opens a path on a user's behalf. The
+  compositor asks there for frame buffers: memory the agent pins in guest
+  RAM and hands back as a memfd ([Guest RAM](gui-protocol.md#guest-ram)).
 
 ## The module owns the guest's contract
 
