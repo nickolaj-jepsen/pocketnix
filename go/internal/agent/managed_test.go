@@ -94,7 +94,11 @@ esac
 dir=%[1]s
 case "$1" in
 --realise) echo "$2" > $dir/realised ;;
---gc) echo gc >> $dir/gc ;;
+--gc)
+  [ -e $dir/gc-fails ] && { echo "error: the store is locked" >&2; exit 1; }
+  echo gc >> $dir/gc
+  echo "deleting '/nix/store/oldgarbage-1'" >&2
+  echo "1 store paths deleted, 1.0 MiB freed" ;;
 *) exit 2 ;;
 esac
 `, g.dir))
@@ -267,6 +271,24 @@ func TestManagedRebuild(t *testing.T) {
 	}
 }
 
+func TestManagedSwitchSucceedsWhenPruningFails(t *testing.T) {
+	g := newManagedGuest(t)
+	ctl, _ := startManaged(t, g)
+	g.write(t, "dryrun", "")
+	g.write(t, "gc-fails", "")
+	// Generation 2 is neither booted nor running once the apply adds 3: the prune deletes it, then collects.
+	old := filepath.Join(g.store, strings.Repeat("c", 32)+"-nixos-system-phone-26.05.0")
+	must(t, os.MkdirAll(old, 0o755))
+	must(t, os.Symlink(old, g.profile+"-2-link"))
+	u, err := ctl.Run(func() error { return ctl.UpdateApplyWith("", false) })
+	if err != nil || u.Error != "" {
+		t.Fatalf("apply: %v %q (log %q)", err, u.Error, u.Log)
+	}
+	if u.Current != g.systems[1] {
+		t.Errorf("current %q, want %q", u.Current, g.systems[1])
+	}
+}
+
 func TestManagedApplyRechecksAChangedFlake(t *testing.T) {
 	g := newManagedGuest(t)
 	ctl, _ := startManaged(t, g)
@@ -405,6 +427,11 @@ func TestPruneAfterBoot(t *testing.T) {
 	}
 	if g.read(t, "gc") == "" {
 		t.Error("no garbage collection")
+	}
+	// The collection's summary is logged; the paths it deleted aren't.
+	if !slices.ContainsFunc(u.Log, func(l string) bool { return strings.HasSuffix(l, " freed") }) ||
+		slices.ContainsFunc(u.Log, func(l string) bool { return strings.Contains(l, "oldgarbage") }) {
+		t.Errorf("log %q: want the garbage collection's summary, without its deleted paths", u.Log)
 	}
 	if boot := strings.TrimSpace(g.read(t, "boot")); boot != g.systems[3] {
 		t.Errorf("boot loader installed from %q, want the running system", boot)

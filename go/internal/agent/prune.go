@@ -74,14 +74,27 @@ func (u *Updater) prune(c UpdatesConfig, boot bool) error {
 		return nil
 	}
 	u.logf("collecting garbage")
-	if err := u.runArgv(gcTimeout, nil, u.throttled(c.managed, "", u.NixStore, "--gc")); err != nil {
+	// It prints every path it deletes: only its summary goes to the log.
+	stdout, stderr, err := u.capture(gcTimeout, u.throttled(c.managed, "", u.NixStore, "--gc"))
+	if err != nil {
 		return err
+	}
+	if s := gcSummary(stdout + "\n" + stderr); s != "" {
+		u.logf("%s", s)
 	}
 	if len(del) > 0 && current != "" {
 		// The boot menu still lists the deleted generations until the boot loader is installed again.
 		return u.activate(current, "boot")
 	}
 	return nil
+}
+
+// pruneAfterSwitch prunes after a switch that worked, logging what fails
+// rather than failing the switch.
+func (u *Updater) pruneAfterSwitch(c UpdatesConfig) {
+	if err := u.prune(c, false); err != nil {
+		u.logf("switched, but old generations weren't pruned: %v", err)
+	}
 }
 
 // clearAdhoc deletes the ad-hoc profile and its generations, so what a run
@@ -112,4 +125,15 @@ func (u *Updater) clearAdhoc(c UpdatesConfig) error {
 		}
 	}
 	return nil
+}
+
+// gcSummary is nix-store --gc's closing line ("… store paths deleted, … freed"), or "".
+func gcSummary(out string) string {
+	lines := strings.Split(out, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if l := strings.TrimSpace(lines[i]); strings.HasSuffix(l, " freed") {
+			return l
+		}
+	}
+	return ""
 }

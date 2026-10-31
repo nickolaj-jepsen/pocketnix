@@ -241,12 +241,14 @@ func (u *Updater) Apply(o Options) error {
 		u.mu.Lock()
 		u.available, u.source = "", ""
 		u.mu.Unlock()
+		// The switch worked: what fails after it is logged, not the operation's error.
 		if src == protocol.SourceLocal {
 			if err := u.localSwitched(c); err != nil {
-				return fmt.Errorf("switched, but the flake's lock wasn't updated: %w", err)
+				u.logf("switched, but the flake's lock wasn't updated: %v", err)
 			}
 		}
-		return u.prune(c, false)
+		u.pruneAfterSwitch(c)
+		return nil
 	})
 }
 
@@ -289,7 +291,8 @@ func (u *Updater) SwitchGeneration(n int) error {
 		if err := u.switchTo(path); err != nil {
 			return err
 		}
-		return u.prune(c, false)
+		u.pruneAfterSwitch(c)
+		return nil
 	}
 	u.mu.Lock()
 	if u.state == protocol.UpdateChecking || u.state == protocol.UpdateFetching {
