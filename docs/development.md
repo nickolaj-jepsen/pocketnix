@@ -62,7 +62,8 @@ adb shell am start -n dev.nickolaj.pocketnix.debug/dev.nickolaj.pocketnix.Contro
 ```
 
 `dev-agent` runs the example guest's agent config, evaluated for this
-machine, with sessions as you; `POCKETNIX_PORT` moves it off 9100. It listens
+machine, with sessions as you; it never rebuilds, prunes or collects
+garbage on this machine. `POCKETNIX_PORT` moves it off 9100. It listens
 on loopback, which the emulator reaches as 10.0.2.2. Never listen beyond
 loopback outside a test: the agent hands a shell to anyone who reaches it.
 

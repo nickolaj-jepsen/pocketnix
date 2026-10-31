@@ -84,8 +84,11 @@ func main() {
 
 	go srv.Updates.Periodic(context.Background())
 	go srv.Updates.RefreshPackages()
-	// After the boot's own work.
-	go srv.Updates.PruneAfterBoot(context.Background(), 2*time.Minute, *pruneMarker)
+	// After the boot's own work. Only a guest's agent is root: as anyone else,
+	// nix-store --gc still collects this machine's store through the daemon.
+	if os.Geteuid() == 0 {
+		go srv.Updates.PruneAfterBoot(context.Background(), 2*time.Minute, *pruneMarker)
+	}
 	go srv.WatchInhibitors(context.Background())
 	if *pollPorts {
 		srv.WatchPorts(nil)

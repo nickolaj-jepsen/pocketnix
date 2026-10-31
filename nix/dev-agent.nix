@@ -11,9 +11,11 @@
     modules = [{nixpkgs.hostPlatform = pkgs.lib.mkForce system;}];
   };
   # Without `user`, sessions run as whoever runs the agent; without
-  # `forwardOffers`, this machine's own listeners aren't offered.
+  # `forwardOffers`, this machine's own listeners aren't offered. Without
+  # `managed` and `updates.keepGenerations`, it never rebuilds, prunes or
+  # collects garbage on this machine's own system.
   config = pkgs.runCommand "pocketnix-dev-agent.json" {nativeBuildInputs = [pkgs.jq];} ''
-    jq 'del(.user, .forwardOffers)' ${example.config.environment.etc."pocketnix/agent.json".source} > $out
+    jq 'del(.user, .forwardOffers, .managed, .updates.keepGenerations)' ${example.config.environment.etc."pocketnix/agent.json".source} > $out
   '';
 in
   pkgs.writeShellApplication {
