@@ -11,6 +11,7 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -25,6 +26,23 @@ const SLOTS: usize = crate::flush::FRAMES_IN_FLIGHT + 1;
 const PAGE: usize = 4096;
 /// How long the agent may take to pin a buffer set.
 const AGENT_TIMEOUT: Duration = Duration::from_secs(5);
+/// The first wait before asking again after a failure that may pass, such
+/// as the agent restarting; it doubles up to [RETRY_MAX].
+const RETRY_FIRST: Duration = Duration::from_secs(1);
+const RETRY_MAX: Duration = Duration::from_secs(30);
+
+/// The agent answered with an error: it won't give frame buffers, as an
+/// agent from before them doesn't.
+#[derive(Debug)]
+struct Refused(String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "the agent: {}", self.0)
+    }
+}
+
+impl std::error::Error for Refused {}
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Slot {
@@ -60,7 +78,7 @@ impl Buffers {
         let (line, fd) = read_reply(&mut agent)?;
         let reply: serde_json::Value = serde_json::from_slice(&line).context("the agent's reply")?;
         if let Some(e) = reply.get("error").and_then(|e| e.as_str()) {
-            bail!("the agent: {e}");
+            return Err(Refused(e.to_owned()).into());
         }
         let fd = fd.context("the agent's reply carries no memfd")?;
         let pages: Vec<u64> = serde_json::from_value(reply.get("pages").cloned().unwrap_or_default()).context("the agent's pages")?;
@@ -131,21 +149,25 @@ pub struct Frames {
     /// Sets replaced by bigger ones while the app still had slots of them.
     retired: Vec<Buffers>,
     next_id: u64,
-    /// Asking the agent failed: this connection sends its data as before.
-    failed: bool,
+    /// The agent refused: this connection sends its data as before.
+    refused: bool,
+    /// After a failure that may pass, when to ask again, and the wait after that.
+    retry_at: Option<Instant>,
+    backoff: Duration,
 }
 
 impl Frames {
     /// Frame buffers asked of the agent on `socket`.
     pub fn new(socket: Arc<Path>) -> Self {
-        Self { socket, request: Buffers::request, current: None, retired: Vec::new(), next_id: 0, failed: false }
+        Self { socket, request: Buffers::request, current: None, retired: Vec::new(), next_id: 0, refused: false, retry_at: None, backoff: RETRY_FIRST }
     }
 
     /// Copies `data` into a free slot; returns the slot and the commit's data
     /// for it (page count, then addresses). None when there are no buffers or
-    /// none free: the data then goes on the stream.
+    /// none free, or while asking for them waits out a failure: the data then
+    /// goes on the stream.
     pub fn put(&mut self, data: &[u8]) -> Option<(Loan, Vec<u8>)> {
-        if self.failed {
+        if self.refused || self.retry_at.is_some_and(|t| Instant::now() < t) {
             return None;
         }
         if !self.current.as_ref().is_some_and(|b| b.alive() && b.slot_len >= data.len()) {
@@ -154,10 +176,20 @@ impl Frames {
             }
             self.next_id += 1;
             match (self.request)(&self.socket, self.next_id, data.len()) {
-                Ok(b) => self.current = Some(b),
-                Err(e) => {
+                Ok(b) => {
+                    self.current = Some(b);
+                    self.retry_at = None;
+                    self.backoff = RETRY_FIRST;
+                }
+                Err(e) if e.is::<Refused>() => {
                     tracing::warn!("frame buffers: {e:#}; frames go on the stream");
-                    self.failed = true;
+                    self.refused = true;
+                    return None;
+                }
+                Err(e) => {
+                    tracing::warn!("frame buffers: {e:#}; frames go on the stream, asking again in {:?}", self.backoff);
+                    self.retry_at = Some(Instant::now() + self.backoff);
+                    self.backoff = (self.backoff * 2).min(RETRY_MAX);
                     return None;
                 }
             }
@@ -223,6 +255,14 @@ mod tests {
         Ok(Buffers { id, agent, map: map.cast(), len, pages, slot_len, slots: vec![Slot::Free; SLOTS] })
     }
 
+    fn unreachable(_: &Path, _: u64, _: usize) -> Result<Buffers> {
+        Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused).into())
+    }
+
+    fn refusing(_: &Path, _: u64, _: usize) -> Result<Buffers> {
+        Err(Refused("unknown request".into()).into())
+    }
+
     fn frames() -> Frames {
         Frames { request: local, ..Frames::new(Path::new("").into()) }
     }
@@ -277,5 +317,24 @@ mod tests {
         f.current.as_ref().unwrap().agent.shutdown(std::net::Shutdown::Both).unwrap();
         f.put(&[0u8; PAGE]).unwrap();
         assert_ne!(f.current.as_ref().unwrap().id, old);
+    }
+
+    #[test]
+    fn an_unreachable_agent_is_asked_again_after_a_wait() {
+        let mut f = Frames { request: unreachable, ..frames() };
+        assert!(f.put(&[0u8; PAGE]).is_none());
+        f.request = local;
+        assert!(f.put(&[0u8; PAGE]).is_none());
+        f.retry_at = Some(Instant::now());
+        assert!(f.put(&[0u8; PAGE]).is_some());
+    }
+
+    #[test]
+    fn a_refusing_agent_is_not_asked_again() {
+        let mut f = Frames { request: refusing, ..frames() };
+        assert!(f.put(&[0u8; PAGE]).is_none());
+        f.request = local;
+        f.retry_at = None;
+        assert!(f.put(&[0u8; PAGE]).is_none());
     }
 }
