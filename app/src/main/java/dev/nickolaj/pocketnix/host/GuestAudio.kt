@@ -23,12 +23,19 @@ import java.util.concurrent.atomic.AtomicLong
  * stops it until the next [start].
  */
 class GuestAudio(private val appVersion: String) {
+    enum class Status { OFF, DIALING, STREAMING, REFUSED }
+
+    /** Where the stream is; [Status.REFUSED] lasts until the next [start]. */
+    @Volatile var status = Status.OFF
+        private set
+
     @Volatile private var thread: Thread? = null
 
     @Volatile private var stream: AgentStream? = null
 
     fun start(dialer: AgentDialer) {
         stop()
+        status = Status.DIALING
         thread = Thread({ run(dialer) }, "guest-audio").apply {
             isDaemon = true
             start()
@@ -38,6 +45,7 @@ class GuestAudio(private val appVersion: String) {
     fun stop() {
         val t = thread ?: return
         thread = null
+        status = Status.OFF
         t.interrupt()
         stream?.let { runCatching { it.close() } }
     }
@@ -55,12 +63,15 @@ class GuestAudio(private val appVersion: String) {
                     return
                 }
                 backoff = MIN_BACKOFF_MS
+                status = Status.STREAMING
                 s.use { play(it.input, me) }
             } catch (e: AgentException) {
                 Log.i(TAG, "no guest sound: ${e.message}")
+                if (thread === me) status = Status.REFUSED
                 return
             } catch (e: IOException) {
                 // The agent restarted, or the guest's sound server went away.
+                if (thread === me) status = Status.DIALING
             } finally {
                 stream = null
             }

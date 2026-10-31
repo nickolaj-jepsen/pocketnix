@@ -22,6 +22,7 @@ import dev.nickolaj.pocketnix.engine.ConsoleLog
 import dev.nickolaj.pocketnix.engine.TcpEngine
 import dev.nickolaj.pocketnix.engine.VmEngine
 import dev.nickolaj.pocketnix.engine.VmState
+import dev.nickolaj.pocketnix.engine.engineLine
 import dev.nickolaj.pocketnix.files.GuestDocumentsProvider
 import dev.nickolaj.pocketnix.files.PendingUploads
 import dev.nickolaj.pocketnix.files.Transfers
@@ -594,7 +595,8 @@ class Vm(private val app: Context) {
 
     /**
      * Debug builds, over adb, on the main thread: the VM's state and [phase], the
-     * terminal background and where it came from, the setup and the updates
+     * terminal background and where it came from, the setup, what the last
+     * launch gave the VM and the guest sound's stream, the updates
      * (with their log's last [lines]), the last [lines] of every tab's
      * transcript (only tab [only]'s if given) and, for all tabs, the GUI windows.
      */
@@ -602,6 +604,7 @@ class Vm(private val app: Context) {
         add("state=${state.value} phase=${phase.value} link=${control.link.value} host=${control.config.value?.hostname}")
         add("theme background=#%06x source=$themeSource".format(TerminalTheme.background and 0xffffff))
         add("setup=${managed.setup.value} managed=${control.config.value?.managedFlake}")
+        add("${engineLine(_engine.value.launched)} audio=${audio.status.name.lowercase()}")
         updates.value?.let { u ->
             add("updates state=${u.state} op=${u.op} available=${u.available} plan=${u.plan} blocked=${u.blocked} error=${u.error}")
             add("updates packages=${u.packages} run=${u.run} generations=${u.generations.map { "${it.number}${if (it.current) "*" else ""}" }}")

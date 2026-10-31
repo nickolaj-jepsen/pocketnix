@@ -60,6 +60,9 @@ class AvfEngine(private val context: Context) : VmEngine {
     // answers: later launches in this process go without the GPU, so it can't keep the VM from booting.
     private var gpuRefused = false
 
+    @Volatile override var launched: Launched? = null
+        private set
+
     override val dialer: AgentDialer?
         get() = vm?.let { v ->
             val up = agentUp
@@ -142,6 +145,17 @@ class AvfEngine(private val context: Context) : VmEngine {
             }
             AvfReflect.run(v)
             vm = v
+            launched = Launched(
+                gpu = when {
+                    launchGpu -> "gfxstream"
+                    settings.network -> "2d"
+                    else -> "none"
+                },
+                gpuAsked = settings.gpu,
+                gpuRefused = gpuRefused,
+                guestRam = launchSharedRam,
+                virtioSnd = settings.audio
+            )
             _state.value = VmState.Running
             Log.i(TAG, "VM running (${settings.memoryMb} MB, cpus=${settings.cpus}, network=${settings.network}, gpu=$launchGpu, guestRam=$launchSharedRam, audio=${settings.audio})")
         } catch (e: Throwable) {
@@ -193,6 +207,7 @@ class AvfEngine(private val context: Context) : VmEngine {
         Log.w(TAG, "a GPU run ended unasked (guestRam=$launchSharedRam); the next start goes without the GPU")
         console.append("\r\n[pocketnix: the next start goes without the phone's GPU]\r\n")
         gpuRefused = true
+        launched = launched?.copy(gpuRefused = true)
     }
 
     private fun buildConfig(disk: File, settings: VmSettings, gpu: Boolean, sharedRam: Boolean): Any {
