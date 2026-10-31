@@ -1,6 +1,8 @@
 package dev.nickolaj.pocketnix.gui
 
 import dev.nickolaj.pocketnix.VmPhase
+import dev.nickolaj.pocketnix.managed.SERVICES
+import dev.nickolaj.pocketnix.ui.MainItem
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -135,6 +137,12 @@ class Launches(private val send: (ByteArray) -> Unit, private val newId: () -> S
 /** What a launch's splash says, and whether it ended without a window. */
 data class SplashStatus(val text: String, val failed: Boolean = false, val canRetry: Boolean = false)
 
+/** What turns GUI apps on: the app's switch on a [managed] guest, which the user never writes a flake for, else the module option. */
+fun guiSwitch(managed: Boolean): String = if (managed) "${SERVICES.first { it.id == "gui" }.label} in ⋮ → ${MainItem.CONFIGURE.label}" else "pocketnix.guest.gui.enable"
+
+/** Why a guest with `gui.enable` off has no apps; [managed] as for [guiSwitch]. */
+fun guiOffHint(managed: Boolean): String = "GUI apps are off in this guest (${guiSwitch(managed)})."
+
 /** Why app-list entry [name] can't launch any more. */
 fun appGone(name: String): String = "$name is no longer installed in the guest."
 
@@ -142,14 +150,15 @@ fun appGone(name: String): String = "$name is no longer installed in the guest."
  * The splash's line for launching [name]: the VM booting, the GUI stream
  * connecting, the app starting, or why none of it worked. [guiEnabled] is
  * the guest config's `gui.enable`, null before the agent sent one;
- * [guiReady] that the GUI stream finished a replay.
+ * [guiReady] that the GUI stream finished a replay; [managed] as for [guiSwitch].
  */
 fun splashStatus(
     name: String,
     vm: VmPhase,
     guiEnabled: Boolean?,
     guiReady: Boolean,
-    launch: LaunchState
+    launch: LaunchState,
+    managed: Boolean = false
 ): SplashStatus = when {
     launch is LaunchState.Failed -> when (launch.reason) {
         LaunchState.UNKNOWN -> SplashStatus(appGone(name), failed = true)
@@ -172,7 +181,7 @@ fun splashStatus(
 
     vm !is VmPhase.Running -> SplashStatus("Starting the VM…")
 
-    guiEnabled == false -> SplashStatus("GUI apps are off in this guest (pocketnix.guest.gui.enable).", failed = true)
+    guiEnabled == false -> SplashStatus(guiOffHint(managed), failed = true)
 
     !guiReady -> SplashStatus("Connecting to the guest's display…")
 

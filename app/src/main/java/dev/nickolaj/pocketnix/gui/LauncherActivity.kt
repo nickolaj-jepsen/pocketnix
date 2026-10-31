@@ -114,9 +114,11 @@ private fun Launcher(vm: Vm, open: (AppEntry, String, Boolean) -> Unit, pin: (Ap
         vm.gui.catalog.apps.filter { !it.noDisplay && it.matches(query) }.sortedBy { it.label.lowercase() }
     }
     val iconSize = remember { vm.gui.iconSize(large = false) }
+    // Before the agent sends a config, the app's own selections say so.
+    val managedGuest = config?.managedFlake != null || (config == null && vm.managed.store.selections != null)
     Column(Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 12.dp)) {
         Text(
-            launcherStatus(phase, config?.gui?.enable),
+            launcherStatus(phase, config?.gui?.enable, managedGuest),
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(vertical = 8.dp)
         )
@@ -129,7 +131,7 @@ private fun Launcher(vm: Vm, open: (AppEntry, String, Boolean) -> Unit, pin: (Ap
         )
         if (vm.gui.catalog.apps.isEmpty()) {
             Text(
-                "No apps yet. With pocketnix.guest.gui.enable set, start the VM once: pocketnix keeps the guest's " +
+                "No apps yet. With ${guiSwitch(managedGuest)} on, start the VM once: pocketnix keeps the guest's " +
                     "app list for when it's off.",
                 modifier = Modifier.padding(vertical = 24.dp)
             )
@@ -282,8 +284,11 @@ private fun NixpkgsResults(vm: Vm, runner: NixpkgsRunner, query: String) {
     }
 }
 
-/** The launcher's line above the apps; [guiEnabled] is the guest config's `gui.enable`, null before one arrived. */
-internal fun launcherStatus(phase: VmPhase, guiEnabled: Boolean?): String = when (phase) {
+/**
+ * The launcher's line above the apps; [guiEnabled] is the guest config's
+ * `gui.enable`, null before one arrived, and [managed] as for [guiSwitch].
+ */
+internal fun launcherStatus(phase: VmPhase, guiEnabled: Boolean?, managed: Boolean = false): String = when (phase) {
     VmPhase.Stopped -> "The VM is off. Tapping an app starts it."
 
     is VmPhase.Failed -> "The VM failed: ${phase.message}. Tapping an app starts it again."
@@ -297,7 +302,7 @@ internal fun launcherStatus(phase: VmPhase, guiEnabled: Boolean?): String = when
     is VmPhase.Refused -> "The guest's agent refused pocketnix: ${phase.reason}"
 
     is VmPhase.Running -> if (guiEnabled == false) {
-        "GUI apps are off in this guest (pocketnix.guest.gui.enable)."
+        guiOffHint(managed)
     } else {
         "Apps of ${phase.host ?: "the guest"}"
     }

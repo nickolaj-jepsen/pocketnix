@@ -84,4 +84,14 @@ class VmPhaseTest {
         assertFalse(showsRequirements(VmPhase.Running("box"), missing))
         assertFalse(showsRequirements(VmPhase.Stopped, emptyList()))
     }
+
+    @Test
+    fun aManagedGuestsGuiOffHintNamesAnotherSwitch() {
+        val running = VmPhase.Running("box")
+        assertNotEquals(launcherStatus(running, guiEnabled = false), launcherStatus(running, guiEnabled = false, managed = true))
+        val unmanaged = splashStatus("Foot", running, false, true, LaunchState.Pending)
+        val managed = splashStatus("Foot", running, false, true, LaunchState.Pending, managed = true)
+        assertTrue(managed.failed)
+        assertNotEquals(unmanaged.text, managed.text)
+    }
 }

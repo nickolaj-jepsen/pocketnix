@@ -312,7 +312,7 @@ class GuiWindowActivity :
         watch?.cancel()
         watch = scope.launch {
             val vmFlows = combine(vm.phase, vm.config, vm.gui.ready) { phase, cfg, ready ->
-                { ls: LaunchState -> splashStatus(name, phase, cfg?.gui?.enable, ready, ls) }
+                { ls: LaunchState -> splashStatus(name, phase, cfg?.gui?.enable, ready, ls, managed = cfg?.managedFlake != null) }
             }
             combine(vmFlows, l.state) { status, ls -> status(ls) to ls }.collect { (status, ls) ->
                 when (ls) {
