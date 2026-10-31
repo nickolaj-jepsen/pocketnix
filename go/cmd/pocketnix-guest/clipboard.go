@@ -280,10 +280,13 @@ func (b *bridge) fromWayland(state string) error {
 	return err
 }
 
-// fromAgent puts a change of the agent's clipboard on the Wayland selection.
+// fromAgent puts a change of the agent's clipboard on the Wayland selection,
+// except a sensitive guest copy.
 func (b *bridge) fromAgent(ev protocol.ClipboardEvent) error {
 	t := pickType(ev.Types)
-	if t == "" {
+	// A sensitive copy came from Wayland: offering it again, unmarked, would
+	// undo a password manager's clearing it and reach clipboard histories.
+	if t == "" || ev.Sensitive {
 		return nil
 	}
 	var data []byte

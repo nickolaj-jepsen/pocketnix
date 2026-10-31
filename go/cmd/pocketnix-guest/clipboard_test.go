@@ -297,6 +297,23 @@ func TestBridgeMarksSensitiveCopies(t *testing.T) {
 	}
 }
 
+// A bridge that subscribes again (it restarted) doesn't put a password back
+// on the Wayland selection after the password manager cleared it.
+func TestBridgeDoesNotOfferASensitiveCopyBack(t *testing.T) {
+	sock, _, ctl := startAgent(t)
+	b, wl := newBridge(t, sock)
+	wl.copy([]byte("hunter2"), "text/plain;charset=utf-8", sensitiveHint)
+	must(t, b.fromWayland("sensitive"))
+	appEvent(t, ctl)
+	wl.copy(nil)
+
+	fresh := &bridge{sock: sock, wl: wl, logf: t.Logf}
+	must(t, fresh.fromAgent(clipboardEvents(t, sock)()))
+	if types, data := wl.selection(); types != nil {
+		t.Errorf("Wayland offers %q (%q) after the manager cleared it", types, data)
+	}
+}
+
 func TestBridgeTypedData(t *testing.T) {
 	sock, c, ctl := startAgent(t)
 	b, wl := newBridge(t, sock)

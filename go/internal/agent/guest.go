@@ -155,7 +155,7 @@ func (s *Server) guest(req protocol.GuestRequest) (string, error) {
 			return "", fmt.Errorf("clipboard text over %d KiB", protocol.MaxClipboardText>>10)
 		}
 		s.setClipboard(req.Text)
-		s.setClipboardTypes(nil, req.Text)
+		s.setClipboardTypes(nil, req.Text, req.Sensitive)
 		s.publishClipboard()
 		return "", s.event(protocol.Event{Type: protocol.TypeGuestClipboard, Text: req.Text, Sensitive: req.Sensitive})
 	case protocol.GuestPaste:

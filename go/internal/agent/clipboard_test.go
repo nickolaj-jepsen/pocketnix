@@ -130,6 +130,23 @@ func TestSensitiveGuestCopy(t *testing.T) {
 	}
 }
 
+// A subscriber learns a copy was sensitive, from when it subscribes on.
+func TestClipboardSubscriptionMarksSensitiveCopies(t *testing.T) {
+	h, _, _, sock := startIntegrations(t, nil)
+	ctl := connectApp(t, h)
+	if _, err := client.Guest(sock, protocol.GuestRequest{Type: protocol.GuestCopy, Text: "hunter2", Sensitive: true}); err != nil {
+		t.Fatal(err)
+	}
+	next := clipboardEvents(t, sock)
+	if ev := next(); ev.Text != "hunter2" || !ev.Sensitive {
+		t.Errorf("first event = %+v, want the copy marked sensitive", ev)
+	}
+	must(t, ctl.SetClipboard("plain"))
+	if ev := next(); ev.Sensitive {
+		t.Errorf("after Android's clipboard = %+v, want it unmarked", ev)
+	}
+}
+
 func TestNotificationSubscriberGetsNoClipboard(t *testing.T) {
 	h, _, _, sock := startIntegrations(t, nil)
 	ctl := connectApp(t, h)

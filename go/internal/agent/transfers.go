@@ -93,6 +93,8 @@ type transfers struct {
 	clipTypes []string
 	clipMIME  string
 	clipData  []byte
+	// clipSensitive marks a guest's copy that was marked sensitive.
+	clipSensitive bool
 }
 
 func (s *Server) newTransfer(kind string) (string, *transfer) {
@@ -133,13 +135,13 @@ func (s *Server) dropTransfer(ref string) {
 
 // setClipboardTypes records the clipboard's types after a text copy (types
 // nil) or Android's clipboard arrived, forgetting a guest's typed copy.
-func (s *Server) setClipboardTypes(types []string, text string) {
+func (s *Server) setClipboardTypes(types []string, text string, sensitive bool) {
 	if types == nil && text != "" {
 		types = []string{"text/plain"}
 	}
 	x := &s.transfers
 	x.mu.Lock()
-	x.clipTypes, x.clipMIME, x.clipData = types, "", nil
+	x.clipTypes, x.clipMIME, x.clipData, x.clipSensitive = types, "", nil, sensitive
 	x.mu.Unlock()
 }
 
@@ -247,7 +249,7 @@ func (s *Server) serveTransfer(ctx context.Context, req protocol.GuestRequest, f
 		s.setClipboard("")
 		x := &s.transfers
 		x.mu.Lock()
-		x.clipTypes, x.clipMIME, x.clipData = []string{req.MIME}, req.MIME, data
+		x.clipTypes, x.clipMIME, x.clipData, x.clipSensitive = []string{req.MIME}, req.MIME, data, req.Sensitive
 		x.mu.Unlock()
 		s.publishClipboard()
 		ref, t := s.newTransfer(req.Type)

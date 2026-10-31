@@ -364,7 +364,7 @@ func (s *Server) request(req protocol.Request) (any, error) {
 			return nil, fmt.Errorf("clipboard text over %d KiB", protocol.MaxClipboardText>>10)
 		}
 		s.setClipboard(req.Text)
-		s.setClipboardTypes(req.Types, req.Text)
+		s.setClipboardTypes(req.Types, req.Text, false)
 		s.publishClipboard()
 		return ack, nil
 	case protocol.TypeShareText:

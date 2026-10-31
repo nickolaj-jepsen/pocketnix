@@ -35,9 +35,9 @@ func replace(ch chan protocol.ClipboardEvent, ev protocol.ClipboardEvent) {
 func (s *Server) clipboardEvent() (ev protocol.ClipboardEvent, ok bool) {
 	x := &s.transfers
 	x.mu.Lock()
-	types := append([]string(nil), x.clipTypes...)
+	types, sensitive := append([]string(nil), x.clipTypes...), x.clipSensitive
 	x.mu.Unlock()
-	ev = protocol.ClipboardEvent{Type: protocol.TypeClipboard, Text: s.clipboardText(), Types: types}
+	ev = protocol.ClipboardEvent{Type: protocol.TypeClipboard, Text: s.clipboardText(), Types: types, Sensitive: sensitive}
 	return ev, len(types) > 0
 }
 

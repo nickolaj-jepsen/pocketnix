@@ -20,6 +20,9 @@ type ClipboardEvent struct {
 	Type  string   `json:"type"`
 	Text  string   `json:"text,omitempty"`
 	Types []string `json:"types,omitempty"`
+	// Sensitive marks a guest's copy that was marked sensitive (a password
+	// manager's): the clipboard bridge doesn't offer it back to Wayland.
+	Sensitive bool `json:"sensitive,omitempty"`
 }
 
 // Clipboard limits, both ways; the agent refuses more.
