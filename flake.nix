@@ -182,9 +182,29 @@
           touch $out
         '';
         # Evaluates a managed guest's seed flake against this checkout, the way
-        # the app configures one: its drv path.
+        # the app configures one: its drv path. nix/managed has no pocketnix.json
+        # (the seed writes the module's selections), so its readFile gets these.
         managed = let
-          outputs = (import ./nix/managed/flake.nix).outputs {pocketnix = self;};
+          selections = {
+            user = "alice";
+            services = {
+              ssh = true;
+              gui = true;
+            };
+          };
+          flake =
+            scopedImport {
+              builtins =
+                builtins
+                // {
+                  readFile = p:
+                    if baseNameOf p == "pocketnix.json"
+                    then builtins.toJSON selections
+                    else builtins.readFile p;
+                };
+            }
+            ./nix/managed/flake.nix;
+          outputs = flake.outputs {pocketnix = self;};
         in
           pkgs.writeText "pocketnix-managed" (builtins.unsafeDiscardStringContext outputs.nixosConfigurations.pocketnix.config.system.build.toplevel.drvPath);
         # Evaluates the template against this checkout without building it: its systems' drv paths.

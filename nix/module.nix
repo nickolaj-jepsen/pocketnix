@@ -1009,7 +1009,8 @@ in {
       security.sudo.wheelNeedsPassword = mkDefault false;
       # Rebuilding on the phone costs minutes of evaluation: only when asked.
       pocketnix.guest.updates.checkInterval = mkDefault null;
-      pocketnix.guest.updates.keepGenerations = sel.keepGenerations;
+      # A default, so configuration.nix can override the app.
+      pocketnix.guest.updates.keepGenerations = mkDefault sel.keepGenerations;
 
       nix.settings = {
         experimental-features = ["nix-command" "flakes"];
