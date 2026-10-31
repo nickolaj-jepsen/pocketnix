@@ -72,6 +72,8 @@ in
           # By IP: the agent's pure-Go resolver.
           published.url = "https://${nodes.builder.networking.primaryIPAddress}/toplevel";
           checkInterval = null;
+          # The update subtests count every generation; the prune subtest turns pruning on.
+          keepGenerations = null;
         };
       };
       systemd.services.udp-echo = {
@@ -105,6 +107,7 @@ in
       # The port watcher's /proc poller, which this kernel's eBPF otherwise leaves unused.
       specialisation.poller.configuration.systemd.services.pocketnix-agent.serviceConfig.ExecStart =
         pkgs.lib.mkForce "${config.systemd.services.pocketnix-agent.serviceConfig.ExecStart} --poll-ports";
+      specialisation.prune.configuration.pocketnix.guest.updates.keepGenerations = pkgs.lib.mkForce 0;
     };
 
     # A build host (over ssh, for next.1) and a binary cache plus published
@@ -553,6 +556,21 @@ in
           u = json.loads(client.succeed(f"{A} switch-generation 2"))
           assert u["current"] == "${next."1"}", u
           phone.succeed("grep -qx 1 /etc/pocketnix-test-generation")
+
+      with subtest("a switch prunes the generations besides the running and the booted one"):
+          # The running system's twin with keepGenerations = 0: the agent reloads its config.
+          reloads = "journalctl -u pocketnix-agent -o cat | grep -c 'config reloaded' || true"
+          before = int(phone.succeed(reloads))
+          phone.succeed("/run/current-system/specialisation/prune/bin/switch-to-configuration test")
+          phone.wait_until_succeeds(f"test $({reloads}) -gt {before}", timeout=60)
+          u = json.loads(client.succeed(f"{A} switch-generation 3"))
+          assert u["current"] == "${next."2"}" and not u.get("error"), u
+          # The booted system is the test's base, which no generation holds.
+          assert [g["number"] for g in u["generations"]] == [3], u["generations"]
+          phone.fail("test -e /nix/var/nix/profiles/system-2-link")
+          # The collection's summary is logged; the paths it deleted aren't.
+          assert any(l.endswith(" freed") for l in u["log"]), u["log"]
+          assert not any(l.startswith("deleting '") for l in u["log"]), u["log"]
 
       with subtest("with the /proc poller, a user's listener reaches the app, and root's never does"):
           phone.succeed("${nodes.phone.system.build.toplevel}/specialisation/poller/bin/switch-to-configuration test")
