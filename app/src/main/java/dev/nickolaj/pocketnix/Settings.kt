@@ -37,6 +37,11 @@ class Settings(context: Context) {
         get() = BuildConfig.DEBUG && prefs.getBoolean("tcpBackend", false)
         set(v) = prefs.edit { putBoolean("tcpBackend", v) }
 
+    /** Debug builds: where the release's base image and package index are, instead of GitHub. */
+    var releaseUrl: String
+        get() = if (BuildConfig.DEBUG) prefs.getString("releaseUrl", "")!! else ""
+        set(v) = prefs.edit { putString("releaseUrl", v) }
+
     /** host:port of the TCP agent; 10.0.2.2 is the emulator's host. */
     var tcpAddress: String
         get() = prefs.getString("tcpAddress", "10.0.2.2:9100")!!

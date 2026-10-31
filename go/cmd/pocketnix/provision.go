@@ -2,6 +2,10 @@ package main
 
 import (
 	"bytes"
+	"cmp"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -22,14 +26,15 @@ import (
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/image"
 )
 
-const provisionUsage = `usage: pocketnix provision --image <file|installable> [flags]
+const provisionUsage = `usage: pocketnix provision [--image <file|installable>] [flags]
 
 Installs the app, grants its AVF permissions, pushes a disk image into the
 app's storage and starts the VM.
 
 flags:
   --image <file|installable>  the disk image, or a Nix installable that builds it
-                              (e.g. .#nixosConfigurations.phone: this machine's pocketnixImage.<system>)
+                              (e.g. .#nixosConfigurations.phone: this machine's pocketnixImage.<system>);
+                              without it, the release's base image, which the app then configures
   --apk <file>                APK to install (default: the release APK of this CLI's version)
   --debug                     target the debug build (dev.nickolaj.pocketnix.debug)
   --inject <guest>=<file|->   write a file into the image's root filesystem; repeatable
@@ -68,11 +73,12 @@ type provisionOpts struct {
 	log                       io.Writer
 	resolveInstallable        func(string) (string, error)
 	downloadRelease           func(version, dst string) error
+	downloadImage             func(version, dst string) error
 	cleanups                  *cleanups
 }
 
 func parseProvision(args []string) (*provisionOpts, error) {
-	o := &provisionOpts{stdin: os.Stdin, log: os.Stderr, resolveInstallable: nixBuild, downloadRelease: downloadRelease}
+	o := &provisionOpts{stdin: os.Stdin, log: os.Stderr, resolveInstallable: nixBuild, downloadRelease: downloadRelease, downloadImage: downloadBaseImage}
 	fs := flag.NewFlagSet("provision", flag.ContinueOnError)
 	fs.Usage = func() { fmt.Fprint(os.Stderr, provisionUsage) }
 	fs.StringVar(&o.image, "image", "", "")
@@ -107,7 +113,7 @@ func parseProvision(args []string) (*provisionOpts, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
-	if o.image == "" || fs.NArg() > 0 {
+	if fs.NArg() > 0 {
 		fs.Usage()
 		return nil, errUsage
 	}
@@ -340,6 +346,16 @@ func imageInstallableOn(p, goos, goarch string) string {
 // result), or an installable to build.
 func (o *provisionOpts) resolveImage() (string, error) {
 	p := o.image
+	if p == "" {
+		tmp, err := os.MkdirTemp("", "pocketnix-base-")
+		if err != nil {
+			return "", err
+		}
+		o.cleanups.add(func() { os.RemoveAll(tmp) })
+		p = filepath.Join(tmp, "disk.img")
+		o.logf("downloading the base image of release %s", version)
+		return p, o.downloadImage(version, p)
+	}
 	if _, err := os.Stat(p); err != nil {
 		p = imageInstallable(p)
 		o.logf("building %s", p)
@@ -404,6 +420,89 @@ func downloadRelease(version, dst string) error {
 		return fmt.Errorf("refusing %s: %w", url, err)
 	}
 	return nil
+}
+
+// downloadBaseImage fetches release version's base image (gzipped, as
+// .github/workflows/release.yml publishes it) into dst, checking it against
+// its published sha256 and leaving zero blocks as holes.
+func downloadBaseImage(version, dst string) error {
+	if version == "dev" || version == "0.0.0" {
+		return fmt.Errorf("this CLI (%s) has no release image; pass --image", version)
+	}
+	base := fmt.Sprintf("https://github.com/nickolaj-jepsen/pocketnix/releases/download/v%s/pocketnix-base-%s.img.gz", version, version)
+	sum, err := httpText(base + ".sha256")
+	if err != nil {
+		return err
+	}
+	want, _, _ := strings.Cut(strings.TrimSpace(sum), " ")
+	resp, err := http.Get(base)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GET %s: %s", base, resp.Status)
+	}
+	h := sha256.New()
+	if err := gunzipSparse(dst, io.TeeReader(resp.Body, h)); err != nil {
+		return err
+	}
+	if got := hex.EncodeToString(h.Sum(nil)); got != strings.ToLower(want) {
+		return fmt.Errorf("%s doesn't match its checksum", base)
+	}
+	return nil
+}
+
+func httpText(url string) (string, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GET %s: %s", url, resp.Status)
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	return string(b), err
+}
+
+// gunzipSparse writes the gzip stream r to dst, seeking over zero blocks.
+func gunzipSparse(dst string, r io.Reader) error {
+	zr, err := gzip.NewReader(r)
+	if err != nil {
+		return err
+	}
+	f, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	buf := make([]byte, 1<<20)
+	var at int64
+	for {
+		n, err := io.ReadFull(zr, buf)
+		if n > 0 {
+			if bytes.Count(buf[:n], []byte{0}) == n {
+				_, werr := f.Seek(int64(n), io.SeekCurrent)
+				err = cmp.Or(werr, err)
+			} else if _, werr := f.Write(buf[:n]); werr != nil {
+				err = werr
+			}
+			at += int64(n)
+		}
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			break
+		}
+		if err != nil {
+			f.Close()
+			return err
+		}
+	}
+	// A zero tail is only a length.
+	if err := f.Truncate(at); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // upload sends the image in chunks, skipping all-zero ones: the app sizes

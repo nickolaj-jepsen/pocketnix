@@ -161,4 +161,22 @@ class ProtocolTest {
         assertEquals(PortListeners.MAX_PORTS, ports.size)
         assertEquals(1001, ports.first())
     }
+
+    @Test
+    fun parsesManagedGuest() {
+        val c = GuestConfig.parse("""{"type":"config","hostname":"pocketnix","forwards":[],"terminal":{},"managed":{"flake":"/etc/nixos"}}""")
+        assertEquals("/etc/nixos", c.managedFlake)
+        assertNull(GuestConfig.parse(config).managedFlake)
+        val u = Updates.parse(
+            JSONObject(
+                """{"type":"updates","state":"idle","sources":["local"],"available":"/nix/store/b-nixos-system-pocketnix",
+                "plan":{"download":1048576,"builds":["portal-1.0"]},"blocked":{"download":0,"builds":["hello-x"]},
+                "packages":["hello","python3Packages.rich"],"run":{"package":"gnome-calculator","apps":["org.gnome.Calculator"]}}"""
+            )
+        )
+        assertEquals(Plan(1048576, listOf("portal-1.0")), u.plan)
+        assertEquals(listOf("hello-x"), u.blocked?.builds)
+        assertEquals(listOf("hello", "python3Packages.rich"), u.packages)
+        assertEquals(RunResult("gnome-calculator", listOf("org.gnome.Calculator"), null), u.run)
+    }
 }

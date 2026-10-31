@@ -212,11 +212,16 @@ type Managed struct {
 }
 
 // Selections are what the app configures in a managed guest, its flake's
-// pocketnix.json: the user, and which [Services] are on.
+// pocketnix.json: the user, which [Services] are on, and how many
+// generations to keep besides the running and the booted one.
 type Selections struct {
-	Type     string          `json:"type,omitempty"` // "selections" on the wire
-	User     string          `json:"user"`
-	Services map[string]bool `json:"services"`
+	Type            string          `json:"type,omitempty"` // "selections" on the wire
+	User            string          `json:"user"`
+	Services        map[string]bool `json:"services"`
+	KeepGenerations int             `json:"keepGenerations"`
+	// Changed is the agent's answer: the request changed the file, so the
+	// running system may not be what it describes.
+	Changed bool `json:"changed,omitempty"`
 }
 
 // Services are the switches of [Selections], the options of the module's

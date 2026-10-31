@@ -1,5 +1,6 @@
 package dev.nickolaj.pocketnix.gui
 
+import android.content.Intent
 import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.widget.Toast
@@ -12,12 +13,14 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material3.DropdownMenu
@@ -26,12 +29,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -42,13 +48,23 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.nickolaj.pocketnix.MainActivity
 import dev.nickolaj.pocketnix.R
 import dev.nickolaj.pocketnix.Vm
 import dev.nickolaj.pocketnix.VmPhase
+import dev.nickolaj.pocketnix.managed.Package
+import dev.nickolaj.pocketnix.managed.PackageIndex
+import dev.nickolaj.pocketnix.ui.PlanAsk
+import dev.nickolaj.pocketnix.ui.PlanAskDialog
 import dev.nickolaj.pocketnix.ui.PocketnixTheme
 import dev.nickolaj.pocketnix.vm
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The guest's apps, from the cached list, so it works with the VM off: a
@@ -63,10 +79,16 @@ class LauncherActivity : ComponentActivity() {
         setContent {
             PocketnixTheme {
                 Surface(Modifier.fillMaxSize()) {
-                    Launcher(vm, ::open, ::pin)
+                    Launcher(vm, ::open, ::pin, ::runInTab)
                 }
             }
         }
+    }
+
+    /** A fetched program without a window: it runs in a new tab of the main screen. */
+    private fun runInTab(command: String) = guard("launcher: run $command") {
+        vm.openTab(command = command) ?: return@guard
+        startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
     }
 
     private fun open(app: AppEntry, action: String, newWindow: Boolean) = guard("launcher: open ${app.id}") {
@@ -83,7 +105,7 @@ class LauncherActivity : ComponentActivity() {
 }
 
 @Composable
-private fun Launcher(vm: Vm, open: (AppEntry, String, Boolean) -> Unit, pin: (AppEntry) -> Unit) {
+private fun Launcher(vm: Vm, open: (AppEntry, String, Boolean) -> Unit, pin: (AppEntry) -> Unit, runInTab: (String) -> Unit) {
     val revision by vm.gui.catalog.revision.collectAsState()
     val phase by vm.phase.collectAsState()
     val config by vm.config.collectAsState()
@@ -112,12 +134,18 @@ private fun Launcher(vm: Vm, open: (AppEntry, String, Boolean) -> Unit, pin: (Ap
                 modifier = Modifier.padding(vertical = 24.dp)
             )
         }
+        val managed = config?.managedFlake != null && phase is VmPhase.Running
+        val runner = remember { NixpkgsRunner(vm, open, runInTab) }
+        PlanAskDialog(runner.ask)
         LazyVerticalGrid(
             columns = GridCells.Adaptive(88.dp),
             modifier = Modifier.fillMaxSize().padding(top = 8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             items(apps, key = { it.id }) { app -> AppCell(vm, app, iconSize, revision, open, pin) }
+            if (managed && query.isNotBlank()) {
+                item(span = { GridItemSpan(maxLineSpan) }) { NixpkgsResults(vm, runner, query) }
+            }
         }
     }
 }
@@ -169,6 +197,87 @@ private fun AppCell(vm: Vm, app: AppEntry, iconSize: Int, revision: Int, open: (
                 menu = false
                 pin(app)
             })
+        }
+    }
+}
+
+/** Runs nixpkgs packages ad hoc: fetched into the guest, then launched or opened in a tab. */
+private class NixpkgsRunner(val vm: Vm, val open: (AppEntry, String, Boolean) -> Unit, val runInTab: (String) -> Unit) {
+    val ask = PlanAsk()
+    var status by mutableStateOf<String?>(null)
+    var running by mutableStateOf(false)
+
+    suspend fun run(pkg: Package) {
+        running = true
+        status = "Fetching ${pkg.attr}…"
+        try {
+            var u = vm.managed.run(pkg.attr, false)
+            u.blocked?.let { plan -> if (ask.ask(plan)) u = vm.managed.run(pkg.attr, true) else return }
+            val r = u.run?.takeIf { it.pkg == pkg.attr && u.error == null }
+            if (r == null) {
+                status = u.error ?: "${pkg.attr} didn't fetch"
+                return
+            }
+            val command = r.command
+            if (r.apps.isEmpty() && command != null) {
+                status = null
+                runInTab(command)
+                return
+            }
+            // The compositor rescans its app list when the ad-hoc profile changes.
+            val entry = withTimeoutOrNull(APP_LIST_WAIT_MS) {
+                vm.gui.catalog.revision.map { vm.gui.catalog.apps.firstOrNull { it.id in r.apps } }.filterNotNull().first()
+            }
+            status = if (entry == null) "${pkg.attr} is here, but its app didn't show up" else null
+            entry?.let { open(it, "", false) }
+        } catch (e: Exception) {
+            status = e.message ?: e.toString()
+        } finally {
+            running = false
+        }
+    }
+
+    suspend fun keep(pkg: Package) {
+        running = true
+        try {
+            var u = vm.managed.addPackage(pkg.attr, false)
+            u.blocked?.let { plan -> if (ask.ask(plan)) u = vm.managed.addPackage(pkg.attr, true) else return }
+            status = u.error ?: "${pkg.attr} is kept"
+        } finally {
+            running = false
+        }
+    }
+
+    companion object {
+        const val APP_LIST_WAIT_MS = 30_000L
+    }
+}
+
+@Composable
+private fun NixpkgsResults(vm: Vm, runner: NixpkgsRunner, query: String) {
+    val scope = rememberCoroutineScope()
+    var all by remember { mutableStateOf<List<Package>?>(null) }
+    var failed by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        runCatching { vm.managed.index.packages() }.onSuccess { all = it }.onFailure { failed = "The package list didn't download: ${it.message}" }
+    }
+    val results = remember(all, query) { all?.let { PackageIndex.search(it, query, limit = 20) }.orEmpty() }
+    val kept = vm.managed.store.packages
+    Column(Modifier.fillMaxWidth().padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("From nixpkgs", style = MaterialTheme.typography.titleSmall)
+        Text("Run fetches one for now; Keep installs it for good.", style = MaterialTheme.typography.bodySmall)
+        runner.status?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        failed?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        if (all == null && failed == null) Text("Loading the package list…", style = MaterialTheme.typography.bodySmall)
+        for (p in results) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("${p.attr} ${p.version}", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (p.description.isNotEmpty()) Text(p.description, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+                TextButton(enabled = !runner.running, onClick = { scope.launch { runner.run(p) } }) { Text("Run") }
+                if (p.attr !in kept) TextButton(enabled = !runner.running, onClick = { scope.launch { runner.keep(p) } }) { Text("Keep") }
+            }
         }
     }
 }

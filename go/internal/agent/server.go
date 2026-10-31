@@ -333,12 +333,16 @@ func (s *Server) request(req protocol.Request) (any, error) {
 	case protocol.TypeUpdateApply:
 		return ack, s.Updates.Apply(Options{Pin: req.Pin, AllowBuilds: req.AllowBuilds})
 	case protocol.TypeSelections:
+		changed := false
 		if req.Selections != nil {
-			if _, err := s.Updates.WriteSelections(*req.Selections); err != nil {
+			var err error
+			if changed, err = s.Updates.WriteSelections(*req.Selections); err != nil {
 				return nil, err
 			}
 		}
-		return s.Updates.ReadSelections()
+		sel, err := s.Updates.ReadSelections()
+		sel.Changed = changed
+		return sel, err
 	case protocol.TypePackageAdd:
 		return ack, s.Updates.AddPackages(req.Packages, req.AllowBuilds)
 	case protocol.TypePackageRemove:

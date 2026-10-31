@@ -78,7 +78,10 @@ func (u *Updater) WriteSelections(s protocol.Selections) (bool, error) {
 			services[name] = true
 		}
 	}
-	b, err := json.MarshalIndent(protocol.Selections{User: s.User, Services: services}, "", "  ")
+	if s.KeepGenerations < 0 {
+		return false, fmt.Errorf("keepGenerations %d is negative", s.KeepGenerations)
+	}
+	b, err := json.MarshalIndent(protocol.Selections{User: s.User, Services: services, KeepGenerations: s.KeepGenerations}, "", "  ")
 	if err != nil {
 		return false, err
 	}

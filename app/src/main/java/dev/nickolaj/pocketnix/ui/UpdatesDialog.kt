@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import dev.nickolaj.pocketnix.Vm
 import dev.nickolaj.pocketnix.agent.Generation
 import dev.nickolaj.pocketnix.agent.Updates
+import dev.nickolaj.pocketnix.managed.Release
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.launch
@@ -44,11 +45,20 @@ fun UpdatesDialog(vm: Vm, onDismiss: () -> Unit) {
     var refused by remember { mutableStateOf<String?>(null) }
     val host by vm.host.state.collectAsState()
     var confirmingMetered by remember { mutableStateOf(false) }
+    val config by vm.config.collectAsState()
+    val managed = config?.managedFlake != null
+    val ask = remember { PlanAsk() }
+    PlanAskDialog(ask)
     // A desktop's `switch` changes generations without telling the agent.
     LaunchedEffect(Unit) { vm.control.refreshUpdates() }
 
     fun send(type: String, generation: Int? = null) {
         scope.launch { refused = vm.updateRequest(type, generation) }
+    }
+
+    // A managed guest checks against this app's release, and asks before compiling on the phone.
+    fun update() {
+        scope.launch { refused = if (managed) vm.managed.update(ask::ask) else vm.updateRequest("update-apply") }
     }
 
     AlertDialog(
@@ -68,7 +78,9 @@ fun UpdatesDialog(vm: Vm, onDismiss: () -> Unit) {
                 Row {
                     // A check or download can hang on a build host that went away; a switch must finish.
                     if (u.busy && u.state != "switching") TextButton(onClick = { send("update-cancel") }) { Text("Cancel") }
-                    TextButton(enabled = !u.busy, onClick = { send("update-check") }) { Text("Check") }
+                    TextButton(enabled = !u.busy, onClick = { scope.launch { refused = vm.updateRequest("update-check", pin = if (managed) Release.pin else null) } }) {
+                        Text("Check")
+                    }
                     // A system's closure can be gigabytes: on a metered network the first tap only asks.
                     val metered = host?.metered == true
                     Button(enabled = !u.busy, onClick = {
@@ -76,7 +88,7 @@ fun UpdatesDialog(vm: Vm, onDismiss: () -> Unit) {
                             confirmingMetered = true
                         } else {
                             confirmingMetered = false
-                            send("update-apply")
+                            update()
                         }
                     }) { Text(if (metered && confirmingMetered) "Metered: update?" else "Update") }
                 }
@@ -91,7 +103,17 @@ private fun UpdatesBody(u: Updates, refused: String?, onSwitch: (Int) -> Unit, o
     Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(updateStatus(u), style = MaterialTheme.typography.bodyMedium)
         refused?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        u.error?.takeIf { !u.busy }?.let { Text("Failed: $it", color = MaterialTheme.colorScheme.error) }
+        u.error?.takeIf { !u.busy && u.blocked == null }?.let { Text("Failed: $it", color = MaterialTheme.colorScheme.error) }
+        u.blocked?.takeIf { !u.busy }?.let { Text("Stopped before compiling on the phone: ${it.builds.joinToString(", ")}. Update asks again.") }
+        u.plan?.takeIf { u.available != null && !u.busy }?.let { p ->
+            Text(
+                listOfNotNull(
+                    "Downloads ${megabytes(p.download)}.".takeIf { p.download > 0 },
+                    "Compiles on the phone: ${p.builds.joinToString(", ")}.".takeIf { p.builds.isNotEmpty() }
+                ).joinToString(" ").ifEmpty { "Nothing to download or compile." },
+                fontSize = 13.sp
+            )
+        }
         if (u.rebootPending) {
             // A reboot ends every tab: the first tap only asks.
             var confirmingReboot by remember { mutableStateOf(false) }
@@ -155,6 +177,8 @@ fun updateStatus(u: Updates): String = when {
     u.state == "checking" -> "Checking for an update…"
     u.state == "fetching" -> "Downloading ${u.available?.let(::storeName) ?: "the update"}…"
     u.state == "switching" -> "Switching…"
+    u.state == "installing" -> "Installing packages…"
+    u.state == "cleaning" -> "Deleting old generations…"
     u.sources.isEmpty() -> "No update source is configured (pocketnix.guest.updates)."
     u.available != null -> "Update available from ${sourceName(u.source)}: ${storeName(u.available)}"
     u.checkedAt > 0 -> "Up to date (checked ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(u.checkedAt * 1000))})."
@@ -164,6 +188,7 @@ fun updateStatus(u: Updates): String = when {
 private fun sourceName(s: String?) = when (s) {
     "buildHost" -> "the build host"
     "published" -> "the published path"
+    "local" -> "this guest's flake"
     else -> s ?: "?"
 }
 

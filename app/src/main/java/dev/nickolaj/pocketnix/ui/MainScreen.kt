@@ -97,6 +97,7 @@ fun MainScreen(vm: Vm) {
     val shownWindow = selectedWindow.takeIf { id -> windowTabs.any { it.id == id } } ?: 0
     var showSettings by remember { mutableStateOf(false) }
     var showUpdates by remember { mutableStateOf(false) }
+    var showManaged by remember { mutableStateOf(false) }
     var showPalette by remember { mutableStateOf(false) }
     var composerOpen by rememberSaveable { mutableStateOf(false) }
     var modifierRevision by remember { mutableIntStateOf(0) }
@@ -159,6 +160,7 @@ fun MainScreen(vm: Vm) {
 
     if (showSettings) SettingsDialog(vm) { showSettings = false }
     if (showUpdates) UpdatesDialog(vm) { showUpdates = false }
+    if (showManaged) ManagedDialog(vm) { showManaged = false }
     if (showPalette) PaletteDialog(vm, controller) { showPalette = false }
 
     val running = state == VmState.Running || state == VmState.Starting
@@ -191,6 +193,7 @@ fun MainScreen(vm: Vm) {
                         MainItem.MOVE_OUT -> vm.gui.move(shownWindow, "")
                         MainItem.REOPEN_ENDED -> vm.reopenEndedTabs()
                         MainItem.COMMANDS -> showPalette = true
+                        MainItem.CONFIGURE -> showManaged = true
                         MainItem.UPDATES -> showUpdates = true
                         MainItem.SETTINGS -> showSettings = true
                         MainItem.KEEP_SCREEN_ON -> controller.setKeepScreenOn(!vm.settings.keepScreenOn)
@@ -223,8 +226,28 @@ fun MainScreen(vm: Vm) {
                 TextButton(onClick = vm::restartWithBootMenu) { Text("Boot menu") }
             }
         }
+        // A guest the phone is working on (its first rebuild, say): what it does, and the way to the details.
+        val u = updates
+        if (config?.managedFlake != null && u != null && (u.busy || u.blocked != null)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (u.busy) "${updateStatus(u)} ${u.log.lastOrNull().orEmpty()}" else "An update waits for your yes to compile on the phone.",
+                    color = LocalContentColor.current.copy(alpha = 0.8f),
+                    fontSize = 12.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = { showUpdates = true }) { Text("Details") }
+            }
+        }
         if (missing.isNotEmpty() && state == VmState.Stopped) {
-            Requirements(missing, Modifier.padding(16.dp))
+            val needDisk = missing.any { it.name == DISK_REQUIREMENT }
+            val others = missing.filter { it.name != DISK_REQUIREMENT }
+            Column(Modifier.weight(1f, fill = false).padding(16.dp)) {
+                if (others.isNotEmpty()) Requirements(others)
+                if (needDisk) SetupCard(vm, canStart = others.isEmpty())
+            }
         }
         // Read for its side effect: titles and finished states redraw the row.
         revision.let {}
@@ -474,13 +497,15 @@ private fun TabChip(
     }
 }
 
+private const val DISK_REQUIREMENT = "Disk image"
+
 /** One prerequisite of booting a VM, with the fix shown while it's missing. */
 data class Requirement(val name: String, val fix: String)
 
 fun missingRequirements(context: Context, vm: Vm): List<Requirement> {
     if (vm.settings.tcpBackend) return emptyList()
     fun granted(p: String) = context.checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED
-    val grant = "run `pocketnix provision`, or adb shell pm grant ${context.packageName}"
+    val grant = "from a computer with adb: adb shell pm grant ${context.packageName}"
     return buildList {
         // PackageManager.FEATURE_VIRTUALIZATION_FRAMEWORK is @SystemApi, so spell it out.
         if (!context.packageManager.hasSystemFeature("android.software.virtualization_framework")) {
@@ -489,7 +514,7 @@ fun missingRequirements(context: Context, vm: Vm): List<Requirement> {
         for (p in listOf("MANAGE_VIRTUAL_MACHINE", "USE_CUSTOM_VIRTUAL_MACHINE")) {
             if (!granted("android.permission.$p")) add(Requirement(p, "$grant android.permission.$p"))
         }
-        if (!DiskImage.file(context).exists()) add(Requirement("Disk image", "run `pocketnix provision --image …`"))
+        if (!DiskImage.file(context).exists()) add(Requirement(DISK_REQUIREMENT, "set it up below, or run `pocketnix provision --image …`"))
     }
 }
 

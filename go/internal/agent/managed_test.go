@@ -197,15 +197,18 @@ func TestManagedSelections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.User != "alice" || !got.Services["ssh"] || got.Services["gui"] {
+	if got.User != "alice" || !got.Services["ssh"] || got.Services["gui"] || !got.Changed {
 		t.Errorf("answered %+v", got)
 	}
 	if b, _ := os.ReadFile(filepath.Join(g.flake, "pocketnix.json")); !strings.Contains(string(b), `"ssh": true`) {
 		t.Errorf("pocketnix.json = %s", b)
 	}
-	// Reading leaves it be.
-	if got, err := ctl.Selections(nil); err != nil || got.User != "alice" {
+	// Reading, or writing the same, leaves it be.
+	if got, err := ctl.Selections(nil); err != nil || got.User != "alice" || got.Changed {
 		t.Errorf("read back %+v, %v", got, err)
+	}
+	if got, err := ctl.Selections(&protocol.Selections{User: "alice", Services: map[string]bool{"ssh": true}}); err != nil || got.Changed {
+		t.Errorf("rewriting the same selections: %+v, %v", got, err)
 	}
 	for _, bad := range []protocol.Selections{
 		{User: "Root;rm", Services: map[string]bool{}},
@@ -292,6 +295,13 @@ func TestManagedPackages(t *testing.T) {
 	}
 	if !slices.Equal(u.Packages, []string{"hello", "python3Packages.rich"}) {
 		t.Errorf("packages = %q", u.Packages)
+	}
+	// A fresh disk's sync adds what the app keeps; what's there stays once.
+	if u, err := ctl.Run(func() error { return ctl.PackageAdd([]string{"hello"}, false) }); err != nil {
+		t.Fatalf("adding again: %v (log %q)", err, u.Log)
+	}
+	if n := strings.Count(g.read(t, "profile"), "hello\n"); n != 1 {
+		t.Errorf("the profile holds hello %d times", n)
 	}
 
 	// One that compiles waits for the user's yes.

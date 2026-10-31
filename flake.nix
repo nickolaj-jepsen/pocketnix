@@ -64,6 +64,21 @@
           program = nixpkgs.lib.getExe (import ./nix/dev-agent.nix {inherit pkgs self;});
           meta.description = "Run the example guest's agent on this machine for the app on the Android emulator";
         };
+        # The app's package search: pocketnix's nixpkgs for aarch64-linux, gzipped
+        # lines of attribute, version and description (managed/PackageIndex.kt reads them).
+        package-index = {
+          type = "app";
+          program = nixpkgs.lib.getExe (pkgs.writeShellApplication {
+            name = "package-index";
+            runtimeInputs = [pkgs.nix pkgs.jq pkgs.gzip];
+            text = ''
+              nix-env -f ${nixpkgs} -qaP --json --meta --arg config '{}' --argstr system aarch64-linux \
+                | jq -r 'to_entries[] | [.key, (.value.version // ""), (.value.meta.description // "")] | @tsv' \
+                | gzip -9 > "$1"
+            '';
+          });
+          meta.description = "Write the app's package index to the file named";
+        };
         options-doc = {
           type = "app";
           program = nixpkgs.lib.getExe (pkgs.writeShellApplication {
@@ -184,6 +199,16 @@
           )));
       }))
       {
+        # A managed guest with every switch on: CI's build puts all it needs in
+        # the cache, so a phone's rebuild only downloads.
+        aarch64-linux.managed-all =
+          (self.lib.managedSystem {
+            selections = {
+              user = "user";
+              services = nixpkgs.lib.mapAttrs (_: _: true) self.nixosConfigurations.base.options.pocketnix.guest.managed.selections.services;
+            };
+            modules = [./nix/managed/configuration.nix];
+          }).config.system.build.toplevel;
         x86_64-linux.agent = import ./nix/test.nix {
           inherit self;
           pkgs = nixpkgs.legacyPackages.x86_64-linux;

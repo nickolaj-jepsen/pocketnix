@@ -792,6 +792,27 @@ string
 
 
 
+## pocketnix\.guest\.managed\.selections\.keepGenerations
+
+
+
+The app’s ` updates.keepGenerations `\.
+
+
+
+*Type:*
+unsigned integer, meaning >=0
+
+
+
+*Default:*
+
+```nix
+0
+```
+
+
+
 ## pocketnix\.guest\.managed\.selections\.services\.gui
 
 

@@ -25,6 +25,15 @@ func (u *Updater) AddPackages(attrs []string, allowBuilds bool) error {
 		return err
 	}
 	return u.start(protocol.UpdateInstalling, func(c UpdatesConfig) error {
+		have, err := u.profileElements(c, "")
+		if err != nil {
+			return err
+		}
+		attrs := slices.DeleteFunc(slices.Clone(attrs), func(a string) bool { _, ok := have[a]; return ok })
+		if len(attrs) == 0 {
+			u.refreshPackages(c)
+			return nil
+		}
 		inst := installables(attrs)
 		user := profileUser(c)
 		plan, err := u.plan(c.managed, user, inst...)

@@ -40,6 +40,7 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
     var wakeLocks by remember { mutableStateOf(s.wakeLocks) }
     var tcp by remember { mutableStateOf(s.tcpBackend) }
     var tcpAddress by remember { mutableStateOf(s.tcpAddress) }
+    var releaseUrl by remember { mutableStateOf(s.releaseUrl) }
     var sharedFolders by remember { mutableStateOf(false) }
     val state by vm.state.collectAsState()
     val stopped = state == VmState.Stopped || state is VmState.Failed
@@ -72,6 +73,7 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
                     if (tcp) {
                         OutlinedTextField(tcpAddress, { tcpAddress = it }, label = { Text("Agent host:port") }, singleLine = true)
                     }
+                    OutlinedTextField(releaseUrl, { releaseUrl = it }, label = { Text("Release files URL (debug)") }, singleLine = true)
                 }
             }
         },
@@ -85,6 +87,7 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
                 vm.setWakeLocks(wakeLocks)
                 s.tcpBackend = tcp
                 s.tcpAddress = tcpAddress.trim()
+                s.releaseUrl = releaseUrl.trim()
                 vm.reloadEngine()
                 onDismiss()
             }) { Text("Save") }

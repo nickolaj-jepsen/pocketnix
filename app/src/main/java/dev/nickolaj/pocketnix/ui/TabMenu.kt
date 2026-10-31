@@ -62,6 +62,7 @@ enum class MainItem(val label: String) {
     MOVE_OUT(dev.nickolaj.pocketnix.gui.MOVE_OUT),
     REOPEN_ENDED("Reopen ended tabs"),
     COMMANDS("Commands"),
+    CONFIGURE("Configure"),
     UPDATES("System and updates"),
     SETTINGS("Settings"),
     KEEP_SCREEN_ON("Keep screen on"),
@@ -79,7 +80,9 @@ data class MainMenuState(
     val keepScreenOn: Boolean,
     val running: Boolean,
     val ownsGuest: Boolean,
-    val canStart: Boolean
+    val canStart: Boolean,
+    /** The guest is managed: the app configures it. */
+    val managed: Boolean = false
 )
 
 /** [vm]'s ⋮ menu state now, with window [shownWindow] on screen (0: the terminal). */
@@ -92,7 +95,8 @@ fun mainMenuState(context: Context, vm: Vm, shownWindow: Int) = MainMenuState(
     running = vm.state.value == VmState.Running || vm.state.value == VmState.Starting,
     // The debug TCP backend has no console, so no boot menu.
     ownsGuest = vm.engine.value.ownsGuest,
-    canStart = missingRequirements(context, vm).isEmpty()
+    canStart = missingRequirements(context, vm).isEmpty(),
+    managed = vm.config.value?.managedFlake != null
 )
 
 /** The ⋮ menu for [s]; choosing an entry calls [run] with it, inside [guard]. */
@@ -102,6 +106,7 @@ fun mainMenu(s: MainMenuState, run: (MainItem) -> Unit): List<MenuAction> = buil
     if (s.windowShown) item(MainItem.MOVE_OUT)
     item(MainItem.REOPEN_ENDED, enabled = s.endedTabs && s.agentUp)
     item(MainItem.COMMANDS, enabled = s.agentUp)
+    if (s.managed) item(MainItem.CONFIGURE, enabled = s.agentUp)
     item(MainItem.UPDATES, enabled = s.agentUp)
     item(MainItem.SETTINGS)
     item(MainItem.KEEP_SCREEN_ON, label = if (s.keepScreenOn) "✓ ${MainItem.KEEP_SCREEN_ON.label}" else MainItem.KEEP_SCREEN_ON.label)

@@ -35,6 +35,7 @@ import dev.nickolaj.pocketnix.host.HostMonitor
 import dev.nickolaj.pocketnix.hostfs.HostFolderLinks
 import dev.nickolaj.pocketnix.hostfs.SafFolder
 import dev.nickolaj.pocketnix.hostfs.SharedFolders
+import dev.nickolaj.pocketnix.managed.ManagedGuest
 import dev.nickolaj.pocketnix.service.VmService
 import dev.nickolaj.pocketnix.service.wakeHoldersOf
 import dev.nickolaj.pocketnix.terminal.Tab
@@ -160,6 +161,9 @@ class Vm(private val app: Context) {
         settings.wakeLocks = allowed
         wakeLocksAllowed.value = allowed
     }
+
+    /** The guest the app sets up and configures, when its module says it's one. */
+    val managed = ManagedGuest(app, scope, control, settings)
 
     /** Android folders mounted in the guest. */
     val sharedFolders = SharedFolders(app)
@@ -391,12 +395,14 @@ class Vm(private val app: Context) {
     }
 
     /**
-     * Runs an update request ([generation] for switch-generation); progress
+     * Runs an update request ([generation] for switch-generation, [pin] for
+     * a managed guest's check or apply); progress
      * arrives in [updates]. Returns why the agent refused, or null.
      */
-    suspend fun updateRequest(type: String, generation: Int? = null): String? {
+    suspend fun updateRequest(type: String, generation: Int? = null, pin: String? = null): String? {
         val req = JSONObject().put("type", type)
         if (generation != null) req.put("generation", generation)
+        if (pin != null) req.put("pin", pin)
         return runCatching { control.call(req) }.exceptionOrNull()?.message
     }
 
@@ -539,13 +545,13 @@ class Vm(private val app: Context) {
         }
     }
 
-    /** A new terminal tab running [profile], or null while the agent can't be reached. */
-    fun openTab(profile: String? = null): Tab? {
+    /** A new terminal tab running [profile], or [command] when set; null while the agent can't be reached. */
+    fun openTab(profile: String? = null, command: String? = null): Tab? {
         val dialer = _engine.value.dialer ?: return null
         val cfg = control.config.value
         val name = profile ?: cfg?.defaultProfile?.takeIf { it.isNotEmpty() } ?: "shell"
-        val backend = PtyBackend(dialer, name, appVersion)
-        return tabs.open(name, backend) { backend.agentTab }
+        val backend = PtyBackend(dialer, name, appVersion, command)
+        return tabs.open(command?.substringAfterLast('/') ?: name, backend) { backend.agentTab }
     }
 
     /** Starts ended tab [id] again in a new session of its profile ([Tabs.reopen]); null if it can't. */

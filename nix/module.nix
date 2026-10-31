@@ -98,7 +98,7 @@
     mkdir $out
     substitute ${./managed/flake.nix} $out/flake.nix --subst-var-by version ${lib.fileContents ../VERSION}
     cp ${./managed/configuration.nix} $out/configuration.nix
-    echo '${builtins.toJSON {inherit (mgd.selections) user services;}}' > $out/pocketnix.json
+    echo '${builtins.toJSON mgd.selections}' > $out/pocketnix.json
   '';
 
   gui = cfg.gui;
@@ -587,6 +587,11 @@ in {
           default = "";
           description = "The user the app set up; empty runs tabs as root until it has.";
         };
+        keepGenerations = mkOption {
+          type = types.ints.unsigned;
+          default = 0;
+          description = "The app's `updates.keepGenerations`.";
+        };
         services = lib.genAttrs ["ssh" "tailscale" "podman" "gui"] (name:
           mkOption {
             type = types.bool;
@@ -1004,13 +1009,16 @@ in {
       security.sudo.wheelNeedsPassword = mkDefault false;
       # Rebuilding on the phone costs minutes of evaluation: only when asked.
       pocketnix.guest.updates.checkInterval = mkDefault null;
+      pocketnix.guest.updates.keepGenerations = sel.keepGenerations;
 
       nix.settings = {
         experimental-features = ["nix-command" "flakes"];
         # pocketnix's flake.nix has the same key.
         extra-substituters = ["https://pocketnix.cachix.org"];
         extra-trusted-public-keys = ["pocketnix.cachix.org-1:KklXzNwjpGzopowh99lwsL3IeaidLtH+Fw7wniLw9Nw="];
+        # A full-width build in the VM freezes the whole phone.
         max-jobs = mkDefault 1;
+        cores = mkDefault 2;
       };
       # Builds run in the daemon; the agent runs evaluation under the same quota.
       nix.daemonCPUSchedPolicy = mkDefault "idle";
@@ -1035,10 +1043,30 @@ in {
         guestPort = 22;
         hostPort = 2022;
       };
-      services.tailscale.enable = mkIf sel.services.tailscale true;
+      services.tailscale = mkIf sel.services.tailscale {
+        enable = true;
+        # `tailscale up` from a tab, without sudo.
+        extraSetFlags = lib.optional (sel.user != "") "--operator=${sel.user}";
+      };
       virtualisation.podman.enable = mkIf sel.services.podman true;
-      pocketnix.guest.gui.enable = mkIf sel.services.gui true;
-      environment.systemPackages = lib.optional sel.services.gui pkgs.foot;
+      pocketnix.guest.gui = mkIf sel.services.gui {
+        enable = true;
+        # Desktop layouts; phone density leaves them a column wide.
+        appDefaults.firefox.size = mkDefault "compact";
+      };
+      # Its sessions outlive the app's tabs, which end with the app's process.
+      environment.systemPackages = [pkgs.zellij] ++ lib.optional sel.services.gui pkgs.foot;
+      pocketnix.guest.terminal = {
+        profiles = {
+          shell = {};
+          zellij.command = "zellij attach --create main";
+        };
+        theme.colors = lib.mapAttrs (_: mkDefault) (import ./catppuccin-mocha.nix);
+        theme.fontFamily = mkDefault {
+          package = pkgs.jetbrains-mono;
+          family = "JetBrains Mono";
+        };
+      };
 
       systemd.services.pocketnix-managed-seed = {
         description = "Seed the guest's flake";

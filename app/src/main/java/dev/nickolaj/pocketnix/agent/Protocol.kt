@@ -107,7 +107,9 @@ data class GuestConfig(
     val theme: Theme,
     val snippets: List<Snippet> = emptyList(),
     /** Null from an agent without GUI support. */
-    val gui: GuiConfig? = null
+    val gui: GuiConfig? = null,
+    /** The flake of a guest the app manages, or null. */
+    val managedFlake: String? = null
 ) {
     companion object {
         fun parse(json: String): GuestConfig = parse(JSONObject(json))
@@ -141,7 +143,8 @@ data class GuestConfig(
                 snippets = t.optJSONArray("snippets").objects().map {
                     Snippet(it.getString("name"), it.getString("command"), it.optBoolean("submit"))
                 },
-                gui = o.optJSONObject("gui")?.let(GuiConfig::parse)
+                gui = o.optJSONObject("gui")?.let(GuiConfig::parse),
+                managedFlake = o.optJSONObject("managed")?.optStringOrNull("flake")
             )
         }
     }
@@ -173,7 +176,14 @@ data class Updates(
     val error: String?,
     val log: List<String>,
     /** Newest first. */
-    val generations: List<Generation>
+    val generations: List<Generation>,
+    /** What applying [available] costs; the local source only. */
+    val plan: Plan? = null,
+    /** What the last operation stopped short of building; repeat it allowing builds to go on. */
+    val blocked: Plan? = null,
+    /** The nixpkgs attributes in a managed guest's user profile. */
+    val packages: List<String> = emptyList(),
+    val run: RunResult? = null
 ) {
     val busy: Boolean get() = state != "idle"
 
@@ -201,6 +211,12 @@ data class Updates(
                     current = it.optBoolean("current"),
                     booted = it.optBoolean("booted")
                 )
+            },
+            plan = o.optJSONObject("plan")?.let(Plan::parse),
+            blocked = o.optJSONObject("blocked")?.let(Plan::parse),
+            packages = o.optJSONArray("packages").strings(),
+            run = o.optJSONObject("run")?.let {
+                RunResult(it.getString("package"), it.optJSONArray("apps").strings(), it.optStringOrNull("command"))
             }
         )
     }
@@ -232,6 +248,16 @@ data class PortListeners(
         }
     }
 }
+
+/** What realising a system or package costs: bytes to download, and the packages it would compile on the phone. */
+data class Plan(val download: Long, val builds: List<String>) {
+    companion object {
+        fun parse(o: JSONObject) = Plan(o.optLong("download"), o.optJSONArray("builds").strings())
+    }
+}
+
+/** How to start what a run request fetched: launch one of [apps], or else run [command] in a tab. */
+data class RunResult(val pkg: String, val apps: List<String>, val command: String?)
 
 private fun JSONArray?.strings(): List<String> = if (this == null) emptyList() else (0 until length()).map { getString(it) }
 

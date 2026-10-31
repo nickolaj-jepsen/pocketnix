@@ -1,7 +1,9 @@
 name: release
 
 # A `v<VERSION>` tag publishes the signed APK that `pocketnix provision`
-# downloads (its asset name must match downloadRelease's URL) and Obtainium tracks.
+# downloads (its asset name must match downloadRelease's URL) and Obtainium tracks,
+# then the base image and package index the app and provision download
+# (managed/Release.kt and downloadBaseImage name them).
 on:
   push:
     tags: ["v*"]
@@ -46,3 +48,28 @@ jobs:
         run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes dist/*
       - run: rm -f "$RUNNER_TEMP/release.jks"
         if: always()
+
+  # After apk, which creates the release.
+  base-image:
+    needs: apk
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v16
+        with:
+          name: pocketnix
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      # The image's system is what a fresh phone boots; its closure goes to the cache too.
+      - name: Base image and package index
+        run: |
+          ver=$(cat VERSION)
+          mkdir dist
+          nix build -L .#base-image
+          gzip -9 -c result/*.raw > "dist/pocketnix-base-$ver.img.gz"
+          nix run .#package-index -- "dist/pocketnix-packages-$ver.tsv.gz"
+          (cd dist && sha256sum "pocketnix-base-$ver.img.gz" > "pocketnix-base-$ver.img.gz.sha256")
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/*
