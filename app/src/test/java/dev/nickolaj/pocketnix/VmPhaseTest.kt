@@ -7,8 +7,11 @@ import dev.nickolaj.pocketnix.gui.launcherStatus
 import dev.nickolaj.pocketnix.gui.splashStatus
 import dev.nickolaj.pocketnix.service.notificationText
 import dev.nickolaj.pocketnix.service.tileSubtitle
+import dev.nickolaj.pocketnix.ui.Requirement
+import dev.nickolaj.pocketnix.ui.showsRequirements
 import dev.nickolaj.pocketnix.ui.statusText
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -71,5 +74,14 @@ class VmPhaseTest {
         assertTrue(statusText(refused).contains("too old"))
         assertTrue(launcherStatus(refused, guiEnabled = true).contains("too old"))
         assertTrue(splashStatus("Foot", refused, true, true, LaunchState.Pending).text.contains("too old"))
+    }
+
+    @Test
+    fun theSetupFormShowsWhileTheVmIsOffAFailedStartIncluded() {
+        val missing = listOf(Requirement("Disk image", "set it up"))
+        assertTrue(showsRequirements(VmPhase.Stopped, missing))
+        assertTrue(showsRequirements(VmPhase.Failed("No disk image yet"), missing))
+        assertFalse(showsRequirements(VmPhase.Running("box"), missing))
+        assertFalse(showsRequirements(VmPhase.Stopped, emptyList()))
     }
 }

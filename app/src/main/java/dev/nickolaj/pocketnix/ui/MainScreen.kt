@@ -248,7 +248,7 @@ fun MainScreen(vm: Vm) {
                 TextButton(onClick = { showUpdates = true }) { Text("Details") }
             }
         }
-        if (missing.isNotEmpty() && state == VmState.Stopped) {
+        if (showsRequirements(phase, missing)) {
             val needDisk = missing.any { it.name == DISK_REQUIREMENT }
             val others = missing.filter { it.name != DISK_REQUIREMENT }
             Column(Modifier.weight(1f, fill = false).padding(16.dp)) {
@@ -335,6 +335,9 @@ fun MainScreen(vm: Vm) {
         }
     }
 }
+
+/** Whether the requirements and the setup form show: while [missing] has any and the VM is off, a failed start included. */
+internal fun showsRequirements(phase: VmPhase, missing: List<Requirement>): Boolean = missing.isNotEmpty() && phase.off
 
 /** The status bar's line for [phase]. */
 internal fun statusText(phase: VmPhase): String = when (phase) {

@@ -99,7 +99,7 @@ class AvfEngine(private val context: Context) : VmEngine {
         var avfTried = false
         try {
             val disk = DiskImage.file(context)
-            if (!disk.exists()) throw IllegalStateException("No disk image yet: run `pocketnix provision`")
+            if (!disk.exists()) throw IllegalStateException("No disk image yet: set it up in the app, or run `pocketnix provision --image …`")
             DiskImage.grow(disk, settings.diskGb)
 
             val mgr = AvfReflect.manager(context)
