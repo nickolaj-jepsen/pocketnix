@@ -3,7 +3,7 @@ name: release
 # A `v<VERSION>` tag publishes the signed APK that `pocketnix provision`
 # downloads (its asset name must match downloadRelease's URL) and Obtainium tracks,
 # then the base image and package index the app and provision download
-# (managed/Release.kt and downloadBaseImage name them).
+# (Release.baseImage, Release.packageIndex and downloadBaseImage name them).
 on:
   push:
     tags: ["v*"]

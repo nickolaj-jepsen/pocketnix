@@ -114,7 +114,7 @@ class ControlActivity : Activity() {
         const val ACTION_MANAGED = "dev.nickolaj.pocketnix.action.DEBUG_MANAGED"
         const val EXTRA_USER = "user"
 
-        /** Comma-separated service ids (managed/Selections.kt's SERVICES). */
+        /** Comma-separated service ids ([dev.nickolaj.pocketnix.managed.SERVICES]). */
         const val EXTRA_SERVICES = "services"
         const val EXTRA_RELEASE_URL = "releaseUrl"
 

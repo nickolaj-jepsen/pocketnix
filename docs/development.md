@@ -170,7 +170,7 @@ A release also publishes the base image and the package index that the app's
 setup and package search download. A debug build reads them from Settings'
 release files URL instead: serve `nix build .#base-image`'s image, gzipped
 with its `.sha256`, and `nix run .#package-index -- <file>`, under the names
-`managed/Release.kt` gives them.
+`Release.baseImage` and `Release.packageIndex` give them.
 
 ## Pitfalls
 

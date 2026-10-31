@@ -85,7 +85,9 @@ image. Its system is the flake in `/etc/nixos`, seeded on first boot:
 - `pocketnix.json` holds what the app's Configure screen sets (the user and
   the service switches). The app owns it and keeps a copy, and a disk that
   lacks it is rebuilt from that copy when it connects.
-- `configuration.nix` is yours, for anything the switches don't cover.
+- `configuration.nix` is yours, for anything the switches don't cover. The
+  app doesn't keep a copy, so a fresh disk starts from the seed's: back it
+  up like the rest of the guest's state.
 - `flake.nix` pins one pocketnix release, whose nixpkgs the guest uses, so
   the cache has what it needs. Update moves the pin to the app's own version.
 
@@ -108,14 +110,16 @@ from the app's Configure screen.
 ## Rollback
 
 Generations come from the system profile. Rolling back switches to an older
-one (`nix-env --switch-generation`, then `switch`).
+one (`nix-env --switch-generation`, then `switch`). With the default
+`keepGenerations` of 0, the only older one is the booted system, and once a
+boot of the new one prunes, there is none.
 
 ## A generation that won't boot
 
 - systemd-boot doesn't wait (the module's `boot.loader.timeout`).
 - "Start with boot menu" in the app taps a key on the console during boot, so
   systemd-boot shows its menu in the console tab. Pick an older generation
-  there.
+  there: the menu lists only those pruning kept (see Old generations).
 - The app offers this when the agent is late to connect.
 
 ## Pushing from a desktop

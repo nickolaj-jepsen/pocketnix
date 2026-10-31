@@ -65,7 +65,7 @@
           meta.description = "Run the example guest's agent on this machine for the app on the Android emulator";
         };
         # The app's package search: pocketnix's nixpkgs for aarch64-linux, gzipped
-        # lines of attribute, version and description (managed/PackageIndex.kt reads them).
+        # lines of attribute, version and description (PackageIndex reads them).
         package-index = {
           type = "app";
           program = nixpkgs.lib.getExe (pkgs.writeShellApplication {
