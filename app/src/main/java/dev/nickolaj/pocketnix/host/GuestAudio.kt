@@ -49,6 +49,11 @@ class GuestAudio(private val appVersion: String) {
             try {
                 val s = dialer.open(Protocol.hello("audio", appVersion)).first
                 stream = s
+                // stop() may have run before the stream was set, and missed it.
+                if (thread !== me) {
+                    s.close()
+                    return
+                }
                 backoff = MIN_BACKOFF_MS
                 s.use { play(it.input, me) }
             } catch (e: AgentException) {

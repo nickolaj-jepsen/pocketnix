@@ -27,8 +27,10 @@ func (s *Server) serveAudio(c net.Conn) {
 		reject(c, "audio is not enabled")
 		return
 	}
-	// Nonblocking, so opening doesn't wait for a writer and Go's poller serves reads.
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	// Read-write, so the pipe always has a writer and a read waits for sound rather
+	// than ending while PipeWire (socket-activated) isn't running; nonblocking, so
+	// Go's poller serves reads.
+	f, err := os.OpenFile(path, os.O_RDWR|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err == nil {
 		if fi, serr := f.Stat(); serr != nil || fi.Mode().Type() != os.ModeNamedPipe {
 			f.Close()
@@ -85,7 +87,7 @@ func drainPipe(f *os.File) {
 			if errors.Is(err, syscall.EINTR) {
 				continue
 			}
-			// Empty (EAGAIN) or without a writer (0).
+			// Empty (EAGAIN).
 			if err != nil || n == 0 {
 				return true
 			}

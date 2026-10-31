@@ -50,6 +50,32 @@ func TestAudioStreamsWhatPlaysFromNowOn(t *testing.T) {
 	}
 }
 
+func TestAudioWaitsForTheSoundServer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audio")
+	if err := unix.Mkfifo(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := start(t, audioConfig(path), unixAddr)
+	c, err := h.client.Audio()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if _, err := c.Read(make([]byte, 1)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("with nothing writing the pipe the stream read %v, want it to wait", err)
+	}
+	w, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	w.Write([]byte("sound"))
+	if got := readN(t, c, 5); got != "sound" {
+		t.Errorf("the stream carried %q", got)
+	}
+}
+
 func TestANewerAudioStreamEndsTheOlder(t *testing.T) {
 	pipe, w := soundPipe(t)
 	h := start(t, audioConfig(pipe), unixAddr)
