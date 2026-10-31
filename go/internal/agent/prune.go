@@ -17,8 +17,9 @@ import (
 const gcTimeout = time.Hour
 
 // PruneAfterBoot prunes once per boot, after delay: a boot that got as far
-// as the agent counts as a good one. marker (in /run) records that this
-// boot was pruned, across agent restarts; empty prunes on every start.
+// as the agent counts as a good one. marker records that this boot was
+// pruned, so it must be in a /run the agent's restarts don't empty; empty
+// prunes on every start.
 func (u *Updater) PruneAfterBoot(ctx context.Context, delay time.Duration, marker string) {
 	if marker != "" {
 		if _, err := os.Stat(marker); err == nil {

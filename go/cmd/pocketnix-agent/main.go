@@ -35,6 +35,7 @@ func main() {
 	flag.Var(&listen, "listen", "address to serve (vsock:<port>, tcp:<host>:<port>, unix:<path>); repeatable")
 	stateDir := flag.String("state-dir", "", "directory for state that must outlive a crash (unfinished file-provider writes); empty keeps none")
 	guestSocket := flag.String("guest-socket", "", "unix socket for guest programs (pocketnix-guest), e.g. "+protocol.GuestSocket+"; empty serves none")
+	pruneMarker := flag.String("prune-marker", "", "file that marks this boot's prune done, somewhere the agent's restarts leave alone; empty prunes after every start")
 	hostState := flag.String("host-state", "", "file to keep the phone's state in as JSON, which also drives the NixOS module's pocketnix-*.target units; empty does neither")
 	// Hidden from -h: tests force the port watcher's /proc poller with it.
 	pollPorts := flag.Bool("poll-ports", false, "")
@@ -83,8 +84,8 @@ func main() {
 
 	go srv.Updates.Periodic(context.Background())
 	go srv.Updates.RefreshPackages()
-	// After the boot's own work, and once per boot across agent restarts.
-	go srv.Updates.PruneAfterBoot(context.Background(), 2*time.Minute, "/run/pocketnix/pruned")
+	// After the boot's own work.
+	go srv.Updates.PruneAfterBoot(context.Background(), 2*time.Minute, *pruneMarker)
 	go srv.WatchInhibitors(context.Background())
 	if *pollPorts {
 		srv.WatchPorts(nil)

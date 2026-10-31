@@ -575,6 +575,15 @@ in
           assert any(l.endswith(" freed") for l in u["log"]), u["log"]
           assert not any(l.startswith("deleting '") for l in u["log"]), u["log"]
 
+      with subtest("an agent restart doesn't prune again in the same boot"):
+          start = phone.succeed("systemctl show -p ExecStart --value pocketnix-agent.service")
+          marker = start.split("--prune-marker ", 1)[1].split()[0]
+          # Written once the boot's prune ran, after its delay.
+          phone.wait_until_succeeds(f"test -e {marker}", timeout=300)
+          phone.succeed("systemctl restart pocketnix-agent.service")
+          phone.wait_for_open_port(9100)
+          phone.succeed(f"test -e {marker}")
+
       with subtest("with the /proc poller, a user's listener reaches the app, and root's never does"):
           phone.succeed("${nodes.phone.system.build.toplevel}/specialisation/poller/bin/switch-to-configuration test")
           # A switch only reloads the agent.

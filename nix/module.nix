@@ -103,6 +103,10 @@
     echo '${builtins.toJSON mgd.selections}' > $out/pocketnix.json
   '';
 
+  # The agent's --prune-marker: outside /run/pocketnix, which systemd empties
+  # whenever the agent stops, restarts included, so a restart would prune again.
+  pruneMarker = "/run/pocketnix-pruned";
+
   # PipeWire's pipe sink writes the guest's sound here, and the agent streams it to the app.
   # Outside /run/pocketnix, which the agent's restarts recreate under PipeWire.
   audioPipe = "/run/pocketnix-audio";
@@ -835,7 +839,7 @@ in {
         # Updates: ssh to the build host, nix to fetch, systemd-run to switch.
         path = [config.nix.package config.programs.ssh.package config.systemd.package];
         serviceConfig = {
-          ExecStart = lib.escapeShellArgs ([(lib.getExe' cfg.package "pocketnix-agent") "--guest-socket" "/run/pocketnix/guest.sock" "--state-dir" "/var/lib/pocketnix" "--host-state" "/run/pocketnix/host.json"] ++ lib.concatMap (a: ["--listen" a]) cfg.agent.listen);
+          ExecStart = lib.escapeShellArgs ([(lib.getExe' cfg.package "pocketnix-agent") "--guest-socket" "/run/pocketnix/guest.sock" "--state-dir" "/var/lib/pocketnix" "--host-state" "/run/pocketnix/host.json" "--prune-marker" pruneMarker] ++ lib.concatMap (a: ["--listen" a]) cfg.agent.listen);
           RuntimeDirectory = "pocketnix";
           RuntimeDirectoryMode = "0755";
           StateDirectory = "pocketnix";

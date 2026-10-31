@@ -441,3 +441,23 @@ func TestPruneAfterBoot(t *testing.T) {
 		t.Errorf("profiles left: %v; want only the user's own", left)
 	}
 }
+
+func TestPruneAfterBootOncePerMarker(t *testing.T) {
+	g := newManagedGuest(t)
+	ctl, h := startManaged(t, g)
+	marker := filepath.Join(t.TempDir(), "pruned")
+	before, _ := ctl.Updates()
+	h.srv.Updates.PruneAfterBoot(context.Background(), 0, marker)
+	u, err := ctl.WaitUpdates(func(u protocol.Updates) bool { return u.Op > before.Op && u.State == protocol.UpdateIdle })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("no marker after the prune: %v", err)
+	}
+	// An agent started again in the same boot finds the marker.
+	h.srv.Updates.PruneAfterBoot(context.Background(), 0, marker)
+	if again, _ := ctl.Updates(); again.Op != u.Op {
+		t.Errorf("pruned again: op %d, then %d", u.Op, again.Op)
+	}
+}
