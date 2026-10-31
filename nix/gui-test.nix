@@ -198,6 +198,8 @@ in
 
     nodes.phone = {config, ...}: {
       imports = [self.nixosModules.default ../example/configuration.nix];
+      # Its options manual would rebuild the node for every option's text; the options-doc check renders them.
+      documentation.nixos.enable = false;
       pocketnix.guest = {
         avf.enable = false;
         agent.listen = ["tcp:127.0.0.1:9100"];

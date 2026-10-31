@@ -41,6 +41,8 @@ in
       ...
     }: {
       imports = [self.nixosModules.default ../example/configuration.nix];
+      # Its options manual would rebuild the node for every option's text; the options-doc check renders them.
+      documentation.nixos.enable = false;
       pocketnix.guest = {
         avf.enable = false;
         # Only the config half: QEMU's VM has no gfxstream.
