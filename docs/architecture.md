@@ -156,7 +156,9 @@ ref. With no app connected, a request fails instead of queueing.
 
 - The VM is cattle: it rebuilds from the flake and a cache. A managed guest's
   flake is the app's selections, which the app keeps, so a fresh disk rebuilds
-  to the same system. Back up user state from inside the guest.
+  to the same selections; its `configuration.nix` is user state
+  ([A managed guest](updates.md#a-managed-guest)). Back up user state from
+  inside the guest.
 - Only a managed guest evaluates on the phone, under a CPU quota, and nothing
   compiles there unless the user says yes. Every other guest's updates arrive
   built ([Updates](updates.md)).
