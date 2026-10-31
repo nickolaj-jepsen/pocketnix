@@ -69,6 +69,10 @@ use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3;
 use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::ZwpTextInputV3;
 use xkbcommon::xkb;
 
+#[allow(dead_code)]
+#[path = "../src/bench/guest_ram.rs"]
+mod guest_ram;
+
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 const FLAG_BUFFER: u16 = 1;
@@ -77,6 +81,10 @@ const FLAG_SCROLL: u16 = 4;
 const FLAG_HASH: u16 = 8;
 const FLAG_GROUPED: u16 = 16;
 const FLAG_HIDDEN: u16 = 32;
+
+const ENCODING_ZSTD: u8 = 1;
+const ENCODING_PAGES: u8 = 2;
+const RELEASED: u8 = 0x11;
 
 const BTN_LEFT: u32 = 0x110;
 const KEY_A: u32 = 30;
@@ -196,6 +204,7 @@ struct Commit {
     scroll: i32,
     rects: Vec<[u32; 4]>,
     hash: u64,
+    encoding: u8,
 }
 
 #[derive(Debug)]
@@ -221,6 +230,11 @@ struct App {
     hashed: usize,
     /// ICON frames: size, key and PNG.
     icons: Vec<(u16, String, Vec<u8>)>,
+    /// Guest RAM, when the hello said the app maps it.
+    guest_ram: Option<guest_ram::GuestRam>,
+    /// Whether PAGES commits are RELEASEd once copied; otherwise their seqs pile up in `lent`.
+    release: bool,
+    lent: Vec<u32>,
 }
 
 fn be32(b: &[u8], at: usize) -> u32 {
@@ -229,7 +243,16 @@ fn be32(b: &[u8], at: usize) -> u32 {
 
 impl App {
     fn connect(compositor: &Compositor) -> Self {
-        let stream = UnixStream::connect(compositor.gui_socket()).unwrap();
+        Self::over(UnixStream::connect(compositor.gui_socket()).unwrap(), None)
+    }
+
+    /// Connects as an app that maps `ram`, so big commits may come as PAGES.
+    fn connect_with_guest_ram(compositor: &Compositor, ram: guest_ram::GuestRam) -> Self {
+        Self::over(UnixStream::connect(compositor.gui_socket()).unwrap(), Some(ram))
+    }
+
+    /// Speaks the app's side on `stream`, starting with its hello.
+    fn over(stream: UnixStream, guest_ram: Option<guest_ram::GuestRam>) -> Self {
         stream.set_read_timeout(Some(TIMEOUT)).unwrap();
         let mut app = App {
             stream,
@@ -237,9 +260,24 @@ impl App {
             auto_ack: false,
             hashed: 0,
             icons: Vec::new(),
+            release: true,
+            lent: Vec::new(),
+            guest_ram: None,
         };
-        app.send_json(json!({"type": "hello", "version": 2, "minVersion": 2, "app": "test", "hashes": true}));
+        let mut hello = json!({"type": "hello", "version": 2, "minVersion": 2, "app": "test", "hashes": true});
+        if guest_ram.is_some() {
+            hello["guestRam"] = json!(true);
+        }
+        app.guest_ram = guest_ram;
+        app.send_json(hello);
         app
+    }
+
+    /// Hands back every PAGES commit's slot kept so far.
+    fn release_lent(&mut self) {
+        for seq in std::mem::take(&mut self.lent) {
+            self.send_binary(RELEASED, &[&seq.to_be_bytes()]);
+        }
     }
 
     /// Connects the way the agent does: hands one end of a socket pair over
@@ -267,16 +305,7 @@ impl App {
         };
         assert_eq!(sent, 1, "{}", std::io::Error::last_os_error());
         drop((agent, theirs));
-        stream.set_read_timeout(Some(TIMEOUT)).unwrap();
-        let mut app = App {
-            stream,
-            layers: HashMap::new(),
-            auto_ack: false,
-            hashed: 0,
-            icons: Vec::new(),
-        };
-        app.send_json(json!({"type": "hello", "version": 2, "minVersion": 2, "app": "test", "hashes": true}));
-        app
+        Self::over(stream, None)
     }
 
     fn send_frame(&mut self, ty: u8, payload: &[u8]) {
@@ -354,8 +383,8 @@ impl App {
                 })
                 .collect(),
             hash: u64::from_be_bytes(p[80..88].try_into().unwrap()),
+            encoding: p[19],
         };
-        let encoding = p[19];
         let mut raw = p[header + 16 * rect_count..].to_vec();
         while raw.len() < data_len {
             let (ty, more) = self.read_frame().expect("EOF inside a commit");
@@ -369,8 +398,22 @@ impl App {
             self.layers.remove(&c.surface);
         }
         if c.flags & FLAG_BUFFER != 0 {
-            let data = if encoding == 1 { zstd::stream::decode_all(&raw[..]).unwrap() } else { raw };
             let expected: u32 = c.rects.iter().map(|r| r[2] * r[3] * 4).sum();
+            let data = match c.encoding {
+                ENCODING_ZSTD => zstd::stream::decode_all(&raw[..]).unwrap(),
+                ENCODING_PAGES => {
+                    let ram = self.guest_ram.as_ref().expect("PAGES to an app that doesn't map guest RAM");
+                    let mut data = Vec::new();
+                    ram.gather(&raw, expected as usize, &mut data).unwrap();
+                    if self.release {
+                        self.send_binary(RELEASED, &[&c.seq.to_be_bytes()]);
+                    } else {
+                        self.lent.push(c.seq);
+                    }
+                    data
+                }
+                _ => raw,
+            };
             assert_eq!(data.len(), expected as usize, "decoded size of seq {}", c.seq);
             if c.flags & FLAG_FULL != 0 {
                 assert_eq!(c.rects, vec![[0, 0, c.width, c.height]]);
@@ -833,6 +876,58 @@ fn a_client_window_reaches_the_app_with_matching_pixels() {
     while app.read_frame().is_some() {
         assert!(Instant::now() < deadline, "the old connection stayed open");
     }
+}
+
+#[test]
+fn big_frames_cross_as_guest_pages_and_on_the_stream_while_every_slot_is_lent() {
+    let agent = test_dir("guest-ram-agent");
+    let ram = guest_ram::GuestRam::serve(&agent.join("guest.sock")).unwrap();
+    let compositor = Compositor::start_with("guest-ram", |cmd| {
+        cmd.arg("--guest-socket").arg(agent.join("guest.sock"));
+    });
+    let mut app = App::connect_with_guest_ram(&compositor, ram);
+    app.auto_ack = true;
+    app.wait_json("ready");
+    app.send_json(json!({"type": "output", "width": 800, "height": 600, "scale": 2.0, "refresh": 60000}));
+    app.sync();
+    // Big enough a frame for PAGES.
+    let (w, h) = (400, 300);
+    let mut client = Pattern::connect(&compositor, w, h);
+    let content = pattern(w, h, 0);
+    client.draw(&content, [0, 0, w, h], false);
+    let window = app.wait_json("toplevel")["id"].as_u64().unwrap() as u32;
+    let first = app.wait_commit("the first frame", |c| c.surface == window);
+    assert_eq!(first.encoding, ENCODING_PAGES);
+    assert_eq!(app.layers[&window].pixels, to_rgba(&content));
+
+    let mut seed = 0u8;
+    let mut frame = |client: &mut Pattern, app: &mut App| {
+        seed += 1;
+        // Changes every row in place: another pattern seed would scroll.
+        let content: Vec<u8> = pattern(w, h, 0).iter().enumerate().map(|(i, b)| if i % 4 == 3 { *b } else { b ^ seed }).collect();
+        client.draw(&content, [0, 0, w, h], false);
+        let c = app.wait_commit("a frame", |c| c.surface == window && c.flags & FLAG_BUFFER != 0);
+        assert_eq!(app.layers[&window].pixels, to_rgba(&content), "seq {}", c.seq);
+        c
+    };
+
+    // Unreleased slots run out, and frames go on the stream until one comes back.
+    app.release = false;
+    let mut streamed = None;
+    for _ in 0..100 {
+        let c = frame(&mut client, &mut app);
+        if c.encoding != ENCODING_PAGES {
+            streamed = Some(c);
+            break;
+        }
+    }
+    assert!(streamed.is_some(), "every frame went as PAGES with no slot released");
+    assert!(!app.lent.is_empty());
+    app.release_lent();
+    app.release = true;
+    app.sync();
+    assert_eq!(frame(&mut client, &mut app).encoding, ENCODING_PAGES);
+    let _ = std::fs::remove_dir_all(&agent);
 }
 
 #[test]

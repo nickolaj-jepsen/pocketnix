@@ -53,11 +53,12 @@ use crate::state::ClientState;
 use crate::state::State;
 
 const USAGE: &str =
-    "usage: pocketnix-compositor [--gui-socket PATH] [--wayland-display NAME] [--stats-socket PATH] [--frames-in-flight N] [--log-hashes]";
+    "usage: pocketnix-compositor [--gui-socket PATH] [--wayland-display NAME] [--stats-socket PATH] [--guest-socket PATH] [--frames-in-flight N] [--log-hashes]";
 
 struct Args {
     gui_socket: Option<PathBuf>,
     stats_socket: Option<PathBuf>,
+    guest_socket: PathBuf,
     wayland_display: String,
     log_hashes: bool,
     frames_in_flight: usize,
@@ -67,6 +68,7 @@ fn parse_args() -> Result<Args> {
     let mut args = Args {
         gui_socket: None,
         stats_socket: None,
+        guest_socket: guestram::GUEST_SOCKET.into(),
         wayland_display: "wayland-0".into(),
         log_hashes: std::env::var("POCKETNIX_COMPOSITOR_LOG_HASHES").is_ok_and(|v| v == "1"),
         frames_in_flight: flush::FRAMES_IN_FLIGHT,
@@ -77,6 +79,7 @@ fn parse_args() -> Result<Args> {
         match arg.to_str() {
             Some("--gui-socket") => args.gui_socket = Some(value("--gui-socket")?.into()),
             Some("--stats-socket") => args.stats_socket = Some(value("--stats-socket")?.into()),
+            Some("--guest-socket") => args.guest_socket = value("--guest-socket")?.into(),
             Some("--wayland-display") => {
                 args.wayland_display = value("--wayland-display")?
                     .into_string()
@@ -207,7 +210,7 @@ fn main() -> Result<()> {
         .handle()
         .insert_source(wake_source, |_, _, _| {})
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-    let gui = Gui::new(args.log_hashes, wake);
+    let gui = Gui::new(args.log_hashes, args.guest_socket, wake);
     let (icon_done, icon_rx) = channel::channel();
     let (launch_exits, exit_rx) = channel::channel();
     let channels = Channels {

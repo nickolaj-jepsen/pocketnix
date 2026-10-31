@@ -54,6 +54,8 @@ run flags:
   --gui-bench <path>   for --local (default pocketnix-gui-bench on PATH)
   --sink <flags>       for --local: the sink's display, as its flags
                        (default "--width 1008 --height 2244 --scale 2.625 --refresh 120000")
+  --guest-ram          for --local: the sink stands in for an app that maps
+                       guest RAM, so big frames cross as PAGES (gui-protocol.md)
 `
 
 func runBench(args []string) error {
@@ -86,7 +88,7 @@ type benchOpts struct {
 	reps                       int
 	duration, warmup, cooldown time.Duration
 	serial, pkg, ssh, guestBin string
-	local                      bool
+	local, guestRAM            bool
 	compositor, guiBench, sink string
 	workloads                  []string
 }
@@ -109,6 +111,7 @@ func benchRun(args []string) error {
 	fs.StringVar(&o.compositor, "compositor", "pocketnix-compositor", "")
 	fs.StringVar(&o.guiBench, "gui-bench", "pocketnix-gui-bench", "")
 	fs.StringVar(&o.sink, "sink", "--width 1008 --height 2244 --scale 2.625 --refresh 120000", "")
+	fs.BoolVar(&o.guestRAM, "guest-ram", false, "")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -258,8 +261,13 @@ func startLocal(o benchOpts) (benchTarget, error) {
 	if err != nil {
 		return nil, err
 	}
-	l.compositor = exec.Command(compositor, "--gui-socket", l.path("gui.sock"), "--wayland-display", "wl-bench",
-		"--stats-socket", l.path("compositor.sock"))
+	compositorArgs := []string{"--gui-socket", l.path("gui.sock"), "--wayland-display", "wl-bench", "--stats-socket", l.path("compositor.sock")}
+	sinkArgs := []string{"sink", "--socket", l.path("gui.sock"), "--stats-socket", l.path("sink.sock")}
+	if o.guestRAM {
+		compositorArgs = append(compositorArgs, "--guest-socket", l.path("guest.sock"))
+		sinkArgs = append(sinkArgs, "--guest-ram", l.path("guest.sock"))
+	}
+	l.compositor = exec.Command(compositor, compositorArgs...)
 	l.compositor.Env = l.env()
 	l.compositor.Stderr = logs
 	if err := l.compositor.Start(); err != nil {
@@ -269,8 +277,7 @@ func startLocal(o benchOpts) (benchTarget, error) {
 		l.close()
 		return nil, err
 	}
-	l.sinkProc = exec.Command(guiBench, append([]string{"sink", "--socket", l.path("gui.sock"), "--stats-socket", l.path("sink.sock")},
-		strings.Fields(o.sink)...)...)
+	l.sinkProc = exec.Command(guiBench, append(sinkArgs, strings.Fields(o.sink)...)...)
 	l.sinkProc.Env = l.env()
 	l.sinkProc.Stderr = logs
 	if err := l.sinkProc.Start(); err != nil {

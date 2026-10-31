@@ -22,6 +22,7 @@ use anyhow::bail;
 use serde_json::Value;
 use serde_json::json;
 
+use crate::guest_ram::GuestRam;
 use crate::parsed;
 use crate::protocol;
 use crate::stats::Stats;
@@ -37,6 +38,8 @@ struct Opts {
     scale: f64,
     refresh: u32,
     stats_socket: Option<PathBuf>,
+    /// Stands in for guest RAM, serving frame buffers on this socket.
+    guest_ram: Option<PathBuf>,
     decode: bool,
 }
 
@@ -58,6 +61,7 @@ pub fn run(args: &[String]) -> Result<()> {
         scale: 2.625,
         refresh: 120_000,
         stats_socket: None,
+        guest_ram: None,
         decode: true,
     };
     let mut it = args.iter();
@@ -69,6 +73,7 @@ pub fn run(args: &[String]) -> Result<()> {
             "--scale" => o.scale = parsed(&mut it, arg)?,
             "--refresh" => o.refresh = parsed(&mut it, arg)?,
             "--stats-socket" => o.stats_socket = Some(value(&mut it, arg)?.into()),
+            "--guest-ram" => o.guest_ram = Some(value(&mut it, arg)?.into()),
             "--no-decode" => o.decode = false,
             _ => bail!("unknown argument {arg:?}"),
         }
@@ -80,12 +85,17 @@ pub fn run(args: &[String]) -> Result<()> {
     if let Some(path) = &o.stats_socket {
         serve_stats(path, stats.clone())?;
     }
+    let ram = o.guest_ram.as_deref().map(GuestRam::serve).transpose()?;
     let stream = UnixStream::connect(&o.socket).with_context(|| format!("connecting to {}", o.socket.display()))?;
     let out = Arc::new(Mutex::new(stream.try_clone()?));
-    send_json(&out, &json!({"type": "hello", "version": protocol::VERSION, "minVersion": protocol::MIN_VERSION, "app": "pocketnix-gui-bench sink", "hashes": false}))?;
+    send_json(
+        &out,
+        &json!({"type": "hello", "version": protocol::VERSION, "minVersion": protocol::MIN_VERSION, "app": "pocketnix-gui-bench sink",
+            "hashes": false, "guestRam": ram.is_some()}),
+    )?;
     let pending: Arc<Mutex<Vec<(u32, u32, Instant)>>> = Arc::default();
     ticker(o.refresh, out.clone(), pending.clone(), stats.clone());
-    read_loop(&o, stream, &out, &pending, &stats)
+    read_loop(&o, ram.as_ref(), stream, &out, &pending, &stats)
 }
 
 fn serve_stats(path: &std::path::Path, stats: Shared) -> Result<()> {
@@ -162,6 +172,7 @@ fn be32(b: &[u8], at: usize) -> u32 {
 
 fn read_loop(
     o: &Opts,
+    ram: Option<&GuestRam>,
     mut stream: UnixStream,
     out: &Mutex<UnixStream>,
     pending: &Mutex<Vec<(u32, u32, Instant)>>,
@@ -224,16 +235,24 @@ fn read_loop(
                 if flags & protocol::FLAG_HIDDEN != 0 {
                     surfaces.remove(&surface);
                 }
+                if flags & protocol::FLAG_BUFFER != 0 && encoding == protocol::ENCODING_PAGES {
+                    stats.lock().unwrap().add("commitsPages", 1);
+                }
                 if flags & protocol::FLAG_BUFFER != 0 && o.decode {
                     let pixel_bytes: usize = rects.iter().map(|r| (r[2] * r[3] * 4) as usize).sum();
                     let t = Instant::now();
-                    let src: &[u8] = if encoding == protocol::ENCODING_ZSTD {
-                        data.clear();
-                        data.reserve(pixel_bytes);
-                        decoder.decompress_to_buffer(&raw[..], &mut data)?;
-                        &data
-                    } else {
-                        &raw
+                    let src: &[u8] = match encoding {
+                        protocol::ENCODING_ZSTD => {
+                            data.clear();
+                            data.reserve(pixel_bytes);
+                            decoder.decompress_to_buffer(&raw[..], &mut data)?;
+                            &data
+                        }
+                        protocol::ENCODING_PAGES => {
+                            ram.context("a PAGES commit without guest RAM")?.gather(&raw, pixel_bytes, &mut data)?;
+                            &data
+                        }
+                        _ => &raw,
                     };
                     let decoded = t.elapsed();
                     let t = Instant::now();
@@ -242,6 +261,10 @@ fn read_loop(
                     s.add("pixelBytes", pixel_bytes as u64);
                     s.time("decodeNs", decoded);
                     s.time("applyNs", t.elapsed());
+                }
+                // Copied out, or never to be: the compositor may write those pages again.
+                if flags & protocol::FLAG_BUFFER != 0 && encoding == protocol::ENCODING_PAGES {
+                    send(out, protocol::RELEASED, &seq.to_be_bytes())?;
                 }
                 if flags & protocol::FLAG_GROUPED == 0 {
                     group_start = None;

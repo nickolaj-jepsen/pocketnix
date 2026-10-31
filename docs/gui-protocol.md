@@ -937,7 +937,7 @@ directory, `$XDG_RUNTIME_DIR` (`/run/user/<uid>`).
 
 - Crate `compositor/`, binary `pocketnix-compositor`. wprs's Apache-2.0
   `LICENSE` and `NOTICE` stay in the crate.
-- `pocketnix-compositor [--gui-socket PATH] [--wayland-display NAME] [--stats-socket PATH] [--frames-in-flight N] [--log-hashes]`
+- `pocketnix-compositor [--gui-socket PATH] [--wayland-display NAME] [--stats-socket PATH] [--guest-socket PATH] [--frames-in-flight N] [--log-hashes]`
 - Sockets: it takes listening `AF_UNIX` stream sockets from systemd socket
   activation (`LISTEN_PID`, `LISTEN_FDS`, `LISTEN_FDNAMES`): the one named
   `gui` is the GUI socket, `wayland` the Wayland socket. It unsets the
@@ -969,7 +969,8 @@ directory, `$XDG_RUNTIME_DIR` (`/run/user/<uid>`).
 - It reads `POCKETNIX_TAB` from `/proc/<pid>/environ` of its own uid's
   clients.
 - For an app that maps guest RAM, it asks the agent for frame buffers on
-  `/run/pocketnix/guest.sock` (`protocol.GuestFrameBuffers`), keeps that
+  `--guest-socket`, default `/run/pocketnix/guest.sock`
+  (`protocol.GuestFrameBuffers`), keeps that
   connection open while it uses them, and sends its data as before when the
   agent can't give them.
 

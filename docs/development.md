@@ -112,12 +112,16 @@ flowchart LR
   compositor's package.
 - `--local` runs the desktop tier: a compositor and `pocketnix-gui-bench
   sink`, which decodes like the app and acknowledges at a display clock. It
-  measures the guest's side on the desktop's CPU, without a phone.
+  measures the guest's side on the desktop's CPU, without a phone. With
+  `--guest-ram` the sink also stands in for guest RAM and the agent's frame
+  buffers, so big frames cross as PAGES; without it they go on the stream,
+  as on a guest without app-made RAM. Run both to keep both paths measured.
 - `pocketnix bench report <dir> <baseline>` compares two runs' directories.
 
 ```bash
 nix run .#bench -- run --ssh "ssh phone-usb" noise gradient scroll "scroll --res 0.5" rect touch
 nix run .#bench -- run --local noise scroll
+nix run .#bench -- run --local --guest-ram noise scroll
 nix run .#bench -- run --quick --ssh "ssh phone-usb" scroll    # one short run, to iterate
 ```
 

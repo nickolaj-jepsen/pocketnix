@@ -4,6 +4,7 @@
 //! the app on a GUI socket; `stats` prints a stats socket's snapshot.
 
 mod client;
+mod guest_ram;
 mod sink;
 mod snapshot;
 
@@ -48,10 +49,13 @@ commands:
       --stats adds a stats socket to snapshot (the compositor's,
       $XDG_RUNTIME_DIR/pocketnix-compositor-stats.sock, is the default).
   sink --socket PATH [--width PX] [--height PX] [--scale F] [--refresh MHZ]
-       [--stats-socket PATH] [--no-decode]
+       [--stats-socket PATH] [--guest-ram SOCKET] [--no-decode]
       Speaks the app's side of a GUI socket: opens each window at the
       output's size, decodes every commit and acknowledges each group at
-      the next tick of a --refresh clock.
+      the next tick of a --refresh clock. --guest-ram stands in for an app
+      that maps guest RAM, and for the agent that pins frame buffers in it:
+      it serves them on SOCKET (the compositor's --guest-socket), so big
+      commits arrive as PAGES.
   stats [--socket PATH]
       Prints one snapshot of a stats socket (default the compositor's).
 ";

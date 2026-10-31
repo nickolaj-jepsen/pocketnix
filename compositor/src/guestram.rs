@@ -8,6 +8,8 @@ use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -17,7 +19,7 @@ use anyhow::bail;
 use crate::gui::read_with_fd;
 
 /// The agent's guest socket: go/internal/protocol's GuestSocket.
-const GUEST_SOCKET: &str = "/run/pocketnix/guest.sock";
+pub const GUEST_SOCKET: &str = "/run/pocketnix/guest.sock";
 /// Slots per buffer set: a visible window's groups in flight, and one more.
 const SLOTS: usize = crate::flush::FRAMES_IN_FLIGHT + 1;
 const PAGE: usize = 4096;
@@ -49,10 +51,10 @@ struct Buffers {
 unsafe impl Send for Buffers {}
 
 impl Buffers {
-    fn request(id: u64, slot_len: usize) -> Result<Self> {
+    fn request(socket: &Path, id: u64, slot_len: usize) -> Result<Self> {
         let slot_len = slot_len.div_ceil(PAGE) * PAGE;
         let len = slot_len * SLOTS;
-        let mut agent = UnixStream::connect(GUEST_SOCKET).with_context(|| format!("connecting to {GUEST_SOCKET}"))?;
+        let mut agent = UnixStream::connect(socket).with_context(|| format!("connecting to {}", socket.display()))?;
         agent.set_read_timeout(Some(AGENT_TIMEOUT))?;
         writeln!(agent, "{}", serde_json::json!({"type": "frame-buffers", "bytes": len}))?;
         let (line, fd) = read_reply(&mut agent)?;
@@ -121,8 +123,10 @@ pub struct Loan {
 
 /// A connection's frame buffers.
 pub struct Frames {
+    /// The agent's guest socket, or a stand-in's.
+    socket: Arc<Path>,
     /// Asks for a set: [Buffers::request], or a local one in tests.
-    request: fn(u64, usize) -> Result<Buffers>,
+    request: fn(&Path, u64, usize) -> Result<Buffers>,
     current: Option<Buffers>,
     /// Sets replaced by bigger ones while the app still had slots of them.
     retired: Vec<Buffers>,
@@ -131,13 +135,12 @@ pub struct Frames {
     failed: bool,
 }
 
-impl Default for Frames {
-    fn default() -> Self {
-        Self { request: Buffers::request, current: None, retired: Vec::new(), next_id: 0, failed: false }
-    }
-}
-
 impl Frames {
+    /// Frame buffers asked of the agent on `socket`.
+    pub fn new(socket: Arc<Path>) -> Self {
+        Self { socket, request: Buffers::request, current: None, retired: Vec::new(), next_id: 0, failed: false }
+    }
+
     /// Copies `data` into a free slot; returns the slot and the commit's data
     /// for it (page count, then addresses). None when there are no buffers or
     /// none free: the data then goes on the stream.
@@ -150,7 +153,7 @@ impl Frames {
                 self.retired.push(old);
             }
             self.next_id += 1;
-            match (self.request)(self.next_id, data.len()) {
+            match (self.request)(&self.socket, self.next_id, data.len()) {
                 Ok(b) => self.current = Some(b),
                 Err(e) => {
                     tracing::warn!("frame buffers: {e:#}; frames go on the stream");
@@ -203,7 +206,7 @@ mod tests {
     use super::*;
 
     /// A set over a local memfd whose page n claims guest address n × PAGE, held by a socketpair.
-    fn local(id: u64, slot_len: usize) -> Result<Buffers> {
+    fn local(_: &Path, id: u64, slot_len: usize) -> Result<Buffers> {
         let slot_len = slot_len.div_ceil(PAGE) * PAGE;
         let len = slot_len * SLOTS;
         let (agent, peer) = UnixStream::pair()?;
@@ -221,7 +224,7 @@ mod tests {
     }
 
     fn frames() -> Frames {
-        Frames { request: local, ..Default::default() }
+        Frames { request: local, ..Frames::new(Path::new("").into()) }
     }
 
     fn addresses(data: &[u8]) -> Vec<u64> {

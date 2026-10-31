@@ -11,6 +11,8 @@ use std::os::fd::FromRawFd;
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
@@ -70,6 +72,8 @@ pub struct Gui {
     next_id: u64,
     pub instance: String,
     pub log_hashes: bool,
+    /// Where frame buffers come from: the agent's guest socket.
+    guest_socket: Arc<Path>,
     wake: Ping,
     starved: Arc<AtomicBool>,
 }
@@ -114,7 +118,7 @@ impl Conn {
 }
 
 impl Gui {
-    pub fn new(log_hashes: bool, wake: Ping) -> Self {
+    pub fn new(log_hashes: bool, guest_socket: PathBuf, wake: Ping) -> Self {
         Self {
             conns: HashMap::new(),
             active: None,
@@ -123,6 +127,7 @@ impl Gui {
             next_id: 1,
             instance: random_id(),
             log_hashes,
+            guest_socket: guest_socket.into(),
             wake,
             starved: Arc::new(AtomicBool::new(false)),
         }
@@ -385,7 +390,7 @@ impl State {
                 ready: false,
                 hashes: false,
                 guest_ram: false,
-                frames: Default::default(),
+                frames: crate::guestram::Frames::new(self.gui.guest_socket.clone()),
                 seq: 0,
                 toplevels: HashMap::new(),
                 surfaces: HashMap::new(),
