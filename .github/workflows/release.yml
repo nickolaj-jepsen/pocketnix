@@ -55,6 +55,9 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
+      # Ubuntu 24.04 strips unprivileged user namespaces of capabilities; systemd-repart needs one in the Nix sandbox.
+      - name: Let systemd-repart unshare
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - uses: cachix/install-nix-action@v31
       - uses: cachix/cachix-action@v16
         with:
