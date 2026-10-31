@@ -12,14 +12,14 @@ sealed interface VmState {
     data class Failed(val message: String) : VmState
 }
 
-/** The set-once hardware the app UI owns (docs/configuration.md). */
+/** The set-once hardware the app UI owns (docs/configuration.md), but for [gpu], the guest's last config's. */
 data class VmSettings(
     val memoryMb: Int,
     /** 1, or 0 for one vCPU per host core. */
     val cpus: Int,
     val diskGb: Int,
     val network: Boolean,
-    /** The phone's GPU through gfxstream, where AVF offers it. */
+    /** The phone's GPU through gfxstream, where AVF offers it: what the guest's last config asked for. */
     val gpu: Boolean = false,
     /** A virtio-snd speaker (no microphone), played through AAudio. */
     val audio: Boolean = false,

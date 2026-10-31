@@ -6,7 +6,8 @@ Two places hold configuration:
   The agent sends it to the app on connect, and a `switch` applies it live.
 - The app's Settings own what must be known before boot (the VM's hardware
   and network) and what only the phone can name (which Android folders to
-  share).
+  share). The GPU is the exception: `pocketnix.guest.gpu.enable` asks for
+  it, and the VM's next start gives it ([Design rules](architecture.md#design-rules)).
 
 A guest the app sets up (`nixosModules.managed`) is configured from the app;
 its `/etc/nixos/configuration.nix` takes the options below for anything
@@ -146,7 +147,11 @@ The app tells the guest about the phone:
   --what=sleep ...`) makes the app hold a wake lock, named in its notification.
   `power.wakeLocks.ignore` lists daemons to disregard; the app has a setting
   to refuse wake locks altogether.
-- Free guest memory returns to Android through AVF's memory balloon.
+- Memory the guest touches stays the app's until the VM stops: the guest
+  runs on RAM the app maps ([Guest RAM](gui-protocol.md#guest-ram)), which
+  AVF's memory balloon can't hand back to Android. Size the VM's memory for the
+  most the guest will use. Where the app can't map guest RAM, free guest
+  memory goes back through the balloon.
 
 ## What the module trims on AVF
 
