@@ -250,6 +250,10 @@
           inherit self;
           pkgs = nixpkgs.legacyPackages.x86_64-linux;
         };
+        x86_64-linux.managed-boot = import ./nix/managed-test.nix {
+          inherit self;
+          pkgs = nixpkgs.legacyPackages.x86_64-linux;
+        };
         x86_64-linux.gui = import ./nix/gui-test.nix {
           inherit self;
           pkgs = nixpkgs.legacyPackages.x86_64-linux;
