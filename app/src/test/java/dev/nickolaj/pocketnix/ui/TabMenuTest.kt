@@ -63,4 +63,11 @@ class TabMenuTest {
         assertEquals(false, "Reboot" in stopped)
         assertEquals(false, "Start with boot menu" in mainMenu(up.copy(running = false, ownsGuest = false)) {}.labels())
     }
+
+    @Test
+    fun aManagedGuestWithoutGuiStillReachesTheLauncher() {
+        val apps = showsApps(guiEnabled = false, listed = false, managed = true)
+        assertEquals(true, MainItem.APPS.label in mainMenu(up.copy(apps = apps)) {}.labels())
+        assertEquals(false, showsApps(guiEnabled = false, listed = false, managed = false))
+    }
 }

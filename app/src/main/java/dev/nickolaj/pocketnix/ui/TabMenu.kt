@@ -85,9 +85,16 @@ data class MainMenuState(
     val managed: Boolean = false
 )
 
+/**
+ * Whether the ⋮ menu offers the launcher: for a guest with GUI on
+ * ([guiEnabled]), apps listed from before ([listed]), or a [managed] guest,
+ * whose launcher runs nixpkgs packages in a tab without a GUI.
+ */
+internal fun showsApps(guiEnabled: Boolean?, listed: Boolean, managed: Boolean): Boolean = guiEnabled == true || listed || managed
+
 /** [vm]'s ⋮ menu state now, with window [shownWindow] on screen (0: the terminal). */
 fun mainMenuState(context: Context, vm: Vm, shownWindow: Int) = MainMenuState(
-    apps = vm.config.value?.gui?.enable == true || vm.gui.catalog.apps.isNotEmpty(),
+    apps = showsApps(vm.config.value?.gui?.enable, vm.gui.catalog.apps.isNotEmpty(), vm.config.value?.managedFlake != null),
     windowShown = shownWindow != 0,
     agentUp = vm.control.link.value is ControlChannel.Link.Up,
     endedTabs = vm.tabs.all().any { it.ended },
