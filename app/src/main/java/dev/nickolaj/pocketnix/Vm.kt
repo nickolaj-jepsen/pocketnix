@@ -551,14 +551,14 @@ class Vm(private val app: Context) {
         val cfg = control.config.value
         val name = profile ?: cfg?.defaultProfile?.takeIf { it.isNotEmpty() } ?: "shell"
         val backend = PtyBackend(dialer, name, appVersion, command)
-        return tabs.open(command?.substringAfterLast('/') ?: name, backend) { backend.agentTab }
+        return tabs.open(Tab.Kind.Pty(name, command), backend) { backend.agentTab }
     }
 
-    /** Starts ended tab [id] again in a new session of its profile ([Tabs.reopen]); null if it can't. */
+    /** Starts ended tab [id] again in a new session of its profile and command ([Tabs.reopen]); null if it can't. */
     fun reopenTab(id: Int): Tab? {
         val dialer = _engine.value.dialer ?: return null
         val kind = tabs.all().firstOrNull { it.id == id && it.ended }?.kind as? Tab.Kind.Pty ?: return null
-        val backend = PtyBackend(dialer, kind.profile, appVersion)
+        val backend = PtyBackend(dialer, kind.profile, appVersion, kind.command)
         return tabs.reopen(id, backend) { backend.agentTab }
     }
 

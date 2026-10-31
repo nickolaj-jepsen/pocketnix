@@ -21,7 +21,12 @@ class Tab(
     sealed interface Kind {
         /** The hvc0 console: always there, never closed, the way in when the agent isn't. */
         data object Console : Kind
-        data class Pty(val profile: String) : Kind
+
+        /** A PTY session of [profile], running [command] in its login shell when set. */
+        data class Pty(val profile: String, val command: String? = null) : Kind {
+            /** What the tab is called before the shell or the user names it: the command's file name, else the profile. */
+            val name: String get() = command?.substringAfterLast('/') ?: profile
+        }
     }
 
     /** The title the user gave it, "" for none; see [tabTitle]. Not kept across app restarts. */
@@ -31,7 +36,7 @@ class Tab(
     val title: String
         get() = when (kind) {
             Kind.Console -> "console"
-            is Kind.Pty -> tabTitle(userTitle, session.title, kind.profile)
+            is Kind.Pty -> tabTitle(userTitle, session.title, kind.name)
         }
 
     /** A terminal tab whose session is over; the console never ends. */
@@ -106,9 +111,9 @@ class Tabs(private val context: Context, consoleBackend: TerminalBackend, privat
     /** The guest window shown in place of the selected terminal, or 0. */
     val selectedWindow: StateFlow<Int> = _selectedWindow.asStateFlow()
 
-    /** [agentTab]: the agent's id for the session once it has one. */
-    fun open(profile: String, backend: TerminalBackend, agentTab: () -> String = { "" }): Tab {
-        val tab = Tab(nextId++, Tab.Kind.Pty(profile), session(backend), agentTab)
+    /** A tab of [kind] on [backend], selected; [agentTab]: the agent's id for the session once it has one. */
+    fun open(kind: Tab.Kind.Pty, backend: TerminalBackend, agentTab: () -> String = { "" }): Tab {
+        val tab = Tab(nextId++, kind, session(backend), agentTab)
         _tabs.update { it + tab }
         select(tab.id)
         return tab
