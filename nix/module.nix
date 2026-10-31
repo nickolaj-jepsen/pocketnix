@@ -103,6 +103,9 @@
     echo '${builtins.toJSON mgd.selections}' > $out/pocketnix.json
   '';
 
+  # go/internal/protocol's GuestSocket, where pocketnix-guest looks by default.
+  guestSocket = "/run/pocketnix/guest.sock";
+
   # The agent's --prune-marker: outside /run/pocketnix, which systemd empties
   # whenever the agent stops, restarts included, so a restart would prune again.
   pruneMarker = "/run/pocketnix-pruned";
@@ -839,7 +842,7 @@ in {
         # Updates: ssh to the build host, nix to fetch, systemd-run to switch.
         path = [config.nix.package config.programs.ssh.package config.systemd.package];
         serviceConfig = {
-          ExecStart = lib.escapeShellArgs ([(lib.getExe' cfg.package "pocketnix-agent") "--guest-socket" "/run/pocketnix/guest.sock" "--state-dir" "/var/lib/pocketnix" "--host-state" "/run/pocketnix/host.json" "--prune-marker" pruneMarker] ++ lib.concatMap (a: ["--listen" a]) cfg.agent.listen);
+          ExecStart = lib.escapeShellArgs ([(lib.getExe' cfg.package "pocketnix-agent") "--guest-socket" guestSocket "--state-dir" "/var/lib/pocketnix" "--host-state" "/run/pocketnix/host.json" "--prune-marker" pruneMarker] ++ lib.concatMap (a: ["--listen" a]) cfg.agent.listen);
           RuntimeDirectory = "pocketnix";
           RuntimeDirectoryMode = "0755";
           StateDirectory = "pocketnix";
@@ -1162,7 +1165,7 @@ in {
         # profiles, from pam_env), which a unit's own PATH would replace.
         enableDefaultPath = false;
         serviceConfig = {
-          ExecStart = lib.getExe' gui.package "pocketnix-compositor";
+          ExecStart = lib.escapeShellArgs [(lib.getExe' gui.package "pocketnix-compositor") "--guest-socket" guestSocket];
           # Rescans the app list.
           ExecReload = "${pkgs.coreutils}/bin/kill -HUP $MAINPID";
           Sockets = ["pocketnix-gui.socket" "pocketnix-wayland.socket"];
