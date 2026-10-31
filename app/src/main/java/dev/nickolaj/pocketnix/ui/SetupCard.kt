@@ -27,6 +27,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.nickolaj.pocketnix.Settings
 import dev.nickolaj.pocketnix.Vm
 import dev.nickolaj.pocketnix.engine.DiskImage
 import dev.nickolaj.pocketnix.managed.ManagedGuest
@@ -47,7 +48,12 @@ fun SetupCard(vm: Vm, canStart: Boolean, modifier: Modifier = Modifier) {
     var disk by rememberSaveable { mutableStateOf(vm.settings.diskGb.toString()) }
     val maxDisk = remember { DiskImage.maxGb(context) }
     val userError = if (user.isEmpty() || Selections.USER_NAME.matches(user)) null else "Lowercase letters, digits, - and _"
-    val diskError = disk.toIntOrNull().let { if (it == null || it < MIN_DISK_GB || it > maxDisk) "$MIN_DISK_GB–$maxDisk GB" else null }
+    val diskSize = checkDiskSize(disk, Settings.MIN_SETUP_DISK_GB, maxDisk)
+    val diskError = when (diskSize) {
+        DiskSize.NoRoom -> "Not enough free space: needs ${Settings.MIN_SETUP_DISK_GB} GB, the phone has $maxDisk GB"
+        DiskSize.OutOfRange -> "${Settings.MIN_SETUP_DISK_GB}–$maxDisk GB"
+        is DiskSize.Ok -> null
+    }
     val working = setup is ManagedGuest.Setup.Working
     Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Set up NixOS", style = MaterialTheme.typography.titleMedium)
@@ -80,7 +86,7 @@ fun SetupCard(vm: Vm, canStart: Boolean, modifier: Modifier = Modifier) {
             { v -> disk = v.filter(Char::isDigit).take(5) },
             label = { Text("Disk (GB)") },
             singleLine = true,
-            enabled = !working,
+            enabled = !working && diskSize != DiskSize.NoRoom,
             isError = diskError != null,
             supportingText = diskError?.let { { Text(it) } },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
@@ -97,9 +103,9 @@ fun SetupCard(vm: Vm, canStart: Boolean, modifier: Modifier = Modifier) {
             ManagedGuest.Setup.Idle -> {}
         }
         Button(
-            enabled = !working && user.isNotEmpty() && userError == null && diskError == null,
+            enabled = !working && user.isNotEmpty() && userError == null && diskSize is DiskSize.Ok,
             onClick = {
-                vm.settings.diskGb = disk.toInt()
+                vm.settings.diskGb = (diskSize as DiskSize.Ok).gb
                 vm.managed.install(Selections(user, services)) { if (canStart) vm.start() }
             }
         ) { Text(if (setup is ManagedGuest.Setup.Failed) "Try again" else "Download and set up") }
@@ -110,5 +116,3 @@ fun SetupCard(vm: Vm, canStart: Boolean, modifier: Modifier = Modifier) {
         )
     }
 }
-
-private const val MIN_DISK_GB = 8

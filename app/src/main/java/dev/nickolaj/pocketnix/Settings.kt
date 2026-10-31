@@ -91,5 +91,11 @@ class Settings(context: Context) {
 
     companion object {
         const val MAX_MEMORY_MB = 65_536
+
+        /** The smallest disk, in GB. */
+        const val MIN_DISK_GB = 4
+
+        /** The smallest disk a managed guest is set up on, in GB: it builds its own systems, so its store needs room past the base image. */
+        const val MIN_SETUP_DISK_GB = 8
     }
 }

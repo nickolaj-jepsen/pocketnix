@@ -49,7 +49,7 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
     // The saved value stays valid even when free space has shrunk below it since.
     val diskError = disk.toIntOrNull().let {
         when {
-            it == null || it < MIN_DISK_GB -> "At least $MIN_DISK_GB GB"
+            it == null || it < Settings.MIN_DISK_GB -> "At least ${Settings.MIN_DISK_GB} GB"
             it > maxDisk && it != s.diskGb -> "At most $maxDisk GB: that's the free space"
             else -> null
         }
@@ -98,7 +98,6 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
 }
 
 private const val MIN_MEMORY_MB = 512
-private const val MIN_DISK_GB = 4
 
 @Composable
 private fun NumberField(label: String, value: String, error: String?, onChange: (String) -> Unit) {
