@@ -76,7 +76,7 @@ class SetupService : Service() {
 
     private companion object {
         // VmService's channel: both say what the VM is doing.
-        const val CHANNEL = "vm"
+        const val CHANNEL = VmService.CHANNEL
         const val NOTIFICATION = 2
     }
 }

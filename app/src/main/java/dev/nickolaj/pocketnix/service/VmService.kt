@@ -114,7 +114,7 @@ class VmService : Service() {
     }
 
     companion object {
-        private const val CHANNEL = "vm"
+        internal const val CHANNEL = "vm"
         private const val NOTIFICATION = 1
         private const val TAG = "VmService"
     }
