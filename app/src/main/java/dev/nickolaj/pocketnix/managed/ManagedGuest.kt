@@ -95,7 +95,7 @@ class ManagedGuest(
         val name = Release.baseImage()
         val gz = File(app.filesDir, "$name.part")
         Release.download(Release.url(settings, name), gz) { done, total -> _setup.value = Setup.Working(done, total, false) }
-        Release.verify(settings, name, gz)
+        Release.verify(Release.url(settings, "$name.sha256"), gz)
         val part = File(disk.path + ".part")
         Release.unpack(gz, part) { done, total -> _setup.value = Setup.Working(done, total, true) }
         DiskImage.grow(part, settings.diskGb)

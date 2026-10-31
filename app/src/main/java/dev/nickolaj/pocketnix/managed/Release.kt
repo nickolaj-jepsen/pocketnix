@@ -76,19 +76,24 @@ object Release {
         }
     }
 
-    /** Checks [file] against the release's `<name>.sha256` (sha256sum's format). */
-    fun verify(settings: Settings, name: String, file: File) {
-        val sums = (url(settings, "$name.sha256").openConnection() as HttpURLConnection).run {
+    /**
+     * Checks [file] against the checksum at [sums] (sha256sum's format). A
+     * file that doesn't match is deleted, since [download] would take it as
+     * whole and never fetch it again.
+     */
+    fun verify(sums: URL, file: File) {
+        val name = sums.path.substringAfterLast('/').removeSuffix(".sha256")
+        val text = (sums.openConnection() as HttpURLConnection).run {
             connectTimeout = TIMEOUT_MS
             readTimeout = TIMEOUT_MS
             try {
-                if (responseCode != HttpURLConnection.HTTP_OK) throw IOException("$name.sha256: HTTP $responseCode")
+                if (responseCode != HttpURLConnection.HTTP_OK) throw IOException("$sums: HTTP $responseCode")
                 inputStream.bufferedReader().readText()
             } finally {
                 disconnect()
             }
         }
-        val want = sums.trim().substringBefore(' ').lowercase()
+        val want = text.trim().substringBefore(' ').lowercase()
         val md = MessageDigest.getInstance("SHA-256")
         file.inputStream().use { input ->
             val buf = ByteArray(BUFFER)
@@ -99,7 +104,10 @@ object Release {
             }
         }
         val got = md.digest().joinToString("") { "%02x".format(it) }
-        if (got != want) throw IOException("$name doesn't match its checksum")
+        if (got != want) {
+            file.delete()
+            throw IOException("$name doesn't match its checksum")
+        }
     }
 
     /**
