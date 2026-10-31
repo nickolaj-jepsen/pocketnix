@@ -489,7 +489,13 @@ type PTY struct {
 
 // PTY starts a session running profile ("" for the default) at the given size.
 func (c *Client) PTY(profile string, rows, cols int) (*PTY, error) {
-	conn, hello, err := c.open(protocol.Hello{Stream: protocol.StreamPTY, Profile: profile, Rows: rows, Cols: cols})
+	return c.PTYCommand(profile, "", rows, cols)
+}
+
+// PTYCommand is [Client.PTY] running command in the login shell instead
+// of the profile's, unless it's empty (protocol.Hello's Command).
+func (c *Client) PTYCommand(profile, command string, rows, cols int) (*PTY, error) {
+	conn, hello, err := c.open(protocol.Hello{Stream: protocol.StreamPTY, Profile: profile, Command: command, Rows: rows, Cols: cols})
 	if err != nil {
 		return nil, err
 	}

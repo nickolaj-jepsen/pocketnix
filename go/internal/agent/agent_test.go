@@ -354,6 +354,20 @@ func TestPTYResize(t *testing.T) {
 	readUntil(t, p, "50 132")
 }
 
+func TestPTYRunsTheCommandItIsGiven(t *testing.T) {
+	h := start(t, ptyConfig(`echo from-the-profile`), unixAddr)
+	p, err := h.client.PTYCommand("t", "echo from-the-command; exit 4", 24, 80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	readUntil(t, p, "from-the-command")
+	drain(p)
+	if status, err := p.Exit(); err != nil || status != 4 {
+		t.Errorf("exit = %d, %v; want the command's 4", status, err)
+	}
+}
+
 func TestPTYSignalStatus(t *testing.T) {
 	h := start(t, ptyConfig(`kill -TERM $$`), unixAddr)
 	p, err := h.client.PTY("", 24, 80)
