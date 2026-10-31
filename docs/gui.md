@@ -79,11 +79,17 @@ sway, labwc or Plasma can run nested as an ordinary client, in one window.
 
 ## Limits
 
-- Rendering is software in the guest: the phone's GPU is reachable from a
-  VM, but nothing can composite on it yet.
-- Sound plays through AVF's virtio-snd only in debug builds, turned on from
-  a scripted start (see [Development](development.md)).
+- Rendering is software in the guest unless `pocketnix.guest.gpu.enable`
+  (experimental) gives Vulkan apps the phone's GPU. Their frames still
+  reach Android as pixels, like any window's (through guest RAM where the
+  app maps it, else over the stream), so it speeds up drawing, not the
+  window updates; OpenGL stays software.
+- Sound is playback only: PipeWire's "Android" output, which the app plays.
+  Debug builds can use AVF's virtio-snd instead, turned on from a scripted
+  start (see [Development](development.md)), which costs the guest-RAM frames
+  (see the [GUI protocol](gui-protocol.md)'s Guest RAM).
 - No X11 apps yet.
-- No clipboard bridge between Wayland apps and Android yet; `pocketnix-guest
-  copy` and `paste` work from a terminal.
+- The clipboard crosses between Wayland apps and Android one MIME type per
+  copy, and only the regular selection, not the primary one. Android hands
+  its clipboard over only when a pocketnix window gains focus.
 - External displays and docked use get no special handling yet.

@@ -20,6 +20,7 @@ object Gui {
     const val COMMIT_DATA = 0x02
     const val ICON = 0x03
     const val PRESENTED = 0x10
+    const val RELEASED = 0x11
     const val POINTER_MOTION = 0x20
     const val POINTER_BUTTON = 0x21
     const val POINTER_AXIS = 0x22
@@ -43,6 +44,10 @@ object Gui {
     const val FORMAT_RGBX8888 = 2
     const val ENCODING_RAW = 0
     const val ENCODING_ZSTD = 1
+    const val ENCODING_PAGES = 2
+
+    // PAGES commits point at pages of this size.
+    const val GUEST_PAGE = 4096
 
     const val HEADER_SIZE = 88
     const val MAX_RECTS = 4096
@@ -72,8 +77,10 @@ object Gui {
     const val MIN_ICON_SIZE = 16
     const val MAX_ICON_SIZE = 512
 
-    fun hello(app: String, hashes: Boolean): ByteArray = json(
+    /** [guestRam]: the app maps guest RAM ([GuestRam]), so commits may be PAGES. */
+    fun hello(app: String, hashes: Boolean, guestRam: Boolean = false): ByteArray = json(
         JSONObject().put("type", "hello").put("version", VERSION).put("minVersion", MIN_VERSION).put("app", app).put("hashes", hashes)
+            .apply { if (guestRam) put("guestRam", true) }
     )
 
     /** [refreshMilliHz]: the display's refresh rate in mHz. */
@@ -137,6 +144,9 @@ object Gui {
     fun json(o: JSONObject): ByteArray = Frames.encode(JSON, o.toString().toByteArray(Charsets.UTF_8))
 
     fun presented(window: Int, seq: Int): ByteArray = binary(PRESENTED, 8) { putInt(window).putInt(seq) }
+
+    /** The app has copied PAGES commit [seq]'s pages. */
+    fun released(seq: Int): ByteArray = binary(RELEASED, 4) { putInt(seq) }
 
     fun pointerMotion(window: Int, x: Float, y: Float): ByteArray = binary(POINTER_MOTION, 12) { putInt(window).putFloat(x).putFloat(y) }
 
@@ -248,7 +258,7 @@ class Commit(
     val scroll: Int,
     /** x, y, w, h per rect, in buffer pixels. */
     val rects: IntArray,
-    /** The pixel data as sent: raw, or concatenated zstd frames. */
+    /** The pixel data as sent: raw, concatenated zstd frames, or guest pages. */
     val data: ByteArray,
     val hash: Long
 ) {
@@ -500,7 +510,7 @@ class GuiReader(private val input: InputStream) {
                 throw GuiProtocolException("buffer ${width}x$height")
             }
             if (format != Gui.FORMAT_RGBA8888 && format != Gui.FORMAT_RGBX8888) throw GuiProtocolException("pixel format $format")
-            if (encoding != Gui.ENCODING_RAW && encoding != Gui.ENCODING_ZSTD) throw GuiProtocolException("encoding $encoding")
+            if (encoding != Gui.ENCODING_RAW && encoding != Gui.ENCODING_ZSTD && encoding != Gui.ENCODING_PAGES) throw GuiProtocolException("encoding $encoding")
             if (rectCount == 0) throw GuiProtocolException("BUFFER commit without rects")
             for (i in 0 until rectCount) {
                 val rx = rects[i * 4].toLong()
@@ -523,10 +533,12 @@ class GuiReader(private val input: InputStream) {
 
             encoding == Gui.ENCODING_RAW -> pixelBytes
 
+            encoding == Gui.ENCODING_PAGES -> 4 + 8 * ((pixelBytes + Gui.GUEST_PAGE - 1) / Gui.GUEST_PAGE)
+
             // zstd's worst-case expansion, with room for many small frames.
             else -> pixelBytes + pixelBytes / 128 + (1L shl 20)
         }
-        if ((encoding == Gui.ENCODING_RAW && dataLength != most) || dataLength > most) {
+        if ((encoding != Gui.ENCODING_ZSTD && dataLength != most) || dataLength > most) {
             throw GuiProtocolException("commit $seqU has $dataLength data bytes for $pixelBytes pixel bytes")
         }
         val data = if (encoding == Gui.ENCODING_RAW) SpareArrays.take(dataLength.toInt()) else ByteArray(dataLength.toInt())

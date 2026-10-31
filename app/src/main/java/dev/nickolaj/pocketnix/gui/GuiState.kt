@@ -3,9 +3,10 @@ package dev.nickolaj.pocketnix.gui
 /**
  * The compositor's windows and surfaces as the app mirrors them, across
  * connections to the same compositor instance. Applies the protocol's
- * messages and checks them; rendering reads the result. Not thread-safe.
+ * messages and checks them; rendering reads the result. Commits must be
+ * [unpacked]. Not thread-safe.
  */
-class GuiState(private val unpacker: Unpacker) {
+class GuiState {
     class Window(val id: Int, var toplevel: GuiMessage.Toplevel) {
         /** Announced again by this connection's replay. */
         internal var replayed = true
@@ -177,7 +178,7 @@ class GuiState(private val unpacker: Unpacker) {
                 }
 
                 c.buffer -> {
-                    s.content.apply(c, unpacker)
+                    s.content.apply(c)
                     s.damage.record(if (c.full || c.scrolled) null else c.rects)
                 }
             }

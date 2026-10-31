@@ -11,6 +11,8 @@ use std::os::fd::FromRawFd;
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
@@ -70,6 +72,8 @@ pub struct Gui {
     next_id: u64,
     pub instance: String,
     pub log_hashes: bool,
+    /// Where frame buffers come from: the agent's guest socket.
+    guest_socket: Arc<Path>,
     wake: Ping,
     starved: Arc<AtomicBool>,
 }
@@ -85,6 +89,9 @@ pub struct Conn {
     fresh: bool,
     ready: bool,
     pub hashes: bool,
+    /// The app maps guest RAM: big data may go as PAGES.
+    pub guest_ram: bool,
+    pub frames: crate::guestram::Frames,
     seq: u32,
     /// The last `toplevel` message sent per toplevel id, with its window.
     pub toplevels: HashMap<u32, (u32, Value)>,
@@ -111,7 +118,7 @@ impl Conn {
 }
 
 impl Gui {
-    pub fn new(log_hashes: bool, wake: Ping) -> Self {
+    pub fn new(log_hashes: bool, guest_socket: PathBuf, wake: Ping) -> Self {
         Self {
             conns: HashMap::new(),
             active: None,
@@ -120,6 +127,7 @@ impl Gui {
             next_id: 1,
             instance: random_id(),
             log_hashes,
+            guest_socket: guest_socket.into(),
             wake,
             starved: Arc::new(AtomicBool::new(false)),
         }
@@ -161,7 +169,7 @@ fn random_id() -> String {
 
 /// Reads like `read`, also taking a descriptor sent with the bytes
 /// (`SCM_RIGHTS`); any more than one are closed.
-fn read_with_fd(stream: &UnixStream, buf: &mut [u8]) -> std::io::Result<(usize, Option<OwnedFd>)> {
+pub fn read_with_fd(stream: &UnixStream, buf: &mut [u8]) -> std::io::Result<(usize, Option<OwnedFd>)> {
     let mut iov = libc::iovec { iov_base: buf.as_mut_ptr().cast(), iov_len: buf.len() };
     // Aligned room for a few descriptors; the kernel drops what doesn't fit.
     let mut control = [0u64; 8];
@@ -254,6 +262,7 @@ struct HelloMsg {
     version: u32,
     min_version: u32,
     hashes: bool,
+    guest_ram: bool,
 }
 
 #[derive(Deserialize, Default)]
@@ -380,6 +389,8 @@ impl State {
                 fresh: true,
                 ready: false,
                 hashes: false,
+                guest_ram: false,
+                frames: crate::guestram::Frames::new(self.gui.guest_socket.clone(), self.frames_in_flight),
                 seq: 0,
                 toplevels: HashMap::new(),
                 surfaces: HashMap::new(),
@@ -534,6 +545,12 @@ impl State {
                 let (window, seq) = (f.u32()?, f.u32()?);
                 self.presented(window, seq);
             }
+            protocol::RELEASED => {
+                let seq = f.u32()?;
+                if let Some(conn) = self.gui.conns.get_mut(&id) {
+                    conn.frames.release(seq);
+                }
+            }
             protocol::POINTER_MOTION => {
                 let (window, x, y) = (f.u32()?, f.f32()?, f.f32()?);
                 self.pointer_motion(window, x, y);
@@ -606,6 +623,7 @@ impl State {
         let Some(conn) = self.gui.conns.get_mut(&id) else { return Ok(()) };
         conn.ready = true;
         conn.hashes = hello.hashes;
+        conn.guest_ram = hello.guest_ram;
         conn.send(protocol::json_frame(&json!({
             "type": "hello",
             "version": version,

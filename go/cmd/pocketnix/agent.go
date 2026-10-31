@@ -29,23 +29,37 @@ commands:
   watch                  print every config the agent sends, one JSON per line
   exec [flags]           run a terminal session, printing its output; exits with its status
       --profile <name>     profile to run (default: the module's default)
+      --command <cmd>      run <cmd> in the user's login shell instead, as a run-in-tab tab does
       --size <rows>x<cols> initial size (default 24x80)
       --resize <rows>x<cols> resize once the session printed something
       --input <text>       type <text> once the session printed something
   forward <port>         splice stdin/stdout to a guest TCP port (an ssh ProxyCommand)
   gui                    splice stdin/stdout to the guest compositor's GUI socket
+  audio                  write the guest's sound to stdout (S16LE, 48 kHz, stereo)
   udp [flags] <port>     send each stdin line as a datagram to a guest UDP port,
                          printing each reply as a line
       --wait <duration>    how long to wait for replies after stdin ends (default 2s)
   font <file>            save the configured font
   ping | poweroff | reboot
   updates                print the update state and generations
-  update-check           look for a newer system; prints the state after
-  update                 check, fetch and switch to a newer system
+  update-check [--pin <version>]
+                         look for a newer system; prints the state after. --pin
+                         moves a managed guest's flake to that pocketnix release
+  update [--pin <version>] [--allow-builds]
+                         check, fetch and switch to a newer system; --allow-builds
+                         compiles what a managed guest's plan lists
   update-cancel          stop a running check or download
   switch-generation <n>  switch to generation <n> (a rollback, or forward again)
   history [limit]        print the user's shell history, newest first
-  events                 print the guest's notify/open/clipboard/transfer pushes, one JSON per line
+  selections [json]      print a managed guest's selections (protocol.Selections),
+                         or write <json> first, as Configure does
+  package-add [--allow-builds] <attr>…   add nixpkgs packages to a managed guest's user
+  package-remove <attr>…                 remove them
+  run [--allow-builds] <attr>            fetch a nixpkgs package to run, as the
+                         launcher does; the state's run says what to start
+  resolve-path <path>    print the file-provider path of an absolute guest path
+  events                 print the guest's notify/open/clipboard/transfer pushes and
+                         port-listeners snapshots, one JSON per line
   set-clipboard [--type <mime>]… <text>
                          hand the agent a clipboard (its text and types), as the app does on focus
   pick-answer <ref> [file…]   answer a pick event with files; none cancels
@@ -111,13 +125,21 @@ func runAgent(args []string) error {
 		default:
 			return ctl.Reboot()
 		}
-	case "updates", "update-check", "update", "update-cancel", "switch-generation", "history":
+	case "updates", "update-check", "update", "update-cancel", "switch-generation", "history",
+		"package-add", "package-remove", "run":
 		ctl, err := c.Control()
 		if err != nil {
 			return err
 		}
 		defer ctl.Close()
 		return agentUpdates(ctl, cmd, rest)
+	case "selections", "resolve-path":
+		ctl, err := c.Control()
+		if err != nil {
+			return err
+		}
+		defer ctl.Close()
+		return agentManaged(ctl, cmd, rest)
 	case "wake", "host-state":
 		ctl, err := c.Control()
 		if err != nil {
@@ -134,8 +156,25 @@ func runAgent(args []string) error {
 		switch cmd {
 		case "events":
 			enc := json.NewEncoder(os.Stdout)
-			for ev := range ctl.Events() {
-				if err := enc.Encode(ev); err != nil {
+			events, ports := ctl.Events(), ctl.PortListeners()
+			// Until both close, so neither loses what it buffered when the stream ends.
+			for events != nil || ports != nil {
+				var v any
+				select {
+				case ev, ok := <-events:
+					if !ok {
+						events = nil
+						continue
+					}
+					v = ev
+				case p, ok := <-ports:
+					if !ok {
+						ports = nil
+						continue
+					}
+					v = p
+				}
+				if err := enc.Encode(v); err != nil {
 					return err
 				}
 			}
@@ -247,6 +286,17 @@ func runAgent(args []string) error {
 			return err
 		}
 		return spliceStdio(conn)
+	case "audio":
+		if len(rest) != 0 {
+			return errUsage
+		}
+		conn, err := c.Audio()
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+		_, err = io.Copy(os.Stdout, conn)
+		return err
 	case "udp":
 		return agentUDP(c, rest)
 	case "font":
@@ -318,12 +368,30 @@ func agentUpdates(ctl *client.Control, cmd string, args []string) error {
 			fmt.Println(e)
 		}
 		return nil
-	case "update-check":
-		start = ctl.UpdateCheck
+	case "update-check", "update", "package-add", "package-remove", "run":
+		fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
+		pin := fs.String("pin", "", "")
+		allowBuilds := fs.Bool("allow-builds", false, "")
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+		attrs := fs.Args()
+		switch {
+		case cmd == "update-check" && !*allowBuilds && len(attrs) == 0:
+			start = func() error { return ctl.UpdateCheckPin(*pin) }
+		case cmd == "update" && len(attrs) == 0:
+			start = func() error { return ctl.UpdateApplyWith(*pin, *allowBuilds) }
+		case cmd == "package-add" && *pin == "" && len(attrs) > 0:
+			start = func() error { return ctl.PackageAdd(attrs, *allowBuilds) }
+		case cmd == "package-remove" && *pin == "" && !*allowBuilds && len(attrs) > 0:
+			start = func() error { return ctl.PackageRemove(attrs) }
+		case cmd == "run" && *pin == "" && len(attrs) == 1:
+			start = func() error { return ctl.RunPackage(attrs[0], *allowBuilds) }
+		default:
+			return errUsage
+		}
 	case "update-cancel":
 		return ctl.UpdateCancel()
-	case "update":
-		start = ctl.UpdateApply
 	case "switch-generation":
 		if len(args) != 1 {
 			return errUsage
@@ -342,6 +410,32 @@ func agentUpdates(ctl *client.Control, cmd string, args []string) error {
 		err = encErr
 	}
 	return err
+}
+
+func agentManaged(ctl *client.Control, cmd string, args []string) error {
+	if len(args) > 1 || (cmd == "resolve-path" && len(args) != 1) {
+		return errUsage
+	}
+	if cmd == "resolve-path" {
+		path, err := ctl.ResolvePath(args[0])
+		if err != nil {
+			return err
+		}
+		fmt.Println(path)
+		return nil
+	}
+	var write *protocol.Selections
+	if len(args) == 1 {
+		write = new(protocol.Selections)
+		if err := json.Unmarshal([]byte(args[0]), write); err != nil {
+			return fmt.Errorf("selections: %w", err)
+		}
+	}
+	got, err := ctl.Selections(write)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(got)
 }
 
 func agentHost(ctl *client.Control, cmd string, args []string) error {
@@ -384,6 +478,7 @@ func parseSize(s string) (rows, cols int, err error) {
 func agentExec(c *client.Client, args []string) error {
 	fs := flag.NewFlagSet("exec", flag.ContinueOnError)
 	profile := fs.String("profile", "", "")
+	command := fs.String("command", "", "")
 	size := fs.String("size", "24x80", "")
 	resize := fs.String("resize", "", "")
 	input := fs.String("input", "", "")
@@ -394,7 +489,7 @@ func agentExec(c *client.Client, args []string) error {
 	if err != nil {
 		return err
 	}
-	p, err := c.PTY(*profile, rows, cols)
+	p, err := c.PTYCommand(*profile, *command, rows, cols)
 	if err != nil {
 		return err
 	}

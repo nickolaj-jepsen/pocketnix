@@ -4,6 +4,7 @@
 //! the app on a GUI socket; `stats` prints a stats socket's snapshot.
 
 mod client;
+mod guest_ram;
 mod sink;
 mod snapshot;
 
@@ -23,8 +24,8 @@ use anyhow::bail;
 const USAGE: &str = "usage: pocketnix-gui-bench <command> [flags]
 
 commands:
-  client [--mode noise|gradient|scroll|rect|idle|touch] [--duration SECS] [--warmup SECS]
-         [--rate HZ] [--res FACTOR] [--scroll PX] [--rect PX] [--fullscreen]
+  client [--mode noise|gradient|scroll|rect|idle|touch|video] [--duration SECS] [--warmup SECS]
+         [--rate HZ] [--res FACTOR] [--scroll PX] [--rect PX] [--full-damage] [--fullscreen]
          [--stats NAME=SOCKET]... [--no-default-stats] [--timeout SECS]
       Opens one window and draws into it: a new frame on every frame callback
       (--rate 0, the default) or at most HZ a second. Prints one JSON object
@@ -35,19 +36,26 @@ commands:
         gradient  every frame a whole buffer of a shifted gradient
         scroll    text-like rows scrolling --scroll PX a frame, damaging the
                   whole buffer (as terminals do)
-        rect      a --rect PX square changing colour, damaging only it
+        rect      a --rect PX square changing colour, damaging only it, or
+                  the whole buffer with --full-damage (as clients that don't
+                  track damage do)
         idle      one frame, then nothing
         touch     a new colour on each touch or button press: the input's
                   latency to its frame callback
+        video     every frame a whole buffer of video-like content (panning
+                  smooth colour, compressing like filmed video)
       --res scales the buffer against the window's pixels; a viewport shows
       it at the window's size.
       --stats adds a stats socket to snapshot (the compositor's,
       $XDG_RUNTIME_DIR/pocketnix-compositor-stats.sock, is the default).
   sink --socket PATH [--width PX] [--height PX] [--scale F] [--refresh MHZ]
-       [--stats-socket PATH] [--no-decode]
+       [--stats-socket PATH] [--guest-ram SOCKET] [--no-decode]
       Speaks the app's side of a GUI socket: opens each window at the
       output's size, decodes every commit and acknowledges each group at
-      the next tick of a --refresh clock.
+      the next tick of a --refresh clock. --guest-ram stands in for an app
+      that maps guest RAM, and for the agent that pins frame buffers in it:
+      it serves them on SOCKET (the compositor's --guest-socket), so big
+      commits arrive as PAGES.
   stats [--socket PATH]
       Prints one snapshot of a stats socket (default the compositor's).
 ";

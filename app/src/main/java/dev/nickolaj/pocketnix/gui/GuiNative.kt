@@ -1,7 +1,9 @@
 package dev.nickolaj.pocketnix.gui
 
 import android.hardware.HardwareBuffer
+import android.os.Process
 import java.util.concurrent.Callable
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
 /** The renderer's C half (app/src/main/cpp/gui.c). */
@@ -13,7 +15,17 @@ object GuiNative : Unpacker {
     // Threads besides the caller's that decode a commit's zstd frames; the compositor splits large data into up to four.
     private const val UNPACK_THREADS = 3
 
-    private val pool = Executors.newFixedThreadPool(UNPACK_THREADS) { r -> Thread(r, "gui-unpack").apply { isDaemon = true } }
+    private val poolTids = ConcurrentHashMap.newKeySet<Int>()
+
+    private val pool = Executors.newFixedThreadPool(UNPACK_THREADS) { r ->
+        Thread({
+            poolTids += Process.myTid()
+            r.run()
+        }, "gui-unpack").apply { isDaemon = true }
+    }
+
+    /** The tids of the threads that decode beside the caller, of those started so far: they belong in its hint session. */
+    fun unpackTids(): IntArray = poolTids.toIntArray().apply { sort() }
 
     @JvmStatic private external fun zstdDecompress(src: ByteArray, srcOff: Int, srcLen: Int, dst: ByteArray, off: Int, len: Int): Int
 
@@ -29,6 +41,28 @@ object GuiNative : Unpacker {
      * negative error.
      */
     @JvmStatic external fun copyRects(buffer: HardwareBuffer, src: ByteArray, srcWidth: Int, rects: IntArray?, count: Int): Int
+
+    /**
+     * Makes shared memory of [size] bytes standing for guest-physical
+     * [base, base + size) and maps it for [guestRamGather], replacing any
+     * mapped before. Returns its fd, or minus errno.
+     */
+    @JvmStatic external fun guestRamCreate(base: Long, size: Long): Int
+
+    /** Unmaps guest RAM once no gather reads it. */
+    @JvmStatic external fun guestRamRelease()
+
+    /**
+     * Copies the first [len] bytes of the guest pages [src] lists (a PAGES
+     * commit's data) into [dst]. Returns 0, or a negative error for a list
+     * that doesn't cover exactly [len] bytes of mapped guest RAM.
+     */
+    @JvmStatic external fun guestRamGather(src: ByteArray, dst: ByteArray, len: Int): Int
+
+    override fun guestPages(src: ByteArray, dst: ByteArray, len: Int) {
+        val err = guestRamGather(src, dst, len)
+        if (err != 0) throw GuiProtocolException("guest pages don't fit $len bytes of guest RAM ($err)")
+    }
 
     /** Decodes [src]'s frames side by side, each into its own part of [dst]. */
     override fun unpack(src: ByteArray, dst: ByteArray, dstOff: Int, dstLen: Int) {

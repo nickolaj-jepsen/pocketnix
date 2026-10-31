@@ -16,13 +16,20 @@ Fast loops run inside `nix develop`.
 
 | changed | while editing | before committing |
 |---|---|---|
-| `go/` | `go -C go test ./internal/<pkg> -run <Test>` | the `go` check |
-| `compositor/` | `cargo test` in `compositor/` | the `compositor` check, and `gui` when the app-facing behaviour changed |
-| `app/` | `nix run .#gradle -- testDebugUnitTest --tests '*<Name>*'` | `nix run .#gradle -- testDebugUnitTest lintDebug` |
+| `go/` | `go -C go test ./internal/<pkg> -run <Test>`, after `go/AGENTS.md`'s `go generate` on a fresh checkout | the `go` check |
+| `compositor/` | `cargo test` in `compositor/`; for speed, `bench --local` with and without `--guest-ram` (`docs/development.md`, "Benchmarks") | the `compositor` check, and `gui` when the app-facing behaviour changed |
+| `app/` | `nix run .#gradle -- :app:testDebugUnitTest --tests '*<Name>*'` (without `:app:`, the terminal modules fail on the filter) | `nix run .#gradle -- testDebugUnitTest lintDebug` |
 | `nix/`, `example/` | build the one VM test that covers it | `agent`, `gui`, and `avf-boot` for boot or image changes |
+| a module option or its description | `nix run .#options-doc` | the `options-doc` check |
+| `nix/managed/`, the module's `managed` options | the `managed` check (evaluation only) | `managed`, `managed-boot` (the base image's first boot, as a VM test), and `managed-all` (aarch64, CI builds it) |
+| `nix/vgpu-relinquish/`, `nix/avf-kernel/` | `nix build -L .#checks.aarch64-linux.vgpu-relinquish` | the same |
 | the wire (`go/internal/protocol`, `docs/gui-protocol.md`) | both sides' tests | the `go` and `compositor` checks, and the app's tests through `nix run .#gradle`, which run them against the real agent and compositor |
 
 Then `nix fmt`.
+
+On x86_64, `nix flake check` skips the aarch64-only checks; `nix flake check
+--no-build --all-systems` (CI's first step) still evaluates them. Building one
+there goes through binfmt.
 
 Each VM test's file under `nix/` opens with what it covers. They need KVM
 and run on x86_64; `avf-boot` boots the real image under TCG and on x86_64

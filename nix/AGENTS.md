@@ -66,3 +66,11 @@ that cross directories.
   and `NCurrentInhibitors` changes.
 - `gui.enable` sets `nixpkgs.overlays`, which a NixOS test's read-only pkgs
   refuse: such a test needs `node.pkgsReadOnly = false`.
+- NixOS test VMs default `virtualisation.qemu.enableSharedMemory` on, whose
+  memfd backend takes over guest RAM after any `-machine memory-backend=` of
+  your own: a test that reads guest RAM from a file must turn it off.
+- The AVF Image ships no Module.symvers: `vgpu-relinquish` takes CRCs from
+  the Image's own modules (`crcs.py`), so imports none of them uses load
+  with "no symbol version", and `KBUILD_MODPOST_WARN=1` lets a symbol the
+  Image lacks build fine and fail only at load (boot goes on without the
+  module). Refresh `sourceRev` and `kernelSource`'s hash with the Image.

@@ -5,7 +5,8 @@
   pkgs,
   self,
 }: let
-  inherit (import "${pkgs.path}/nixos/tests/ssh-keys.nix" pkgs) snakeOilPrivateKey snakeOilPublicKey snakeOilEd25519PrivateKey snakeOilEd25519PublicKey;
+  # A path, not "${pkgs.path}/…": CI's Nix fails to realise that string's context under `flake check --no-build`.
+  inherit (import (pkgs.path + "/nixos/tests/ssh-keys.nix") pkgs) snakeOilPrivateKey snakeOilPublicKey snakeOilEd25519PrivateKey snakeOilEd25519PublicKey;
   cli = self.packages.${pkgs.stdenv.hostPlatform.system}.pocketnix-cli;
   # The builder's binary cache; a test-only key.
   cacheSecret = pkgs.writeText "cache.sec" "pocketnix-test-builder:cNCiLJRJKtj/NYr6HKMIB0f0JS0K51uY8Boefn15NtUdEVxl8P73M2yibOJqDDCQxM7dSd+4OSUHzjzwmf6O5A==";
@@ -41,8 +42,12 @@ in
       ...
     }: {
       imports = [self.nixosModules.default ../example/configuration.nix];
+      # Its options manual would rebuild the node for every option's text; the options-doc check renders them.
+      documentation.nixos.enable = false;
       pocketnix.guest = {
         avf.enable = false;
+        # Only the config half: QEMU's VM has no gfxstream.
+        gpu.enable = true;
         agent.listen = ["vsock:9100" "tcp:0.0.0.0:9100"];
         # On ssh's host port: TCP and UDP forwards are separate spaces.
         forwards.echo = {
@@ -57,6 +62,7 @@ in
           # Blocks until the action comes back; the bus address is the agent's doing.
           notify.command = ''printf 'bus:%s\n' "$DBUS_SESSION_BUS_ADDRESS"; notify-send -A ok=OK -w build waits; echo "exit:$?"'';
         };
+        forwardOffers.enable = true;
         terminal.snippets.probe = {
           command = "echo snippet";
           submit = true;
@@ -71,6 +77,8 @@ in
           # By IP: the agent's pure-Go resolver.
           published.url = "https://${nodes.builder.networking.primaryIPAddress}/toplevel";
           checkInterval = null;
+          # The update subtests count every generation; the prune subtest turns pruning on.
+          keepGenerations = null;
         };
       };
       systemd.services.udp-echo = {
@@ -101,6 +109,10 @@ in
       xdg.portal.enable = true;
       users.users.nixos.linger = true;
       specialisation.retheme.configuration.pocketnix.guest.terminal.theme.colors.background = pkgs.lib.mkForce "#123456";
+      # The port watcher's /proc poller, which this kernel's eBPF otherwise leaves unused.
+      specialisation.poller.configuration.systemd.services.pocketnix-agent.serviceConfig.ExecStart =
+        pkgs.lib.mkForce "${config.systemd.services.pocketnix-agent.serviceConfig.ExecStart} --poll-ports";
+      specialisation.prune.configuration.pocketnix.guest.updates.keepGenerations = pkgs.lib.mkForce 0;
     };
 
     # A build host (over ssh, for next.1) and a binary cache plus published
@@ -159,7 +171,11 @@ in
     # By IP: the CLI's pure-Go resolver asks DNS before /etc/hosts under NixOS's nsswitch order.
     testScript = {nodes, ...}: let
       inherit (nodes.phone.system.build) next;
-      inherit (nodes.phone.pocketnix.guest) terminal;
+      inherit (nodes.phone.pocketnix.guest) terminal user;
+      lanPython =
+        if nodes.phone.pocketnix.guest.forwardOffers.lan
+        then "True"
+        else "False";
     in ''
       import json
       import shlex
@@ -177,6 +193,7 @@ in
       with subtest("the control stream delivers the module's config"):
           cfg = json.loads(client.succeed(f"{A} config"))
           assert cfg["hostname"] == "${nodes.phone.networking.hostName}", cfg["hostname"]
+          assert cfg.get("gpu") is True, cfg.get("gpu")
           ssh_port = ${toString nodes.phone.pocketnix.guest.forwards.ssh.hostPort}
           forwards = {f["name"]: f for f in cfg["forwards"]}
           fields = ("guestPort", "hostPort", "protocol")
@@ -213,8 +230,10 @@ in
 
       with subtest("a udp stream relays datagrams to a guest UDP port"):
           phone.wait_until_succeeds("ss -uln | grep -q 127.0.0.1:7777")
-          out = client.succeed(f"printf 'one\\ntwo\\n' | {A} udp 7777")
-          # Each datagram is its own socat child, so replies may cross.
+          # Each datagram is its own socat child, so replies may cross, and on a loaded machine come late.
+          client.succeed(f"systemd-run --unit=udp sh -c \"printf 'one\\ntwo\\n' | {A} udp --wait 120s 7777 > /tmp/udp\"")
+          client.wait_until_succeeds("test $(grep -c '^echo:' /tmp/udp) -ge 2", timeout=120)
+          out = client.succeed("cat /tmp/udp")
           assert sorted(out.split()) == ["echo:one", "echo:two"], out
 
       with subtest("a switch reloads the config live, without restarting the agent"):
@@ -245,6 +264,59 @@ in
           assert phone.succeed("runuser -u nixos -- pocketnix-guest paste") == "from-android"
           # Only root and the session user may use the guest socket.
           phone.fail("runuser -u nobody -- ${nodes.phone.pocketnix.guest.package}/bin/pocketnix-guest paste")
+
+      # The port-listeners snapshots an events stream's output holds, oldest first.
+      def snapshots(events: str) -> list[dict]:
+          pushes = [json.loads(l) for l in client.succeed(f"cat {events}").splitlines()]
+          return [p for p in pushes if p["type"] == "port-listeners"]
+
+      def await_ports(events: str, ok) -> None:
+          retry(lambda _: bool(snapshots(events)) and ok(snapshots(events)[-1]["ports"]), timeout_seconds=60)
+
+      # Root's listener is up before the user's, so the scan that finds the user's sees it too.
+      def listeners_reach_the_app(events: str) -> None:
+          phone.succeed("systemd-run --unit=root-listener ${pkgs.socat}/bin/socat TCP-LISTEN:8124,fork EXEC:${pkgs.coreutils}/bin/cat")
+          phone.wait_for_open_port(8124)
+          phone.succeed("systemd-run --unit=user-listener -p User=${user} ${pkgs.socat}/bin/socat TCP-LISTEN:8123,fork EXEC:${pkgs.coreutils}/bin/cat")
+          await_ports(events, lambda ports: 8123 in ports)
+          assert all(8124 not in p["ports"] for p in snapshots(events)), snapshots(events)
+          assert snapshots(events)[-1]["lan"] == ${lanPython}, snapshots(events)[-1]
+          phone.succeed("systemctl stop user-listener")
+          await_ports(events, lambda ports: ports == [])
+          phone.succeed("systemctl stop root-listener")
+
+      with subtest("a user's listener reaches the app, and root's never does"):
+          listeners_reach_the_app("/tmp/events")
+
+      with subtest("the agent watches listeners with eBPF"):
+          print(phone.succeed("journalctl -u pocketnix-agent -o cat | grep 'port watcher: eBPF'"))
+
+      with subtest("a forward reaches a listener on ::1 alone"):
+          phone.succeed("systemd-run --unit=v6-listener -p User=${user} ${pkgs.socat}/bin/socat TCP6-LISTEN:8125,bind=[::1],fork EXEC:${pkgs.coreutils}/bin/cat")
+          await_ports("/tmp/events", lambda ports: 8125 in ports)
+          assert client.succeed(f"printf v6 | timeout 60 {A} forward 8125") == "v6"
+          phone.succeed("systemctl stop v6-listener")
+
+      with subtest("a port root also listens on is neither offered nor forwarded"):
+          # A forward dials 127.0.0.1 first: root's would answer for the user's ::1.
+          phone.succeed("systemd-run --unit=root-v4 ${pkgs.socat}/bin/socat TCP4-LISTEN:8126,bind=127.0.0.1,fork EXEC:${pkgs.coreutils}/bin/cat")
+          phone.succeed("systemd-run --unit=user-v6 -p User=${user} ${pkgs.socat}/bin/socat TCP6-LISTEN:8126,bind=[::1],fork EXEC:${pkgs.coreutils}/bin/cat")
+          phone.wait_until_succeeds("test $(ss -tlnH 'sport = :8126' | wc -l) = 2", timeout=60)
+          # Started after both, so the scan that finds it sees them too.
+          phone.succeed("systemd-run --unit=user-later -p User=${user} ${pkgs.socat}/bin/socat TCP-LISTEN:8127,fork EXEC:${pkgs.coreutils}/bin/cat")
+          await_ports("/tmp/events", lambda ports: 8127 in ports)
+          assert all(8126 not in p["ports"] for p in snapshots("/tmp/events")), snapshots("/tmp/events")
+          client.fail(f"printf x | timeout 60 {A} forward 8126")
+          phone.succeed("systemctl stop root-v4 user-v6 user-later")
+
+      with subtest("a program a run-in-tab session starts is offered, and forwarded"):
+          # As the launcher's Run opens a tab for a fetched dev server.
+          client.succeed(f"systemd-run --unit=command-tab {A} exec --command '${pkgs.socat}/bin/socat TCP-LISTEN:8128,fork EXEC:${pkgs.coreutils}/bin/cat'")
+          await_ports("/tmp/events", lambda ports: 8128 in ports)
+          assert client.succeed(f"printf tab | timeout 60 {A} forward 8128") == "tab"
+          # Closing the tab hangs up its session.
+          client.succeed("systemctl stop command-tab")
+          await_ports("/tmp/events", lambda ports: 8128 not in ports)
 
       with subtest("the session bus: notify-send's actions come back, gio opens on Android"):
           # Lingering, with no login, starts the user's bus.
@@ -499,6 +571,42 @@ in
           u = json.loads(client.succeed(f"{A} switch-generation 2"))
           assert u["current"] == "${next."1"}", u
           phone.succeed("grep -qx 1 /etc/pocketnix-test-generation")
+
+      with subtest("a switch prunes the generations besides the running and the booted one"):
+          # The running system's twin with keepGenerations = 0: the agent reloads its config.
+          reloads = "journalctl -u pocketnix-agent -o cat | grep -c 'config reloaded' || true"
+          before = int(phone.succeed(reloads))
+          phone.succeed("/run/current-system/specialisation/prune/bin/switch-to-configuration test")
+          phone.wait_until_succeeds(f"test $({reloads}) -gt {before}", timeout=60)
+          u = json.loads(client.succeed(f"{A} switch-generation 3"))
+          assert u["current"] == "${next."2"}" and not u.get("error"), u
+          # The booted system is the test's base, which no generation holds.
+          assert [g["number"] for g in u["generations"]] == [3], u["generations"]
+          phone.fail("test -e /nix/var/nix/profiles/system-2-link")
+          # The collection's summary is logged; the paths it deleted aren't.
+          assert any(l.endswith(" freed") for l in u["log"]), u["log"]
+          assert not any(l.startswith("deleting '") for l in u["log"]), u["log"]
+
+      with subtest("an agent restart doesn't prune again in the same boot"):
+          start = phone.succeed("systemctl show -p ExecStart --value pocketnix-agent.service")
+          marker = start.split("--prune-marker ", 1)[1].split()[0]
+          # The boot's prune gives up if an earlier subtest's operation runs
+          # then; a restart starts its delay over, with nothing else running.
+          phone.succeed("systemctl restart pocketnix-agent.service")
+          # Written once the boot's prune ran, after its delay.
+          phone.wait_until_succeeds(f"test -e {marker}", timeout=300)
+          phone.succeed("systemctl restart pocketnix-agent.service")
+          phone.wait_for_open_port(9100)
+          phone.succeed(f"test -e {marker}")
+
+      with subtest("with the /proc poller, a user's listener reaches the app, and root's never does"):
+          phone.succeed("${nodes.phone.system.build.toplevel}/specialisation/poller/bin/switch-to-configuration test")
+          # A switch only reloads the agent.
+          phone.succeed("systemctl restart pocketnix-agent")
+          phone.wait_for_open_port(9100)
+          phone.wait_until_succeeds("journalctl -u pocketnix-agent -o cat | grep 'port watcher: polling /proc'", timeout=60)
+          client.succeed(f"systemd-run --unit=events-poller sh -c '{A} events > /tmp/events-poller'")
+          listeners_reach_the_app("/tmp/events-poller")
 
       with subtest("poweroff over the control stream shuts the guest down"):
           client.succeed(f"{A} poweroff")

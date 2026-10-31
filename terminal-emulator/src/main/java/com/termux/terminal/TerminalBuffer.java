@@ -117,6 +117,34 @@ public final class TerminalBuffer {
         return null;
     }
 
+    /** A closed OSC 8 link and its start cell. */
+    public static final class Hyperlink {
+        public final String url;
+        public final int row, col;
+        Hyperlink(String url, int row, int col) {
+            this.url = url; this.row = row; this.col = col;
+        }
+    }
+
+    /**
+     * The closed OSC 8 links, newest first, each at its start cell in external rows. Regions go stale (a
+     * clear, a column reflow, the ring wrapping) and are kept: their cell may then hold other text, and one
+     * outside the active rows reports the oldest row.
+     */
+    public java.util.List<Hyperlink> getHyperlinks() {
+        java.util.List<Hyperlink> out = new java.util.ArrayList<>(mHyperlinks.size());
+        java.util.Iterator<HyperlinkRegion> it = mHyperlinks.descendingIterator();
+        while (it.hasNext()) {
+            HyperlinkRegion r = it.next();
+            // The inverse of externalToInternalRow: rows above the screen are the transcript's, ring-wise.
+            int row = Math.floorMod(r.startInternalRow - mScreenFirstRow, mTotalRows);
+            if (row >= mScreenRows) row -= mTotalRows;
+            if (row < -mActiveTranscriptRows) row = -mActiveTranscriptRows;
+            out.add(new Hyperlink(r.url, row, r.startCol));
+        }
+        return out;
+    }
+
     private boolean containsCell(HyperlinkRegion r, int internalRow, int col) {
         // Single-line region.
         if (r.startInternalRow == r.endInternalRow) {

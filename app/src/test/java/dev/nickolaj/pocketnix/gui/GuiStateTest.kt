@@ -9,15 +9,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GuiStateTest {
-    private val state = GuiState(JavaUnpacker)
+    private val state = GuiState()
     private val hashes = mutableListOf<Pair<Long, Long>>()
 
     init {
         state.onHash = { _, _, expected, actual -> hashes += expected to actual }
     }
 
-    /** Applies [f]'s messages; with [unpack], decompresses each group first as the app does. */
-    private fun feed(f: CompositorFrames, state: GuiState = this.state, unpack: Boolean = false) {
+    /** Applies [f]'s messages, unpacking each group first as the app does. */
+    private fun feed(f: CompositorFrames) {
         val r = GuiReader(ByteArrayInputStream(f.bytes()))
         while (true) {
             when (val m = r.next() ?: break) {
@@ -26,7 +26,7 @@ class GuiStateTest {
                 is GuiMessage.Surface -> state.surface(m)
                 is GuiMessage.SurfaceRemoved -> state.surfaceRemoved(m.id)
                 is GuiMessage.ToplevelRemoved -> state.toplevelRemoved(m.id)
-                is GuiMessage.Group -> state.apply(if (unpack) GuiMessage.Group(m.commits.map { it.unpacked(JavaUnpacker) }) else m)
+                is GuiMessage.Group -> state.apply(GuiMessage.Group(m.commits.map { it.unpacked(JavaUnpacker) {} }))
                 GuiMessage.Ready -> state.ready()
                 else -> {}
             }
@@ -70,21 +70,6 @@ class GuiStateTest {
         for (y in 1..2) System.arraycopy(b, (y * 8 + 2) * 4, expected, (y * 8 + 2) * 4, 12)
         System.arraycopy(b, 3 * 8 * 4, expected, 3 * 8 * 4, 32)
         assertArrayEquals(expected, state.surfaces.getValue(1).content.pixels)
-    }
-
-    @Test
-    fun commitsUnpackedAheadApplyTheSame() {
-        val a = image(8, 4, 1)
-        val b = image(8, 4, 2)
-        val frames = {
-            window().full(1, 1, 8, 4, a, zstd = true)
-                .commit(1, 1, 8, 4, listOf(intArrayOf(1, 1, 4, 2)), rows(b, 8, 1, 1, 4, 2), zstd = true)
-                .commit(1, 1, 8, 4, listOf(intArrayOf(0, 3, 8, 1)), rows(b, 8, 0, 3, 8, 1), Gui.FLAG_BUFFER or Gui.FLAG_SCROLL, scroll = 1, zstd = true)
-        }
-        feed(frames())
-        val ahead = GuiState(JavaUnpacker)
-        feed(frames(), ahead, unpack = true)
-        assertArrayEquals(state.surfaces.getValue(1).content.pixels, ahead.surfaces.getValue(1).content.pixels)
     }
 
     @Test

@@ -55,13 +55,14 @@ class CompositorFrames {
         seq: Int = ++this.seq,
         headerSize: Int = Gui.HEADER_SIZE,
         /** The data as sent, when it isn't [pixels] compressed in one go. */
-        encoded: ByteArray? = null
+        encoded: ByteArray? = null,
+        encoding: Int = if (zstd) Gui.ENCODING_ZSTD else Gui.ENCODING_RAW
     ) = apply {
         val data = encoded ?: if (zstd) compress(pixels) else pixels
         val f = flags or (if (hash != null) Gui.FLAG_HASH else 0)
         val head = ByteBuffer.allocate(headerSize + 16 * rects.size)
             .putShort(headerSize.toShort()).putShort(f.toShort()).putInt(surface).putInt(window).putInt(seq)
-            .putShort(z.toShort()).put(Gui.FORMAT_RGBA8888.toByte()).put((if (zstd) 1 else 0).toByte()).put(0).put(0).putShort(0)
+            .putShort(z.toShort()).put(Gui.FORMAT_RGBA8888.toByte()).put(encoding.toByte()).put(0).put(0).putShort(0)
             .putInt(x).putInt(y).putInt(width).putInt(height).putInt(width).putInt(height)
             .putInt(0).putInt(0).putInt(width).putInt(height)
             .putInt(scroll).putInt(rects.size).putInt(data.size).putInt(0).putLong(hash ?: 0)
@@ -86,6 +87,22 @@ class CompositorFrames {
             val out = ByteArray(c.maxCompressedLength(b.size))
             val n = c.compress(b, 0, b.size, out, 0, out.size)
             return out.copyOf(n)
+        }
+    }
+}
+
+/** A PAGES commit's data: the page count, then each page's address. */
+fun pageList(vararg addresses: Long): ByteArray = ByteBuffer.allocate(4 + 8 * addresses.size).putInt(addresses.size).apply { addresses.forEach { putLong(it) } }.array()
+
+/** Guest RAM as an array from guest-physical [base], for PAGES commits without the native mapping. */
+class ArrayGuestRam(val base: Long, val ram: ByteArray) : Unpacker by JavaUnpacker {
+    override fun guestPages(src: ByteArray, dst: ByteArray, len: Int) {
+        val b = ByteBuffer.wrap(src)
+        val pages = b.int
+        if (src.size != 4 + 8 * pages || pages != (len + Gui.GUEST_PAGE - 1) / Gui.GUEST_PAGE) throw GuiProtocolException("page list")
+        for (i in 0 until pages) {
+            val at = (b.long - base).toInt()
+            System.arraycopy(ram, at, dst, i * Gui.GUEST_PAGE, minOf(Gui.GUEST_PAGE, len - i * Gui.GUEST_PAGE))
         }
     }
 }

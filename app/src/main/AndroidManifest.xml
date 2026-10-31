@@ -14,6 +14,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- While the guest holds a logind sleep inhibitor (and Settings allow it). -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- The phone's network state, for the guest's host state. -->
@@ -107,6 +108,11 @@
                 android:value="Runs a user-started virtual machine until the user stops it" />
         </service>
 
+        <service
+            android:name=".service.SetupService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <!-- The share sheet → the guest's share directory. -->
         <activity
             android:name=".files.ShareActivity"
@@ -131,6 +137,11 @@
         <!-- A guest notification's actions and dismissal; only its own PendingIntents reach it. -->
         <receiver
             android:name=".GuestNotificationReceiver"
+            android:exported="false" />
+
+        <!-- A port forward offer's Allow, Dismiss and swipe; only its own PendingIntents reach it. -->
+        <receiver
+            android:name=".forward.ForwardOfferReceiver"
             android:exported="false" />
 
         <!-- A guest's pick or save: Android's document picker, then the transfer. -->

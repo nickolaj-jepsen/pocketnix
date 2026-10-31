@@ -7,11 +7,14 @@
 {
   lib,
   fetchurl,
+  fetchgit,
   cpio,
   ...
 } @ args: let
   version = "6.12.93";
   modDirVersion = "6.12.93-android16-6-g3a7d1771d492-ab16496487-4k";
+  # The commit in modDirVersion (g…), for out-of-tree modules; refresh it with the Image.
+  sourceRev = "3a7d1771d4925a56f7eeb8a5ba1faff0c544a9ef";
 
   # The Image's embedded .config (IKCFG), vendored because NixOS modules query
   # it at eval time; refresh it together with the hash.
@@ -36,6 +39,7 @@
     };
 in
   assert lib.assertMsg ((args.kernelPatches or []) == []) "avf-kernel is prebuilt; boot.kernelPatches can't apply to it";
+  assert lib.assertMsg (lib.hasInfix "-g${builtins.substring 0 12 sourceRev}-" modDirVersion) "avf-kernel: sourceRev isn't the commit modDirVersion names";
     fetchurl {
       pname = "avf-kernel";
       inherit version;
@@ -58,6 +62,12 @@ in
         # need a parsed .config this prebuilt doesn't carry.
         inherit version modDirVersion config;
         configfile = ./config;
+        # The tree the Image was built from (nix/vgpu-relinquish builds against it).
+        kernelSource = fetchgit {
+          url = "https://android.googlesource.com/kernel/common";
+          rev = sourceRev;
+          hash = "sha256-rGJ0nu1kEcB4xLAwq6UlWxW45gzcUbnwT5CtfXUD6yc=";
+        };
         # CONFIG_EFI_STUB=y; systemd-boot asserts on this flag.
         features = {efiBootStub = true;} // args.features or {};
         kernelOlder = lib.versionOlder version;

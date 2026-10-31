@@ -6,7 +6,12 @@ Two places hold configuration:
   The agent sends it to the app on connect, and a `switch` applies it live.
 - The app's Settings own what must be known before boot (the VM's hardware
   and network) and what only the phone can name (which Android folders to
-  share).
+  share). The GPU is the exception: `pocketnix.guest.gpu.enable` asks for
+  it, and the VM's next start gives it ([Design rules](architecture.md#design-rules)).
+
+A guest the app sets up (`nixosModules.managed`) is configured from the app;
+its `/etc/nixos/configuration.nix` takes the options below for anything
+else ([A managed guest](updates.md#a-managed-guest)).
 
 Every option, with its default and description, is in
 [Options](options.md), generated from [`nix/module.nix`](../nix/module.nix).
@@ -49,6 +54,17 @@ On the phone:
   dictation, as a bracketed paste.
 - A bell, OSC 9 or OSC 777 notification in a background tab badges it and
   posts an Android notification.
+- A tap on a hyperlink a program printed (OSC 8, as `ls --hyperlink`
+  prints) opens it, unless the program reads the mouse;
+  other taps bring up the keyboard. Only `http`, `https` and `file` links
+  open, and a `file` link only when it's this guest's and under
+  `files.root`. A `localhost` link whose port a forward maps elsewhere on
+  the phone opens on that port.
+- More… on a selection, or a mouse right-click, opens the terminal's menu:
+  Open link… lists the links printed in the tab, hyperlinks or plain URLs,
+  newest first; Share selection; Share transcript (the shell's scrollback,
+  even from inside a full-screen program); and Reset terminal (modes and
+  colours, not the screen).
 
 ## Port forwards
 
@@ -63,6 +79,11 @@ pocketnix.guest.forwards = {
 - Forwards share the phone's ports with every other app. One that can't
   listen shows in the app and is retried.
 - A UDP forward keeps one stream per phone-side client, dropped once idle.
+- A server you start in the guest, say `npm run dev`, is offered as a
+  forward without editing the flake: the app asks in a notification
+  (`pocketnix.guest.forwardOffers`). Only `pocketnix.guest.user`'s
+  listeners are offered, and an allowed one is forgotten when the guest
+  reboots. A server on `::1` alone is reached too.
 
 ## Android integration
 
@@ -73,7 +94,7 @@ All on by default.
 | `notify-send`, any libnotify program | notification, with actions |
 | `xdg-open <url>`, `gio open` | opens in an Android app |
 | `xdg-open <file>` (under `files.root`) | opens through the Files provider |
-| `pocketnix-guest copy` / `paste`, OSC 52 | the clipboard |
+| `pocketnix-guest copy` / `paste`, OSC 52, Wayland apps (`gui.enable`) | the clipboard |
 | `pocketnix-guest share <file>` | the share sheet |
 | `pocketnix-guest pick` / `save`, the FileChooser portal | the document pickers |
 | `files.root` | the Files app and every file picker |
@@ -126,7 +147,11 @@ The app tells the guest about the phone:
   --what=sleep ...`) makes the app hold a wake lock, named in its notification.
   `power.wakeLocks.ignore` lists daemons to disregard; the app has a setting
   to refuse wake locks altogether.
-- Free guest memory returns to Android through AVF's memory balloon.
+- Memory the guest touches stays the app's until the VM stops: the guest
+  runs on RAM the app maps ([Guest RAM](gui-protocol.md#guest-ram)), which
+  AVF's memory balloon can't hand back to Android. Size the VM's memory for the
+  most the guest will use. Where the app can't map guest RAM, free guest
+  memory goes back through the balloon.
 
 ## What the module trims on AVF
 

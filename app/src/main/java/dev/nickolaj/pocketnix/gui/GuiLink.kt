@@ -78,7 +78,7 @@ class GuiLink(
                 stream = s
                 if (thread !== me) break
                 w = Writer(s)
-                w.send(Gui.hello(appVersion, hashes))
+                w.send(Gui.hello(appVersion, hashes, GuestRam.mapped))
                 val reader = GuiReader(s.input)
                 val hello = when (val first = reader.next() ?: throw EOFException("the compositor closed before its hello")) {
                     is GuiMessage.Hello -> first

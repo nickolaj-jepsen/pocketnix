@@ -38,6 +38,9 @@ func (s *Server) servePTY(c net.Conn, hello protocol.Hello) {
 		reject(c, fmt.Sprintf("unknown profile %q", hello.Profile))
 		return
 	}
+	if hello.Command != "" {
+		prof.Command = hello.Command
+	}
 	cmd, err := sessionCommand(cfg, prof)
 	if err != nil {
 		reject(c, err.Error())

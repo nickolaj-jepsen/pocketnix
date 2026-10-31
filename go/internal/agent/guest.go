@@ -17,9 +17,6 @@ import (
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/protocol"
 )
 
-// maxClipboard bounds clipboard text both ways; Android's binder can't carry much more.
-const maxClipboard = 128 << 10
-
 // ServeGuest serves guest programs' requests to the app on l, a unix socket
 // inside the guest. Only root and the session user may use it.
 func (s *Server) ServeGuest(l net.Listener) error {
@@ -57,6 +54,14 @@ const (
 	guestIdle = 30 * time.Second
 )
 
+// guestStreams serve the guest requests that keep their connection until
+// it closes, with no idle deadline; r is the connection's reader.
+var guestStreams = map[string]func(s *Server, c net.Conn, r *bufio.Reader, req protocol.GuestRequest){
+	protocol.GuestSubscribe:          func(s *Server, c net.Conn, r *bufio.Reader, _ protocol.GuestRequest) { s.subscribe(c, r) },
+	protocol.GuestSubscribeClipboard: func(s *Server, c net.Conn, r *bufio.Reader, _ protocol.GuestRequest) { s.subscribeClipboard(c, r) },
+	protocol.GuestFrameBuffers:       (*Server).frameBuffers,
+}
+
 func (s *Server) handleGuest(c net.Conn) {
 	defer c.Close()
 	if err := s.guestAllowed(c); err != nil {
@@ -75,12 +80,15 @@ func (s *Server) handleGuest(c net.Conn) {
 		fds := conn.take()
 		var req protocol.GuestRequest
 		var reply protocol.GuestReply
-		if err := json.Unmarshal(line, &req); err != nil {
-			reply.Error = "bad request: " + err.Error()
-		} else if req.Type == protocol.GuestSubscribe {
+		err = json.Unmarshal(line, &req)
+		if serve := guestStreams[req.Type]; err == nil && serve != nil {
 			closeFiles(fds)
-			s.subscribe(c, r)
+			c.SetReadDeadline(time.Time{})
+			serve(s, c, r, req)
 			return
+		}
+		if err != nil {
+			reply.Error = "bad request: " + err.Error()
 		} else if req.Type == protocol.GuestNotify || req.Type == protocol.GuestNotifyClose {
 			var err error
 			if reply, err = s.guestNotify(req); err != nil {
@@ -143,12 +151,13 @@ func (s *Server) guest(req protocol.GuestRequest) (string, error) {
 		}
 		return "", s.event(protocol.Event{Type: protocol.TypeOpen, Path: rel})
 	case protocol.GuestCopy:
-		if len(req.Text) > maxClipboard {
-			return "", fmt.Errorf("clipboard text over %d KiB", maxClipboard>>10)
+		if len(req.Text) > protocol.MaxClipboardText {
+			return "", fmt.Errorf("clipboard text over %d KiB", protocol.MaxClipboardText>>10)
 		}
 		s.setClipboard(req.Text)
-		s.setClipboardTypes(nil, req.Text)
-		return "", s.event(protocol.Event{Type: protocol.TypeGuestClipboard, Text: req.Text})
+		s.setClipboardTypes(nil, req.Text, req.Sensitive)
+		s.publishClipboard()
+		return "", s.event(protocol.Event{Type: protocol.TypeGuestClipboard, Text: req.Text, Sensitive: req.Sensitive})
 	case protocol.GuestPaste:
 		return s.clipboardText(), nil
 	case protocol.GuestHost:

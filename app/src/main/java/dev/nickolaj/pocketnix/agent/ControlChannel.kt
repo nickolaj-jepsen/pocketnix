@@ -1,6 +1,7 @@
 package dev.nickolaj.pocketnix.agent
 
 import android.util.Log
+import dev.nickolaj.pocketnix.engine.VmState
 import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -55,6 +56,15 @@ class ControlChannel(
 
     /** The agent's last wake push; it comes on connect, so a stale one only outlives a dropped stream. */
     val wake: StateFlow<Wake?> = _wake.asStateFlow()
+
+    private val _portListeners = MutableStateFlow<PortListeners?>(null)
+
+    /**
+     * The agent's last listener snapshot, pushed on connect and on change
+     * while forwardOffers is on. A dropped stream, or a reload that turns
+     * offers off, leaves the last one in place.
+     */
+    val portListeners: StateFlow<PortListeners?> = _portListeners.asStateFlow()
 
     private val _events = MutableSharedFlow<JSONObject>(extraBufferCapacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
@@ -179,6 +189,8 @@ class ControlChannel(
 
             type == "wake" -> _wake.value = Wake.parse(msg)
 
+            type == PortListeners.TYPE -> PortListeners.parse(msg)?.let { _portListeners.value = it } ?: Log.w(TAG, "malformed $type push")
+
             type == "error" -> p?.takeIf { it.answers(msg) }?.answer?.complete(Result.failure(AgentException(msg.optString("message"))))
                 ?: Log.w(TAG, "agent error: ${msg.optString("message")}")
 
@@ -242,11 +254,26 @@ class ControlChannel(
         _link.value = Link.Down
     }
 
+    /**
+     * Talks to [dialer]'s agent while the VM is [VmState.Running]. In any other
+     * state, a reboot's Starting included, it stops and forgets what the last
+     * boot's agent said: none of it is the next boot's.
+     */
+    fun follow(state: VmState, dialer: AgentDialer?) {
+        if (state == VmState.Running) {
+            dialer?.let { start(it) }
+        } else {
+            stop()
+            clear()
+        }
+    }
+
     /** Forgets the last config, for a VM that stopped. */
     fun clear() {
         _config.value = null
         _updates.value = null
         _wake.value = null
+        _portListeners.value = null
     }
 
     private companion object {

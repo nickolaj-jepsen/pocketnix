@@ -40,6 +40,7 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
     var wakeLocks by remember { mutableStateOf(s.wakeLocks) }
     var tcp by remember { mutableStateOf(s.tcpBackend) }
     var tcpAddress by remember { mutableStateOf(s.tcpAddress) }
+    var releaseUrl by remember { mutableStateOf(s.releaseUrl) }
     var sharedFolders by remember { mutableStateOf(false) }
     val state by vm.state.collectAsState()
     val stopped = state == VmState.Stopped || state is VmState.Failed
@@ -48,7 +49,7 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
     // The saved value stays valid even when free space has shrunk below it since.
     val diskError = disk.toIntOrNull().let {
         when {
-            it == null || it < MIN_DISK_GB -> "At least $MIN_DISK_GB GB"
+            it == null || it < Settings.MIN_DISK_GB -> "At least ${Settings.MIN_DISK_GB} GB"
             it > maxDisk && it != s.diskGb -> "At most $maxDisk GB: that's the free space"
             else -> null
         }
@@ -72,6 +73,7 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
                     if (tcp) {
                         OutlinedTextField(tcpAddress, { tcpAddress = it }, label = { Text("Agent host:port") }, singleLine = true)
                     }
+                    OutlinedTextField(releaseUrl, { releaseUrl = it }, label = { Text("Release files URL (debug)") }, singleLine = true)
                 }
             }
         },
@@ -85,6 +87,7 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
                 vm.setWakeLocks(wakeLocks)
                 s.tcpBackend = tcp
                 s.tcpAddress = tcpAddress.trim()
+                s.releaseUrl = releaseUrl.trim()
                 vm.reloadEngine()
                 onDismiss()
             }) { Text("Save") }
@@ -95,7 +98,6 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
 }
 
 private const val MIN_MEMORY_MB = 512
-private const val MIN_DISK_GB = 4
 
 @Composable
 private fun NumberField(label: String, value: String, error: String?, onChange: (String) -> Unit) {

@@ -256,6 +256,54 @@ null
 
 
 
+## pocketnix\.guest\.forwardOffers\.enable
+
+
+
+Offer a phone forward for each unprivileged TCP port that
+` pocketnix.guest.user ` listens on where a forward reaches it (any
+address, or loopback), unless another user listens there too or it
+is already in ` forwards `\. The app asks in a notification and picks
+the phone port: the same one, or the next free one above it\. An
+allowed forward lasts until its listener has been gone for a while
+or the guest reboots; put a port wanted for good in ` forwards `\.
+
+
+
+*Type:*
+boolean
+
+
+
+*Default:*
+
+```nix
+true
+```
+
+
+
+## pocketnix\.guest\.forwardOffers\.lan
+
+
+
+Allowed offers listen on every interface instead of 127\.0\.0\.1, as a forward with ` lan ` does\.
+
+
+
+*Type:*
+boolean
+
+
+
+*Default:*
+
+```nix
+false
+```
+
+
+
 ## pocketnix\.guest\.forwards
 
 
@@ -367,16 +415,55 @@ one of “tcp”, “udp”
 
 
 
+## pocketnix\.guest\.gpu\.enable
+
+
+
+Whether to enable the phone’s GPU for the guest’s Vulkan apps (experimental): from the
+VM’s next start the app gives it a gfxstream GPU, and starts it without
+one where the phone’s AVF can’t\. It installs Mesa’s drivers, presents
+Vulkan windows through shared memory (the compositor takes no dmabufs)
+and, with the AVF kernel, loads ` vgpu_relinquish `, without which Pixel
+hosts that never unmap a guest page (android14-6\.1) map GPU memory
+only once per boot\. OpenGL stays software rendered\. Every guest user
+that can open the render node reaches the phone’s gfxstream decoder
+and GPU driver, which parse its command streams outside the VM
+\.
+
+
+
+*Type:*
+boolean
+
+
+
+*Default:*
+
+```nix
+false
+```
+
+
+
+*Example:*
+
+```nix
+true
+```
+
+
+
 ## pocketnix\.guest\.gui\.enable
 
 
 
 Whether to enable the guest’s Wayland apps as Android windows: the pocketnix compositor
 as a socket-activated user service with ` WAYLAND_DISPLAY ` set for the
-user’s session, and by default PipeWire (the user in ` audio `),
-xdg-desktop-portal (and with it the FileChooser integration) without
-its location and wallpaper portals, an icon theme read by librsvg and
-a basic font set;
+user’s session, and by default PipeWire (the user in ` audio `) with
+an “Android” output the app plays, xdg-desktop-portal (and with it the FileChooser integration) without
+its location and wallpaper portals, an icon theme read by librsvg, a
+basic font set, and wl-clipboard with the Wayland clipboard bridged to
+Android’s while the compositor runs;
 CJK fonts need ` fonts.enableDefaultPackages ` or your own
 \.
 
@@ -666,6 +753,205 @@ boolean
 
 ```nix
 true
+```
+
+
+
+## pocketnix\.guest\.managed\.enable
+
+
+
+Whether to enable a guest the phone manages: its system is the flake at ` managed.flake `,
+configured from the app and rebuilt on the phone\. ` nixosModules.managed `
+turns it on\.
+
+
+
+*Type:*
+boolean
+
+
+
+*Default:*
+
+```nix
+false
+```
+
+
+
+*Example:*
+
+```nix
+true
+```
+
+
+
+## pocketnix\.guest\.managed\.cpuQuota
+
+
+
+CPU that evaluating and building the guest’s system may use (systemd’s ` CPUQuota= `, 100% per core): the guest’s vCPUs are the phone’s\.
+
+
+
+*Type:*
+string matching the pattern \[0-9]+%
+
+
+
+*Default:*
+
+```nix
+"200%"
+```
+
+
+
+## pocketnix\.guest\.managed\.flake
+
+
+
+The guest’s own flake, whose ` nixosConfigurations.<hostName> ` the agent rebuilds; seeded on first boot when it has no flake\.nix\.
+
+
+
+*Type:*
+string
+
+
+
+*Default:*
+
+```nix
+"/etc/nixos"
+```
+
+
+
+## pocketnix\.guest\.managed\.selections\.keepGenerations
+
+
+
+The app’s ` updates.keepGenerations `\.
+
+
+
+*Type:*
+unsigned integer, meaning >=0
+
+
+
+*Default:*
+
+```nix
+0
+```
+
+
+
+## pocketnix\.guest\.managed\.selections\.services\.gui
+
+
+
+The app’s gui switch\.
+
+
+
+*Type:*
+boolean
+
+
+
+*Default:*
+
+```nix
+false
+```
+
+
+
+## pocketnix\.guest\.managed\.selections\.services\.podman
+
+
+
+The app’s podman switch\.
+
+
+
+*Type:*
+boolean
+
+
+
+*Default:*
+
+```nix
+false
+```
+
+
+
+## pocketnix\.guest\.managed\.selections\.services\.ssh
+
+
+
+The app’s ssh switch\.
+
+
+
+*Type:*
+boolean
+
+
+
+*Default:*
+
+```nix
+false
+```
+
+
+
+## pocketnix\.guest\.managed\.selections\.services\.tailscale
+
+
+
+The app’s tailscale switch\.
+
+
+
+*Type:*
+boolean
+
+
+
+*Default:*
+
+```nix
+false
+```
+
+
+
+## pocketnix\.guest\.managed\.selections\.user
+
+
+
+The user the app set up; empty runs tabs as root until it has\.
+
+
+
+*Type:*
+string matching the pattern |\[a-z_]\[a-z0-9_-]{0,31}
+
+
+
+*Default:*
+
+```nix
+""
 ```
 
 
@@ -1325,6 +1611,37 @@ null or string matching the pattern 0|((\[0-9]+(\\\.\[0-9]\*)?|\\\.\[0-9]+)(ns|u
 
 ```nix
 "30m"
+```
+
+
+
+## pocketnix\.guest\.updates\.keepGenerations
+
+
+
+How many system generations to keep besides the running and the
+booted one\. After each boot and each switch the agent deletes the
+rest and collects the store’s garbage; null keeps every generation\.
+
+
+
+*Type:*
+null or (unsigned integer, meaning >=0)
+
+
+
+*Default:*
+
+```nix
+0
+```
+
+
+
+*Example:*
+
+```nix
+2
 ```
 
 

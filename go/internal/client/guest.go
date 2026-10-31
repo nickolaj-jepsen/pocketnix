@@ -99,22 +99,36 @@ type Subscription struct {
 
 // Subscribe opens a subscription on the agent's guest socket at path.
 func Subscribe(path string) (*Subscription, error) {
-	conn, err := net.Dial("unix", path)
+	conn, r, err := subscribe(path, protocol.GuestSubscribe)
 	if err != nil {
 		return nil, err
 	}
-	s := &Subscription{conn: conn, r: bufio.NewReader(conn)}
-	if _, err := guestRoundTrip(conn, s.r, protocol.GuestRequest{Type: protocol.GuestSubscribe}); err != nil {
-		conn.Close()
-		return nil, err
+	return &Subscription{conn: conn, r: r}, nil
+}
+
+func subscribe(path, kind string) (net.Conn, *bufio.Reader, error) {
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		return nil, nil, err
 	}
-	return s, nil
+	r := bufio.NewReader(conn)
+	if _, err := guestRoundTrip(conn, r, protocol.GuestRequest{Type: kind}); err != nil {
+		conn.Close()
+		return nil, nil, err
+	}
+	return conn, r, nil
 }
 
 // Next waits for the next event; it fails once the connection ends.
 func (s *Subscription) Next() (protocol.GuestEvent, error) {
-	var ev protocol.GuestEvent
-	line, err := protocol.ReadLine(s.r)
+	return next[protocol.GuestEvent](s.r)
+}
+
+func (s *Subscription) Close() error { return s.conn.Close() }
+
+func next[T any](r *bufio.Reader) (T, error) {
+	var ev T
+	line, err := protocol.ReadLine(r)
 	if err != nil {
 		return ev, err
 	}
@@ -122,4 +136,26 @@ func (s *Subscription) Next() (protocol.GuestEvent, error) {
 	return ev, err
 }
 
-func (s *Subscription) Close() error { return s.conn.Close() }
+// ClipboardSubscription is a guest socket connection carrying the agent's
+// clipboard: as it is, then each change.
+type ClipboardSubscription struct {
+	conn net.Conn
+	r    *bufio.Reader
+}
+
+// SubscribeClipboard opens a clipboard subscription on the agent's guest
+// socket at path.
+func SubscribeClipboard(path string) (*ClipboardSubscription, error) {
+	conn, r, err := subscribe(path, protocol.GuestSubscribeClipboard)
+	if err != nil {
+		return nil, err
+	}
+	return &ClipboardSubscription{conn: conn, r: r}, nil
+}
+
+// Next waits for the next change; it fails once the connection ends.
+func (s *ClipboardSubscription) Next() (protocol.ClipboardEvent, error) {
+	return next[protocol.ClipboardEvent](s.r)
+}
+
+func (s *ClipboardSubscription) Close() error { return s.conn.Close() }

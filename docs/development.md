@@ -33,6 +33,7 @@ changing an option or bumping `flake.lock` (nixpkgs renders the doc), run
 
 ```bash
 nix flake check                       # every check for this system (avf-boot on x86_64 needs aarch64 builds)
+(cd go && GOOS= GOARCH= go generate ./internal/portwatch)  # once per checkout: the eBPF objects
 go -C go vet ./... && go -C go test ./...
 nix run .#gradle -- testDebugUnitTest lintDebug
 nix fmt                               # Nix, Go and Kotlin (nix/treefmt.nix)
@@ -61,7 +62,8 @@ adb shell am start -n dev.nickolaj.pocketnix.debug/dev.nickolaj.pocketnix.Contro
 ```
 
 `dev-agent` runs the example guest's agent config, evaluated for this
-machine, with sessions as you; `POCKETNIX_PORT` moves it off 9100. It listens
+machine, with sessions as you; it never rebuilds, prunes or collects
+garbage on this machine. `POCKETNIX_PORT` moves it off 9100. It listens
 on loopback, which the emulator reaches as 10.0.2.2. Never listen beyond
 loopback outside a test: the agent hands a shell to anyone who reaches it.
 
@@ -75,7 +77,9 @@ which the adb shell has). Send scripted actions there, never to
 `MainActivity` (see `AGENTS.md`).
 
 The actions are `dev.nickolaj.pocketnix.action.START` and `STOP`, and in debug
-builds `DEBUG_LAUNCH` (launch a GUI app). Their extras are the `EXTRA_*`
+builds `DEBUG_LAUNCH` (launch a GUI app), `DEBUG_SETUP` (the setup form's
+button) and `DEBUG_MANAGED` (Configure's and the launcher's operations on a
+managed guest; `pocketnix control dump` shows their outcome). Their extras are the `EXTRA_*`
 constants in `ControlActivity`; `start` reads `START`'s and gates the
 debug-only ones on `BuildConfig.DEBUG`.
 
@@ -109,12 +113,16 @@ flowchart LR
   compositor's package.
 - `--local` runs the desktop tier: a compositor and `pocketnix-gui-bench
   sink`, which decodes like the app and acknowledges at a display clock. It
-  measures the guest's side on the desktop's CPU, without a phone.
+  measures the guest's side on the desktop's CPU, without a phone. With
+  `--guest-ram` the sink also stands in for guest RAM and the agent's frame
+  buffers, so big frames cross as PAGES; without it they go on the stream,
+  as on a guest without app-made RAM. Run both to keep both paths measured.
 - `pocketnix bench report <dir> <baseline>` compares two runs' directories.
 
 ```bash
 nix run .#bench -- run --ssh "ssh phone-usb" noise gradient scroll "scroll --res 0.5" rect touch
 nix run .#bench -- run --local noise scroll
+nix run .#bench -- run --local --guest-ram noise scroll
 nix run .#bench -- run --quick --ssh "ssh phone-usb" scroll    # one short run, to iterate
 ```
 
@@ -125,12 +133,8 @@ report's input latencies are its.
 
 ## Permissions by hand
 
-`provision` grants these:
-
-```bash
-adb shell pm grant dev.nickolaj.pocketnix.debug android.permission.MANAGE_VIRTUAL_MACHINE
-adb shell pm grant dev.nickolaj.pocketnix.debug android.permission.USE_CUSTOM_VIRTUAL_MACHINE
-```
+`provision` grants them. By hand, they are [Getting started's](getting-started.md#permissions),
+for the debug build's package, `dev.nickolaj.pocketnix.debug`.
 
 ## Releasing
 
@@ -162,6 +166,12 @@ A fork signs with its own key, so `provision` needs to know it:
   and upstream's don't collide on a phone.
 
 Without a release, `provision --apk <file>` installs any APK you built.
+
+A release also publishes the base image and the package index that the app's
+setup and package search download. A debug build reads them from Settings'
+release files URL instead: serve `nix build .#base-image`'s image, gzipped
+with its `.sha256`, and `nix run .#package-index -- <file>`, under the names
+`Release.baseImage` and `Release.packageIndex` give them.
 
 ## Pitfalls
 

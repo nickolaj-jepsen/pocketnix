@@ -1,9 +1,10 @@
 # Updates
 
-The phone never evaluates or builds Nix: a real config needs more memory and
-time than the guest has. Every update arrives as a finished system path, from
-a build host, a URL your CI publishes, or both. The app's System menu checks,
-updates, rolls back and lists generations.
+A guest you configure in your own flake never evaluates or builds Nix on the
+phone: every update arrives as a finished system path, from a build host, a
+URL your CI publishes, or both. A guest the app manages is the exception: it
+rebuilds its own flake (see [A managed guest](#a-managed-guest)). The app's
+System menu checks, updates, rolls back and lists generations.
 
 ```mermaid
 flowchart TD
@@ -76,17 +77,52 @@ advance (see [Configuration](configuration.md#secrets)).
 - A new agent binary takes over at the next boot. The app offers a reboot
   when the running system isn't the booted one.
 
+## A managed guest
+
+`nixosModules.managed` is the guest the app sets up from the release's base
+image. Its system is the flake in `/etc/nixos`, seeded on first boot:
+
+- `pocketnix.json` holds what the app's Configure screen sets (the user and
+  the service switches). The app owns it and keeps a copy, and a disk that
+  lacks it is rebuilt from that copy when it connects. Desktop apps is
+  `pocketnix.guest.gui.enable`, so with it the guest's windows also bring
+  their sound and share the clipboard ([GUI apps](gui.md)).
+- `configuration.nix` is yours, for anything the switches don't cover. The
+  app doesn't keep a copy, so a fresh disk starts from the seed's: back it
+  up like the rest of the guest's state.
+- `flake.nix` pins one pocketnix release, whose nixpkgs the guest uses, so
+  the cache has what it needs. Update moves the pin to the app's own version.
+
+A check evaluates the flake under a CPU quota
+(`pocketnix.guest.managed.cpuQuota`) and plans the build: what it downloads,
+and which packages it would compile because no cache has them. Update asks
+before compiling anything; configuration files build without asking.
+
+Packages added in the app go to the user's Nix profile (`nixpkgs#<attr>`,
+the system's own nixpkgs), with no rebuild. Running one from the launcher
+fetches it into a profile the next boot empties.
+
+## Old generations
+
+After each boot, and after each switch, the agent deletes the system
+generations besides the running and the booted one that
+`pocketnix.guest.updates.keepGenerations` doesn't keep (null keeps them all),
+and collects the garbage. A managed guest sets it from the app's Configure
+screen.
+
 ## Rollback
 
 Generations come from the system profile. Rolling back switches to an older
-one (`nix-env --switch-generation`, then `switch`).
+one (`nix-env --switch-generation`, then `switch`). With `keepGenerations`
+at 0, the only older one is the booted system, and once a boot of the new one
+prunes, there is none.
 
 ## A generation that won't boot
 
 - systemd-boot doesn't wait (the module's `boot.loader.timeout`).
 - "Start with boot menu" in the app taps a key on the console during boot, so
   systemd-boot shows its menu in the console tab. Pick an older generation
-  there.
+  there: the menu lists only those pruning kept (see Old generations).
 - The app offers this when the agent is late to connect.
 
 ## Pushing from a desktop

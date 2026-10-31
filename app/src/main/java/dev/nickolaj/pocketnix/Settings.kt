@@ -3,6 +3,7 @@ package dev.nickolaj.pocketnix
 import android.content.Context
 import androidx.core.content.edit
 import dev.nickolaj.pocketnix.engine.VmSettings
+import org.json.JSONObject
 
 /** What the app UI owns: set-once hardware, and in debug builds the backend. */
 class Settings(context: Context) {
@@ -26,15 +27,30 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("network", true)
         set(v) = prefs.edit { putBoolean("network", v) }
 
+    /** The guest's last config asked for the phone's GPU (`pocketnix.guest.gpu.enable`); read at each VM start. */
+    var guestGpu: Boolean
+        get() = prefs.getBoolean("guestGpu", false)
+        set(v) = prefs.edit { putBoolean("guestGpu", v) }
+
     /** Debug builds: give the guest a speaker. */
     var audio: Boolean
         get() = BuildConfig.DEBUG && prefs.getBoolean("audio", false)
         set(v) = prefs.edit { putBoolean("audio", v) }
 
+    /** Guest RAM in the app's memory, so GUI frames cross without a copy over the stream. Off only for A/B tests in debug builds. */
+    var guestRam: Boolean
+        get() = !BuildConfig.DEBUG || prefs.getBoolean("guestRam", true)
+        set(v) = prefs.edit { putBoolean("guestRam", v) }
+
     /** Debug builds: run against an agent over TCP instead of AVF. */
     var tcpBackend: Boolean
         get() = BuildConfig.DEBUG && prefs.getBoolean("tcpBackend", false)
         set(v) = prefs.edit { putBoolean("tcpBackend", v) }
+
+    /** Debug builds: where the release's base image and package index are, instead of GitHub. */
+    var releaseUrl: String
+        get() = if (BuildConfig.DEBUG) prefs.getString("releaseUrl", "")!! else ""
+        set(v) = prefs.edit { putString("releaseUrl", v) }
 
     /** host:port of the TCP agent; 10.0.2.2 is the emulator's host. */
     var tcpAddress: String
@@ -64,9 +80,22 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("wakeLocks", true)
         set(v) = prefs.edit { putBoolean("wakeLocks", v) }
 
-    fun vm() = VmSettings(memoryMb = memoryMb, cpus = cpus, diskGb = diskGb, network = network, audio = audio)
+    /** The module's last terminal colours, so a cold start draws them before the agent sends them; null before the first. */
+    var terminalColors: Map<String, String>?
+        get() = prefs.getString("terminalColors", null)?.let { s ->
+            runCatching { JSONObject(s).let { o -> o.keys().asSequence().associateWith { o.getString(it) } } }.getOrNull()
+        }
+        set(v) = prefs.edit { if (v == null) remove("terminalColors") else putString("terminalColors", JSONObject(v).toString()) }
+
+    fun vm() = VmSettings(memoryMb = memoryMb, cpus = cpus, diskGb = diskGb, network = network, gpu = guestGpu, audio = audio, guestRam = guestRam)
 
     companion object {
         const val MAX_MEMORY_MB = 65_536
+
+        /** The smallest disk, in GB. */
+        const val MIN_DISK_GB = 4
+
+        /** The smallest disk a managed guest is set up on, in GB: it builds its own systems, so its store needs room past the base image. */
+        const val MIN_SETUP_DISK_GB = 8
     }
 }

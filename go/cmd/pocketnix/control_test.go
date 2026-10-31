@@ -2,6 +2,7 @@ package main
 
 import (
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -41,6 +42,12 @@ func fakeControl(state, line string) (string, int) {
 		f, _ := os.OpenFile(filepath.Join(state, "control-typed"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		f.WriteString(typed + "\n")
 		f.Close()
+		return "Result: Bundle[{ok=true}]\n", 0
+	case len(w) == 6 && w[0] == "content" && w[1] == "call" && w[5] == "offers":
+		b, _ := os.ReadFile(filepath.Join(state, "control-offers"))
+		return "Result: Bundle[{offers=" + url.QueryEscape(string(b)) + ", ok=true}]\n", 0
+	case len(w) >= 6 && w[0] == "content" && w[1] == "call" && w[5] == "offer":
+		os.WriteFile(filepath.Join(state, "control-offer"), []byte(strings.Join(w[6:], " ")), 0o644)
 		return "Result: Bundle[{ok=true}]\n", 0
 	}
 	return "fake adb: unknown control command " + line, 127
@@ -102,6 +109,29 @@ func TestControlTypesTextVerbatim(t *testing.T) {
 	}
 }
 
+func TestControlMenuTargets(t *testing.T) {
+	for _, c := range []struct {
+		cmd       string
+		tab, chip int
+		main      bool
+		method    string
+		arg       string
+	}{
+		{"menu", 3, -1, false, "menu", "3"},
+		{"menu", -1, 0, false, "chip-menu", "0"},
+		{"menu", -1, -1, true, "main-menu", ""},
+		{"links", 3, -1, false, "links", "3"},
+		{"links", -1, 3, false, "", ""},
+		{"menu", 3, 3, false, "", ""},
+		{"menu", -1, -1, false, "", ""},
+	} {
+		method, arg, ok := menuTarget(c.cmd, c.tab, c.chip, c.main)
+		if ok != (c.method != "") || method != c.method || arg != c.arg {
+			t.Errorf("%s tab=%d chip=%d main=%v: got %q %q %v, want %q %q", c.cmd, c.tab, c.chip, c.main, method, arg, ok, c.method, c.arg)
+		}
+	}
+}
+
 func TestControlWait(t *testing.T) {
 	c, d := testControl(t)
 	d.setDump("state=Running\ntab 2 Pty(profile=shell) 'shell' running=true\n|2| $ echo done-$((1+1))\n")
@@ -138,5 +168,30 @@ func TestControlLogcatReadsTheAppsUid(t *testing.T) {
 	}
 	if err := logcat(adb.Device{}, "dev.nickolaj.missing", false, io.Discard); err == nil || !strings.Contains(err.Error(), "dev.nickolaj.missing") {
 		t.Errorf("a package that isn't installed: got %v", err)
+	}
+}
+
+func TestControlOffers(t *testing.T) {
+	c, d := testControl(t)
+	want := "port=3000 state=offered phone=-\nport=8765 state=allowed phone=8766"
+	os.WriteFile(filepath.Join(d.state, "control-offers"), []byte(want), 0o644)
+	if got, err := c.offers(); err != nil || got != want {
+		t.Errorf("offers: got %q, %v; want %q", got, err, want)
+	}
+}
+
+func TestControlOfferSendsPortAndAnswer(t *testing.T) {
+	_, d := testControl(t)
+	if err := runControl([]string{"offer", "8765", "allow"}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(d.state, "control-offer"))
+	if got, want := string(b), "--arg 8765 --extra answer:s:allow"; got != want {
+		t.Errorf("the app got %q, want %q", got, want)
+	}
+	for _, args := range [][]string{{"offer", "8765", "maybe"}, {"offer", "web", "allow"}, {"offer", "8765"}} {
+		if err := runControl(args); err != errUsage {
+			t.Errorf("%q: got %v, want a usage error", args, err)
+		}
 	}
 }

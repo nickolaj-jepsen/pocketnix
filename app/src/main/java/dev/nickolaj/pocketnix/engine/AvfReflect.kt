@@ -104,22 +104,61 @@ object AvfReflect {
         if (!ok) Log.w(TAG, "no useNetwork/setNetworkSupported on this AVF API")
     }
 
+    /** The guest's GPU; null renderer flags leave AVF's defaults. */
+    data class Gpu(
+        val backend: String,
+        val vulkan: Boolean? = null,
+        val egl: Boolean? = null,
+        val gles: Boolean? = null,
+        val glx: Boolean? = null,
+        val surfaceless: Boolean? = null,
+        val contexts: List<String> = emptyList()
+    )
+
+    /** What a networked VM asks for when it wants no GPU (see [setGpuConfig]). */
+    val GPU_2D = Gpu("2d")
+
     /**
-     * Declares a GPU backend for the guest, and returns whether it took effect.
+     * The phone's GPU through gfxstream, as Vulkan only. virtmgr pastes
+     * `backend` into crosvm's `--gpu=` unchecked, which is the only way to
+     * reach the two crosvm options Pixel pKVM needs (app/AGENTS.md).
+     */
+    val GPU_GFXSTREAM = Gpu(
+        backend = "gfxstream,fixed-blob-mapping=true,system-blob=true",
+        vulkan = true,
+        // Off, though virtmgr defaults them on: they serve guest GLES, which Linux Mesa has no driver for.
+        egl = false,
+        gles = false,
+        glx = false,
+        surfaceless = true,
+        contexts = listOf("gfxstream-vulkan", "gfxstream-composer")
+    )
+
+    /**
+     * Declares the guest's GPU, and returns whether it took effect.
      *
      * "2d" is what a networked VM asks for: stock Pixel virtmgr runs GPU-less
      * VMs on crosvm_minimal, which lacks `--net` and aborts a networked VM.
      * Absent GpuConfig classes mean a revision that runs full crosvm anyway.
+     * A renderer setter this revision lacks is logged and skipped.
      */
-    fun setGpuConfig(b: Any, backend: String): Boolean = runCatching {
+    fun setGpuConfig(b: Any, gpu: Gpu): Boolean = runCatching {
         val gpuB = (GPU_B ?: return true).getDeclaredConstructor().apply { isAccessible = true }.newInstance()
-        if (!set(gpuB, "setBackend", backend)) error("GpuConfig.Builder.setBackend($backend) is missing or failed")
+        if (!set(gpuB, "setBackend", gpu.backend)) error("GpuConfig.Builder.setBackend(${gpu.backend}) is missing or failed")
+        val missing = listOf(
+            "setRendererUseVulkan" to gpu.vulkan,
+            "setRendererUseEgl" to gpu.egl,
+            "setRendererUseGles" to gpu.gles,
+            "setRendererUseGlx" to gpu.glx,
+            "setRendererUseSurfaceless" to gpu.surfaceless,
+            "setContextTypes" to gpu.contexts.takeIf { it.isNotEmpty() }?.toTypedArray()
+        ).filter { (name, value) -> value != null && !set(gpuB, name, value) }.map { it.first }
         val cfg = invoke(gpuB, "build") ?: error("GpuConfig.Builder.build() returned null")
         invoke(b, "setGpuConfig", GPU!! to cfg)
-        Log.i(TAG, "gpu config: $backend")
+        Log.i(TAG, "gpu config: $gpu" + if (missing.isEmpty()) "" else "; this AVF lacks $missing")
         true
     }.getOrElse {
-        Log.w(TAG, "setGpuConfig($backend) failed; virtmgr may pick crosvm_minimal (no virtio-net)", it)
+        Log.w(TAG, "setGpuConfig(${gpu.backend}) failed; virtmgr may pick crosvm_minimal (no virtio-net)", it)
         false
     }
 
@@ -167,6 +206,76 @@ object AvfReflect {
 
     fun run(vm: Any) = invoke(vm, "run").let {}
 
+    // What the wrapped binder applies to the next createVm; the connection it wraps, which
+    // VirtualizationService caches only weakly.
+    @Volatile private var rawEdit: ((Any) -> Unit)? = null
+    private var wrapped: Any? = null
+
+    /**
+     * Has the next VM this process runs apply [edit] to its raw config
+     * (`android.system.virtualizationservice.VirtualMachineRawConfig`) before
+     * virtmgr sees it, for fields the Java config never sets; null applies
+     * nothing. Wraps the binder of the virtmgr connection `VirtualMachine.run`
+     * takes. False when this AVF's internals differ: the VM then starts with
+     * its plain config. When [edit] throws or the config isn't raw, `run`
+     * fails with [RawEditFailed] in its causes, before virtmgr creates a VM.
+     */
+    fun editRawConfig(edit: ((Any) -> Unit)?): Boolean {
+        rawEdit = edit
+        return runCatching {
+            val vs = Class.forName("$PKG.VirtualizationService")
+            val lock = MGR.getDeclaredField("sCreateLock").apply { isAccessible = true }.get(null)!!
+            val service = synchronized(lock) { vs.getDeclaredMethod("getInstance").apply { isAccessible = true }.invoke(null)!! }
+            wrapped = service
+            val field = vs.getDeclaredField("mBinder").apply { isAccessible = true }
+            val binder = field.get(service)!!
+            if (Proxy.isProxyClass(binder.javaClass)) return@runCatching
+            val iface = Class.forName("android.system.virtualizationservice.IVirtualizationService")
+            val handler = InvocationHandler { _, method, args ->
+                val e = rawEdit
+                if (method.name == "createVm" && e != null) {
+                    // A union: only a raw config has one.
+                    val raw = runCatching { args!![0].javaClass.getMethod("getRawConfig").invoke(args[0]) }.getOrNull()
+                    try {
+                        e(raw ?: error("the VM config isn't raw"))
+                    } catch (t: Throwable) {
+                        throw RawEditFailed(t)
+                    }
+                }
+                try {
+                    method.invoke(binder, *(args ?: emptyArray()))
+                } catch (e: java.lang.reflect.InvocationTargetException) {
+                    throw e.cause ?: e
+                }
+            }
+            field.set(service, Proxy.newProxyInstance(iface.classLoader, arrayOf(iface), handler))
+        }.onFailure {
+            rawEdit = null
+            Log.w(TAG, "can't edit the raw VM config", it)
+        }.isSuccess
+    }
+
+    /** The edit [editRawConfig] was given failed, so the VM didn't start: what it needed isn't there. */
+    class RawEditFailed(cause: Throwable) : IllegalStateException("editing the raw VM config failed: ${cause.message}", cause)
+
+    /** Backs guest-physical [start, start + size) of [raw]'s VM with [file] (crosvm `--file-backed-mapping`). */
+    fun addMemoryBackingFile(raw: Any, file: ParcelFileDescriptor, start: Long, size: Long) {
+        val cls = Class.forName("android.system.virtualizationservice.CustomMemoryBackingFile")
+        val f = cls.getConstructor().newInstance()
+        cls.getField("file").set(f, file)
+        cls.getField("rangeStart").setLong(f, start)
+        cls.getField("size").setLong(f, size)
+        val field = raw.javaClass.getField("customMemoryBackingFiles")
+        val old = field.get(raw) as Array<*>? ?: emptyArray<Any>()
+        val all = java.lang.reflect.Array.newInstance(cls, old.size + 1)
+        old.forEachIndexed { i, o -> java.lang.reflect.Array.set(all, i, o) }
+        java.lang.reflect.Array.set(all, old.size, f)
+        field.set(raw, all)
+    }
+
+    /** [raw]'s guest RAM in MiB. */
+    fun rawMemoryMib(raw: Any): Int = raw.javaClass.getField("memoryMib").getInt(raw)
+
     /** Asks the framework to kill the VM; throws when it refuses. */
     fun stop(vm: Any) = invoke(vm, "stop").let {}
 
@@ -187,6 +296,7 @@ object AvfReflect {
         val types = when (value) {
             is Boolean -> listOf(Boolean::class.javaObjectType, Boolean::class.javaPrimitiveType!!)
             is String -> listOf(String::class.java)
+            is Array<*> -> listOf(Array<String>::class.java)
             else -> emptyList()
         }
         for (t in types) {

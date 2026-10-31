@@ -89,6 +89,18 @@ class ProtocolTest {
     }
 
     @Test
+    fun parsesGpu() {
+        assertEquals(true, GuestConfig.parse("""{"type":"config","gpu":true}""").gpu)
+        assertEquals(false, GuestConfig.parse("""{"type":"config"}""").gpu)
+    }
+
+    @Test
+    fun parsesAudio() {
+        assertEquals(true, GuestConfig.parse("""{"type":"config","audio":true}""").audio)
+        assertEquals(false, GuestConfig.parse("""{"type":"config"}""").audio)
+    }
+
+    @Test
     fun ignoresUnknownFields() {
         val c = GuestConfig.parse("""{"type":"config","future":1,"terminal":{"profiles":[{"name":"a","new":true}]}}""")
         assertEquals(listOf(Profile("a", null)), c.profiles)
@@ -130,5 +142,53 @@ class ProtocolTest {
         assertEquals(Protocol.VERSION, h.getInt("version"))
         assertEquals("pty", h.getString("stream"))
         assertEquals("htop", h.getString("profile"))
+    }
+
+    @Test
+    fun parsesPortListeners() {
+        assertEquals(
+            PortListeners(lan = true, ports = listOf(3000, 8123)),
+            PortListeners.parse("""{"type":"port-listeners","lan":true,"ports":[3000,8123]}""")
+        )
+        assertEquals(PortListeners(lan = false, ports = emptyList()), PortListeners.parse("""{"type":"port-listeners","lan":false,"ports":[]}"""))
+    }
+
+    @Test
+    fun malformedPortListenersAreNull() {
+        listOf(
+            """{"type":"port-listeners","lan":false,"ports":["8123"]}""",
+            """{"type":"port-listeners","lan":false,"ports":8123}""",
+            """{"type":"port-listeners","lan":false}""",
+            """{"type":"port-listeners","lan":false,"ports":[70000]}""",
+            """{"type":"wake","ports":[8123]}""",
+            """{"type":"port-listeners","ports":[""",
+            "not json"
+        ).forEach { assertNull(it, PortListeners.parse(it)) }
+    }
+
+    @Test
+    fun portListenersKeepTheLowestWithinTheCap() {
+        val line = """{"type":"port-listeners","lan":false,"ports":[${(2000 downTo 1001).joinToString(",")}]}"""
+        val ports = PortListeners.parse(line)!!.ports
+        assertEquals(PortListeners.MAX_PORTS, ports.size)
+        assertEquals(1001, ports.first())
+    }
+
+    @Test
+    fun parsesManagedGuest() {
+        val c = GuestConfig.parse("""{"type":"config","hostname":"pocketnix","forwards":[],"terminal":{},"managed":{"flake":"/etc/nixos"}}""")
+        assertEquals("/etc/nixos", c.managedFlake)
+        assertNull(GuestConfig.parse(config).managedFlake)
+        val u = Updates.parse(
+            JSONObject(
+                """{"type":"updates","state":"idle","sources":["local"],"available":"/nix/store/b-nixos-system-pocketnix",
+                "plan":{"download":1048576,"builds":["portal-1.0"]},"blocked":{"download":0,"builds":["hello-x"]},
+                "packages":["hello","python3Packages.rich"],"run":{"package":"gnome-calculator","apps":["org.gnome.Calculator"]}}"""
+            )
+        )
+        assertEquals(Plan(1048576, listOf("portal-1.0")), u.plan)
+        assertEquals(listOf("hello-x"), u.blocked?.builds)
+        assertEquals(listOf("hello", "python3Packages.rich"), u.packages)
+        assertEquals(RunResult("gnome-calculator", listOf("org.gnome.Calculator"), null), u.run)
     }
 }

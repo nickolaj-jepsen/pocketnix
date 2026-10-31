@@ -2,7 +2,6 @@ package dev.nickolaj.pocketnix.files
 
 import android.content.ClipData
 import android.content.ClipDescription
-import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
@@ -11,6 +10,7 @@ import android.util.Log
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import dev.nickolaj.pocketnix.GuestBridge
+import dev.nickolaj.pocketnix.GuestCopy
 import dev.nickolaj.pocketnix.agent.ControlChannel
 import dev.nickolaj.pocketnix.agent.GuestFiles
 import java.io.File
@@ -107,7 +107,7 @@ class Transfers(
         }
         val uri = FileProvider.getUriForFile(context, clipAuthority(context), file)
         val label = hostname() ?: "pocketnix"
-        context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData(ClipDescription(label, arrayOf(mime)), ClipData.Item(uri)))
+        bridge.setGuestClip(ClipData(ClipDescription(label, arrayOf(mime)), ClipData.Item(uri)), GuestCopy.parse(msg)?.sensitive == true, null)
         // The previous copies aren't on the clipboard any more.
         dir.listFiles()?.filter { it != file }?.forEach { it.delete() }
     }

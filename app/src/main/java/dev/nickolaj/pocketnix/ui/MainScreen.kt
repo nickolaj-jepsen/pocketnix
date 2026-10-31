@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.systemBars
@@ -25,11 +26,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -50,11 +52,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import dev.nickolaj.pocketnix.Vm
+import dev.nickolaj.pocketnix.VmPhase
 import dev.nickolaj.pocketnix.agent.ControlChannel
 import dev.nickolaj.pocketnix.engine.DiskImage
 import dev.nickolaj.pocketnix.engine.VmState
@@ -65,20 +69,22 @@ import dev.nickolaj.pocketnix.gui.TabStripItem
 import dev.nickolaj.pocketnix.gui.WindowMenu
 import dev.nickolaj.pocketnix.gui.WindowSurface
 import dev.nickolaj.pocketnix.gui.closingWindows
+import dev.nickolaj.pocketnix.gui.guard
 import dev.nickolaj.pocketnix.gui.stopQuestion
 import dev.nickolaj.pocketnix.gui.tabStrip
 import dev.nickolaj.pocketnix.gui.windowMenu
 import dev.nickolaj.pocketnix.terminal.Modifiers
 import dev.nickolaj.pocketnix.terminal.Tab
-import dev.nickolaj.pocketnix.terminal.TerminalTheme
 
 @Composable
 fun MainScreen(vm: Vm) {
     val context = LocalContext.current
     val state by vm.state.collectAsState()
     val link by vm.control.link.collectAsState()
-    val stopping by vm.stopping.collectAsState()
+    val phase by vm.phase.collectAsState()
     val config by vm.config.collectAsState()
+    val syncError by vm.managed.syncError.collectAsState()
+    val setup by vm.managed.setup.collectAsState()
     val tabs by vm.tabs.tabs.collectAsState()
     val selected by vm.tabs.selected.collectAsState()
     val revision by vm.tabs.revision.collectAsState()
@@ -86,7 +92,6 @@ fun MainScreen(vm: Vm) {
     val themeRevision by vm.themeRevision.collectAsState()
     val forwardErrors by vm.forwardErrors.collectAsState()
     val updates by vm.updates.collectAsState()
-    val agentLate by vm.agentLate.collectAsState()
     val serviceRefused by vm.serviceRefused.collectAsState()
     val windowTabs by vm.gui.tabWindows.collectAsState()
     val selectedWindow by vm.tabs.selectedWindow.collectAsState()
@@ -94,11 +99,17 @@ fun MainScreen(vm: Vm) {
     val shownWindow = selectedWindow.takeIf { id -> windowTabs.any { it.id == id } } ?: 0
     var showSettings by remember { mutableStateOf(false) }
     var showUpdates by remember { mutableStateOf(false) }
+    var showManaged by remember { mutableStateOf(false) }
     var showPalette by remember { mutableStateOf(false) }
     var composerOpen by rememberSaveable { mutableStateOf(false) }
     var modifierRevision by remember { mutableIntStateOf(0) }
+    // Where the terminal's context menu opens, in the view's pixels; null while it's closed.
+    var terminalMenuAt by remember { mutableStateOf<IntOffset?>(null) }
     val controller = remember {
-        TerminalController(context, vm.tabs, vm.settings, Modifiers()) { modifierRevision++ }
+        TerminalController(context, vm.tabs, vm.settings, Modifiers()) { modifierRevision++ }.apply {
+            onOpenLink = vm.terminalActions::open
+            onContextMenu = { x, y -> terminalMenuAt = IntOffset(x.toInt(), y.toInt()) }
+        }
     }
 
     DisposableEffect(controller) { onDispose { controller.release() } }
@@ -117,19 +128,14 @@ fun MainScreen(vm: Vm) {
     val keyboardHeight = (imeBottom - WindowInsets.systemBars.getBottom(density)).coerceAtLeast(0)
     SideEffect { windowSurface?.keyboardHeight = keyboardHeight }
     LaunchedEffect(imeBottom > 0, windowSurface) { if (imeBottom == 0) windowSurface?.ime?.keyboardHidden() }
-    var keepScreenOn by remember { mutableStateOf(vm.settings.keepScreenOn) }
 
-    // Resumes count: `pocketnix provision` grants and pushes while the app is open.
+    // Resumes count: `pocketnix provision` grants and pushes while the app is open. A setup that ends made the disk.
     var resumes by remember { mutableIntStateOf(0) }
     LifecycleResumeEffect(Unit) {
         resumes++
         onPauseOrDispose {}
     }
-    val missing = remember(state, showSettings, resumes) { missingRequirements(context, vm) }
-    // Recomputed on theme changes: the module's background frames the terminal.
-    val background = remember(themeRevision) { Color(TerminalTheme.background) }
-    val foreground = remember(themeRevision) { Color(TerminalTheme.foreground) }
-
+    val missing = remember(state, showSettings, resumes, setup) { missingRequirements(context, vm) }
     LaunchedEffect(selected, tabs, shownWindow) { if (shownWindow == 0) controller.show(vm.tabs.current()) }
     LaunchedEffect(typeface) { controller.setTypeface(typeface) }
     LaunchedEffect(themeRevision) { controller.redraw() }
@@ -150,26 +156,28 @@ fun MainScreen(vm: Vm) {
         )
     }
 
+    // The terminal tab being renamed, from its long-press menu.
+    var renaming by remember { mutableStateOf<Tab?>(null) }
+    renaming?.let { tab -> RenameDialog(tab.title, onDismiss = { renaming = null }) { vm.tabs.rename(tab.id, it) } }
+
     if (showSettings) SettingsDialog(vm) { showSettings = false }
     if (showUpdates) UpdatesDialog(vm) { showUpdates = false }
+    if (showManaged) ManagedDialog(vm) { showManaged = false }
     if (showPalette) PaletteDialog(vm, controller) { showPalette = false }
 
     val running = state == VmState.Running || state == VmState.Starting
-    val agentUp = link is ControlChannel.Link.Up
-    // The debug TCP backend has no console, so no boot menu.
-    val ownsGuest = vm.engine.collectAsState().value.ownsGuest
     Column(
         Modifier
             .fillMaxSize()
-            .background(background)
+            // The theme's background is the terminal's, so it frames the terminal.
+            .background(MaterialTheme.colorScheme.background)
             .safeDrawingPadding()
             .imePadding()
     ) {
         StatusBar(
-            status = statusText(state, link, stopping, config?.hostname),
+            status = statusText(phase),
             running = running,
             canStart = missing.isEmpty(),
-            foreground = foreground,
             onStart = { vm.start() },
             onStop = {
                 confirm = stopQuestion(vm.gui.windowTitles()) to vm::stop
@@ -178,78 +186,76 @@ fun MainScreen(vm: Vm) {
             onComposer = { composerOpen = !composerOpen },
             updateAvailable = updates?.available != null,
             onUpdates = { showUpdates = true }
-        ) { dismiss ->
-            if (config?.gui?.enable == true || vm.gui.catalog.apps.isNotEmpty()) {
-                MenuItem("Apps") {
-                    dismiss()
-                    context.startActivity(Intent(context, LauncherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                }
-            }
-            if (shownWindow != 0) {
-                MenuItem(MOVE_OUT) {
-                    dismiss()
-                    vm.gui.move(shownWindow, "")
-                }
-            }
-            MenuItem("Commands", enabled = agentUp) {
-                dismiss()
-                showPalette = true
-            }
-            MenuItem("System and updates", enabled = agentUp) {
-                dismiss()
-                showUpdates = true
-            }
-            MenuItem("Settings") {
-                dismiss()
-                showSettings = true
-            }
-            MenuItem(if (keepScreenOn) "✓ Keep screen on" else "Keep screen on") {
-                dismiss()
-                keepScreenOn = !keepScreenOn
-                controller.setKeepScreenOn(keepScreenOn)
-            }
-            if (running) {
-                MenuItem("Reboot", enabled = agentUp) {
-                    dismiss()
-                    confirm = "Reboot the guest? Every tab ends. ${closingWindows(vm.gui.windowTitles())}".trim() to vm::reboot
-                }
-                if (ownsGuest) {
-                    MenuItem("Restart with boot menu") {
-                        dismiss()
-                        confirm = "Restart into the boot menu? This stops the guest at once, without shutting it down." to vm::restartWithBootMenu
+        ) {
+            // Built during composition: a throw here would kill the app and the VM.
+            guard("building the ⋮ menu", emptyList()) {
+                mainMenu(mainMenuState(context, vm, shownWindow)) { item ->
+                    when (item) {
+                        MainItem.APPS -> context.startActivity(Intent(context, LauncherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        MainItem.MOVE_OUT -> vm.gui.move(shownWindow, "")
+                        MainItem.REOPEN_ENDED -> vm.reopenEndedTabs()
+                        MainItem.COMMANDS -> showPalette = true
+                        MainItem.CONFIGURE -> showManaged = true
+                        MainItem.UPDATES -> showUpdates = true
+                        MainItem.SETTINGS -> showSettings = true
+                        MainItem.KEEP_SCREEN_ON -> controller.setKeepScreenOn(!vm.settings.keepScreenOn)
+                        MainItem.REBOOT -> confirm = "Reboot the guest? Every tab ends. ${closingWindows(vm.gui.windowTitles())}".trim() to vm::reboot
+                        MainItem.RESTART_BOOT_MENU -> confirm = "Restart into the boot menu? This stops the guest at once, without shutting it down." to vm::restartWithBootMenu
+                        MainItem.START_BOOT_MENU -> vm.start(bootMenu = true)
                     }
-                }
-            } else if (ownsGuest) {
-                MenuItem("Start with boot menu", enabled = missing.isEmpty()) {
-                    dismiss()
-                    vm.start(bootMenu = true)
                 }
             }
         }
         for (e in forwardErrors) {
-            Text(e, color = foreground.copy(alpha = 0.8f), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 8.dp))
+            Text(e, color = LocalContentColor.current.copy(alpha = 0.8f), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 8.dp))
         }
         if (serviceRefused && running) {
             Text(
                 "Android refused the foreground service, so it may kill the VM with the app. Reopening the app retries.",
-                color = foreground.copy(alpha = 0.8f),
+                color = LocalContentColor.current.copy(alpha = 0.8f),
                 fontSize = 12.sp,
                 modifier = Modifier.padding(horizontal = 8.dp)
             )
         }
-        if (agentLate) {
+        if (phase == VmPhase.AgentLate) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "No agent after two minutes. A generation that won't boot? The console tab shows the boot.",
-                    color = foreground.copy(alpha = 0.8f),
+                    "The agent hasn't answered. A generation that won't boot? The console tab shows the boot.",
+                    color = LocalContentColor.current.copy(alpha = 0.8f),
                     fontSize = 12.sp,
                     modifier = Modifier.weight(1f)
                 )
                 TextButton(onClick = vm::restartWithBootMenu) { Text("Boot menu") }
             }
         }
-        if (missing.isNotEmpty() && state == VmState.Stopped) {
-            Requirements(missing, foreground, Modifier.padding(16.dp))
+        // A guest the phone is working on (its first rebuild, say): what it does, and the way to the details.
+        val u = updates
+        val failed = syncError?.takeIf { u != null && !u.busy && u.blocked == null }
+        if (config?.managedFlake != null && u != null && (u.busy || u.blocked != null || failed != null)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    when {
+                        u.busy -> "${updateStatus(u)} ${u.log.lastOrNull().orEmpty()}"
+                        failed != null -> "Your settings aren't applied yet: $failed"
+                        else -> "An update waits for your yes to compile on the phone."
+                    },
+                    color = LocalContentColor.current.copy(alpha = 0.8f),
+                    fontSize = 12.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                if (failed != null) TextButton(onClick = vm.managed::retrySync) { Text("Retry") }
+                TextButton(onClick = { showUpdates = true }) { Text("Details") }
+            }
+        }
+        if (showsRequirements(phase, missing)) {
+            val needDisk = missing.any { it.name == DISK_REQUIREMENT }
+            val others = missing.filter { it.name != DISK_REQUIREMENT }
+            Column(Modifier.weight(1f, fill = false).padding(16.dp)) {
+                if (others.isNotEmpty()) Requirements(others)
+                if (needDisk) SetupCard(vm)
+            }
         }
         // Read for its side effect: titles and finished states redraw the row.
         revision.let {}
@@ -259,7 +265,6 @@ fun MainScreen(vm: Vm) {
             selectedWindow = shownWindow,
             profiles = config?.profiles?.map { it.name }.orEmpty(),
             canOpen = link is ControlChannel.Link.Up,
-            foreground = foreground,
             onSelect = vm.tabs::select,
             onClose = { id ->
                 val tab = tabs.firstOrNull { it.id == id }
@@ -268,6 +273,7 @@ fun MainScreen(vm: Vm) {
             onSelectWindow = vm.tabs::selectWindow,
             // The client decides: it may ask about unsaved work first.
             onCloseWindow = vm.gui::requestClose,
+            tabMenu = { tab -> chipMenu(vm, tab) { renaming = tab } },
             windowMenu = { id ->
                 windowMenu(
                     vm.gui,
@@ -287,6 +293,16 @@ fun MainScreen(vm: Vm) {
                 update = { it.visibility = if (shownWindow != 0) View.INVISIBLE else View.VISIBLE },
                 modifier = Modifier.fillMaxSize()
             )
+            // A zero-size anchor at the touch point: the menu drops from it.
+            Box(Modifier.offset { terminalMenuAt ?: IntOffset.Zero }) {
+                WindowMenu(
+                    expanded = terminalMenuAt != null,
+                    onDismiss = {
+                        terminalMenuAt = null
+                        controller.clearStoredSelection()
+                    }
+                ) { vm.terminalActions.menu(vm.tabs.current(), controller.storedSelection()) }
+            }
             if (shownWindow != 0) {
                 key(shownWindow) {
                     AndroidView(
@@ -305,7 +321,6 @@ fun MainScreen(vm: Vm) {
                 rows = extraKeyRows(config),
                 modifiers = ime.modifiers,
                 revision = modifierRevision,
-                foreground = foreground,
                 onKey = ime::extraKey
             )
         }
@@ -315,27 +330,44 @@ fun MainScreen(vm: Vm) {
                 rows = extraKeyRows(config),
                 modifiers = controller.modifiers,
                 revision = modifierRevision,
-                foreground = foreground,
                 onKey = controller::press
             )
-            if (composerOpen) Composer(controller, foreground)
+            if (composerOpen) Composer(controller)
         }
     }
 }
 
-private fun statusText(state: VmState, link: ControlChannel.Link, stopping: Boolean, hostname: String?): String = when {
-    stopping -> "Stopping…"
-    state == VmState.Stopped -> "Stopped"
-    state is VmState.Failed -> "Failed: ${state.message}"
-    state == VmState.Starting -> "Starting…"
-    link is ControlChannel.Link.Up -> "Running · ${hostname ?: "guest"}"
-    link is ControlChannel.Link.Refused -> "Agent refused: ${link.reason}"
-    else -> "Booting (waiting for the agent)"
+/** Whether the requirements and the setup form show: while [missing] has any and the VM is off, a failed start included. */
+internal fun showsRequirements(phase: VmPhase, missing: List<Requirement>): Boolean = missing.isNotEmpty() && phase.off
+
+/** The status bar's line for [phase]. */
+internal fun statusText(phase: VmPhase): String = when (phase) {
+    VmPhase.Stopping -> "Stopping…"
+    VmPhase.Stopped -> "Stopped"
+    is VmPhase.Failed -> "Failed: ${phase.message}"
+    VmPhase.Starting -> "Starting…"
+    is VmPhase.Running -> "Running · ${phase.host ?: "guest"}"
+    is VmPhase.Refused -> "Agent refused: ${phase.reason}"
+    VmPhase.AgentLate -> "Booting (no agent yet)"
+    VmPhase.Booting -> "Booting (waiting for the agent)"
 }
 
+/** Asks for a tab's new title, starting from [current]; an empty one clears the user's. */
 @Composable
-private fun MenuItem(text: String, enabled: Boolean = true, onClick: () -> Unit) {
-    DropdownMenuItem(text = { Text(text) }, enabled = enabled, onClick = onClick)
+private fun RenameDialog(current: String, onDismiss: () -> Unit, onRename: (String) -> Unit) {
+    var title by remember { mutableStateOf(current) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rename tab") },
+        text = { OutlinedTextField(title, { title = it }, singleLine = true, modifier = Modifier.fillMaxWidth()) },
+        confirmButton = {
+            TextButton(onClick = {
+                onDismiss()
+                guard("renaming the tab") { onRename(title) }
+            }) { Text("Rename") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 @Composable
@@ -343,27 +375,27 @@ private fun StatusBar(
     status: String,
     running: Boolean,
     canStart: Boolean,
-    foreground: Color,
     onStart: () -> Unit,
     onStop: () -> Unit,
     composerOpen: Boolean,
     onComposer: () -> Unit,
     updateAvailable: Boolean,
     onUpdates: () -> Unit,
-    menuItems: @Composable (dismiss: () -> Unit) -> Unit
+    /** The ⋮ menu, read when it opens. */
+    menu: () -> List<MenuAction>
 ) {
-    var menu by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(status, color = foreground, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text(status, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         if (updateAvailable) TextButton(onClick = onUpdates) { Text("Update") }
         TextButton(onClick = onComposer) { Text(if (composerOpen) "Keys" else "Compose") }
         Box {
-            TextButton(onClick = { menu = true }) { Text("⋮", color = foreground) }
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) { menuItems { menu = false } }
+            // A TextButton tints its text with the accent; the menu glyph stays the text colour.
+            TextButton(onClick = { menuOpen = true }) { Text("⋮", color = MaterialTheme.colorScheme.onBackground) }
+            WindowMenu(menuOpen, onDismiss = { menuOpen = false }, items = menu)
         }
         if (running) {
-            // The module's background may be dark under a light Material scheme.
-            OutlinedButton(onClick = onStop, colors = ButtonDefaults.outlinedButtonColors(contentColor = foreground)) { Text("Stop") }
+            OutlinedButton(onClick = onStop) { Text("Stop") }
         } else {
             Button(onClick = onStart, enabled = canStart) { Text("Start") }
         }
@@ -377,16 +409,18 @@ private fun TabRow(
     selectedWindow: Int,
     profiles: List<String>,
     canOpen: Boolean,
-    foreground: Color,
     onSelect: (Int) -> Unit,
     onClose: (Int) -> Unit,
     onSelectWindow: (Int) -> Unit,
     onCloseWindow: (Int) -> Unit,
+    /** A terminal tab's long-press menu, read when it opens. */
+    tabMenu: (Tab) -> List<MenuAction>,
     /** A window tab's menu, read when it opens. */
     windowMenu: (Int) -> List<MenuAction>,
     onOpen: (String?) -> Unit
 ) {
     var menu by remember { mutableStateOf(false) }
+    val foreground = LocalContentColor.current
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -396,15 +430,18 @@ private fun TabRow(
             when (item) {
                 is TabStripItem.Terminal -> {
                     val tab = item.tab
-                    val ended = !tab.session.isRunning && tab.kind != Tab.Kind.Console
-                    TabChip(
-                        mark = if (tab.attention) "● " else "",
-                        title = tab.title + if (ended) " (ended)" else "",
-                        selected = selectedWindow == 0 && tab.id == selected,
-                        foreground = foreground,
-                        onSelect = { onSelect(tab.id) },
-                        onClose = if (tab.kind != Tab.Kind.Console) ({ onClose(tab.id) }) else null
-                    )
+                    var tabMenuOpen by remember(tab.id) { mutableStateOf(false) }
+                    Box {
+                        TabChip(
+                            mark = if (tab.attention) "● " else "",
+                            title = tab.title + if (tab.ended) " (ended)" else "",
+                            selected = selectedWindow == 0 && tab.id == selected,
+                            onSelect = { onSelect(tab.id) },
+                            onLongPress = { tabMenuOpen = true },
+                            onClose = if (tab.kind != Tab.Kind.Console) ({ onClose(tab.id) }) else null
+                        )
+                        WindowMenu(tabMenuOpen, onDismiss = { tabMenuOpen = false }) { tabMenu(tab) }
+                    }
                 }
 
                 is TabStripItem.Window -> {
@@ -415,7 +452,6 @@ private fun TabRow(
                             mark = "▣ ",
                             title = w.title,
                             selected = w.id == selectedWindow,
-                            foreground = foreground,
                             onSelect = { onSelectWindow(w.id) },
                             onLongPress = { windowMenuOpen = true },
                             onClose = { onCloseWindow(w.id) }
@@ -451,11 +487,11 @@ private fun TabChip(
     mark: String,
     title: String,
     selected: Boolean,
-    foreground: Color,
     onSelect: () -> Unit,
     onClose: (() -> Unit)?,
     onLongPress: (() -> Unit)? = null
 ) {
+    val foreground = LocalContentColor.current
     Row(
         Modifier
             .background(if (selected) foreground.copy(alpha = 0.18f) else Color.Transparent, RoundedCornerShape(6.dp))
@@ -472,13 +508,15 @@ private fun TabChip(
     }
 }
 
+private const val DISK_REQUIREMENT = "Disk image"
+
 /** One prerequisite of booting a VM, with the fix shown while it's missing. */
 data class Requirement(val name: String, val fix: String)
 
 fun missingRequirements(context: Context, vm: Vm): List<Requirement> {
     if (vm.settings.tcpBackend) return emptyList()
     fun granted(p: String) = context.checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED
-    val grant = "run `pocketnix provision`, or adb shell pm grant ${context.packageName}"
+    val grant = "from a computer with adb: adb shell pm grant ${context.packageName}"
     return buildList {
         // PackageManager.FEATURE_VIRTUALIZATION_FRAMEWORK is @SystemApi, so spell it out.
         if (!context.packageManager.hasSystemFeature("android.software.virtualization_framework")) {
@@ -487,17 +525,17 @@ fun missingRequirements(context: Context, vm: Vm): List<Requirement> {
         for (p in listOf("MANAGE_VIRTUAL_MACHINE", "USE_CUSTOM_VIRTUAL_MACHINE")) {
             if (!granted("android.permission.$p")) add(Requirement(p, "$grant android.permission.$p"))
         }
-        if (!DiskImage.file(context).exists()) add(Requirement("Disk image", "run `pocketnix provision --image …`"))
+        if (!DiskImage.file(context).exists()) add(Requirement(DISK_REQUIREMENT, "set it up below, or run `pocketnix provision --image …`"))
     }
 }
 
 @Composable
-private fun Requirements(missing: List<Requirement>, foreground: Color, modifier: Modifier = Modifier) {
+private fun Requirements(missing: List<Requirement>, modifier: Modifier = Modifier) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Before the VM can start:", color = foreground, style = MaterialTheme.typography.titleMedium)
+        Text("Before the VM can start:", style = MaterialTheme.typography.titleMedium)
         for (r in missing) {
-            Text("✗ ${r.name}", color = foreground)
-            Text(r.fix, color = foreground.copy(alpha = 0.7f), style = MaterialTheme.typography.bodySmall)
+            Text("✗ ${r.name}")
+            Text(r.fix, color = LocalContentColor.current.copy(alpha = 0.7f), style = MaterialTheme.typography.bodySmall)
         }
         Spacer(Modifier.padding(4.dp))
     }

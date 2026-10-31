@@ -75,4 +75,13 @@ public class DecSetTest extends TerminalTestCase {
 		enterString("\033[?7hhij").assertLinesAre("abh", "ij ", "   ");
 	}
 
+	public void testMainBufferBehindAlternateScreen() {
+		withTerminalSized(10, 3);
+		enterString("before\r\n");
+		enterString("\033[?1049h");
+		enterString("in vim");
+		assertEquals("in vim", mTerminal.getScreen().getTranscriptText());
+		assertEquals("before", mTerminal.getMainBuffer().getTranscriptText());
+	}
+
 }

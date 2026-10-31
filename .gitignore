@@ -10,3 +10,5 @@ result
 result-*
 *.jks
 *.keystore
+# bpf2go's output (go generate)
+go/internal/portwatch/*_bpfel.*

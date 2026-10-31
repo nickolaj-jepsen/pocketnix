@@ -12,12 +12,14 @@ import android.util.Log
 import dev.nickolaj.pocketnix.agent.AgentDialer
 import dev.nickolaj.pocketnix.agent.AgentStream
 import dev.nickolaj.pocketnix.agent.Protocol
+import dev.nickolaj.pocketnix.gui.GuestRam
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 import java.io.RandomAccessFile
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -46,8 +48,27 @@ class AvfEngine(private val context: Context) : VmEngine {
     private var console: ConsoleLog? = null
     private var lastError: String? = null
 
+    // This launch asked for the GPU, and whether its guest's agent has answered a dial.
+    private var launchGpu = false
+
+    // This launch's guest RAM is the app's: logged with GPU fallbacks, since either may be what crosvm refused.
+    private var launchSharedRam = false
+
+    @Volatile private var agentUp = AtomicBoolean(false)
+
+    // Set once a GPU launch fails in AVF, crashes, or is stopped before its agent
+    // answers: later launches in this process go without the GPU, so it can't keep the VM from booting.
+    private var gpuRefused = false
+
+    // Set once AVF couldn't take guest RAM in the app's memory: later launches in this process leave it to crosvm.
+    private var sharedRamRefused = false
+
+    @Volatile override var launched: Launched? = null
+        private set
+
     override val dialer: AgentDialer?
         get() = vm?.let { v ->
+            val up = agentUp
             AgentDialer {
                 // Refused until the guest's agent listens; that's an IOException, not a crash.
                 val pfd = try {
@@ -55,6 +76,7 @@ class AvfEngine(private val context: Context) : VmEngine {
                 } catch (e: java.lang.reflect.InvocationTargetException) {
                     throw java.io.IOException("connectVsock: ${e.cause?.message}", e.cause)
                 }
+                up.set(true)
                 VsockStream(pfd)
             }
         }
@@ -76,9 +98,14 @@ class AvfEngine(private val context: Context) : VmEngine {
         val gen = ++generation
         lastError = null
         this.console = console
+        launchGpu = settings.gpu && !gpuRefused
+        launchSharedRam = false
+        agentUp = AtomicBoolean(false)
+        // Failures before AVF sees the config aren't the GPU's.
+        var avfTried = false
         try {
             val disk = DiskImage.file(context)
-            if (!disk.exists()) throw IllegalStateException("No disk image yet: run `pocketnix provision`")
+            if (!disk.exists()) throw IllegalStateException("No disk image yet: set it up in the app, or run `pocketnix provision --image …`")
             DiskImage.grow(disk, settings.diskGb)
 
             val mgr = AvfReflect.manager(context)
@@ -86,7 +113,10 @@ class AvfEngine(private val context: Context) : VmEngine {
             if (caps != 0 && caps and AvfReflect.CAPABILITY_NON_PROTECTED_VM == 0) {
                 throw IllegalStateException("This device's hypervisor only runs protected VMs")
             }
-            val config = buildConfig(disk, settings)
+            val shared = shareRam(settings)
+            launchSharedRam = shared
+            avfTried = true
+            val config = buildConfig(disk, settings, gpu = launchGpu, sharedRam = shared)
             val v = runCatching { AvfReflect.getOrCreate(mgr, VM_NAME, config).also { AvfReflect.setConfig(it, config) } }
                 .getOrElse {
                     Log.w(TAG, "stored VM config incompatible (${it.message}); recreating")
@@ -118,27 +148,97 @@ class AvfEngine(private val context: Context) : VmEngine {
             }
             AvfReflect.run(v)
             vm = v
+            launched = Launched(
+                gpu = when {
+                    launchGpu -> "gfxstream"
+                    settings.network -> "2d"
+                    else -> "none"
+                },
+                gpuAsked = settings.gpu,
+                gpuRefused = gpuRefused,
+                guestRam = GuestRam.mapped,
+                virtioSnd = settings.audio
+            )
             _state.value = VmState.Running
-            Log.i(TAG, "VM running (${settings.memoryMb} MB, cpus=${settings.cpus}, network=${settings.network}, audio=${settings.audio})")
+            Log.i(TAG, "VM running (${settings.memoryMb} MB, cpus=${settings.cpus}, network=${settings.network}, gpu=$launchGpu, guestRam=${GuestRam.mapped}, audio=${settings.audio})")
         } catch (e: Throwable) {
             val cause = (e as? java.lang.reflect.InvocationTargetException)?.cause ?: e
             Log.e(TAG, "VM start failed", cause)
             cleanup(console)
+            // Its balloon is off: a VM on crosvm's own RAM must start again with it.
+            if (launchSharedRam && generateSequence(e) { it.cause }.any { it is AvfReflect.RawEditFailed }) return withoutSharedRam(settingsOf, console)
+            if (launchGpu && avfTried) return withoutGpu(settingsOf, console)
             _state.value = VmState.Failed(cause.message ?: cause.javaClass.simpleName)
         }
     }
 
-    private fun buildConfig(disk: File, settings: VmSettings): Any {
+    /**
+     * Has the VM run on guest RAM in the app's memory, when [settings] want
+     * it and AVF lets the config carry it; false leaves the VM as before.
+     */
+    private fun shareRam(settings: VmSettings): Boolean {
+        GuestRam.release()
+        if (!settings.guestRam || settings.audio || sharedRamRefused) {
+            AvfReflect.editRawConfig(null)
+            return false
+        }
+        val bytes = settings.memoryMb.toLong() shl 20
+        val fd = runCatching { GuestRam.create(bytes) }.getOrElse {
+            Log.w(TAG, "guest RAM stays in crosvm", it)
+            AvfReflect.editRawConfig(null)
+            return false
+        }
+        // All of RAM: crosvm takes a backed range for a memory region of its own, and a
+        // virtio buffer across a region's edge breaks the device.
+        val edited = AvfReflect.editRawConfig { raw ->
+            check(AvfReflect.rawMemoryMib(raw).toLong() shl 20 == bytes) { "the VM's RAM isn't the ${settings.memoryMb} MiB shared" }
+            AvfReflect.addMemoryBackingFile(raw, fd, GuestRam.BASE, bytes)
+            GuestRam.backsVm()
+        }
+        if (!edited) GuestRam.release()
+        Log.i(TAG, if (edited) "guest RAM in app memory" else "guest RAM stays in crosvm")
+        return edited
+    }
+
+    private fun withoutSharedRam(settings: () -> VmSettings, console: ConsoleLog) {
+        Log.w(TAG, "AVF couldn't take guest RAM in app memory; starting the VM on crosvm's")
+        console.append("\r\n[pocketnix: guest RAM stays in crosvm; GUI frames go over the stream]\r\n")
+        sharedRamRefused = true
+        _state.value = VmState.Starting
+        launch(settings, console)
+    }
+
+    private fun withoutGpu(settings: () -> VmSettings, console: ConsoleLog) {
+        Log.w(TAG, "the VM didn't start with the GPU (guestRam=$launchSharedRam); starting it without")
+        console.append("\r\n[pocketnix: the VM didn't start with the phone's GPU; starting it without]\r\n")
+        gpuRefused = true
+        _state.value = VmState.Starting
+        launch(settings, console)
+    }
+
+    private fun refuseGpu(console: ConsoleLog) {
+        Log.w(TAG, "a GPU run ended unasked (guestRam=$launchSharedRam); the next start goes without the GPU")
+        console.append("\r\n[pocketnix: the next start goes without the phone's GPU]\r\n")
+        gpuRefused = true
+        launched = launched?.copy(gpuRefused = true)
+    }
+
+    private fun buildConfig(disk: File, settings: VmSettings, gpu: Boolean, sharedRam: Boolean): Any {
         val custom = AvfReflect.newCustomBuilder()
         AvfReflect.setName(custom, VM_NAME)
         AvfReflect.setBootloaderPath(custom, UBOOT)
         AvfReflect.addDisk(custom, disk.absolutePath, writable = true)
         AvfReflect.setNetworkSupported(custom, settings.network)
         // A GPU config selects full crosvm, which a networked VM needs (see AvfReflect.setGpuConfig).
-        if (settings.network) AvfReflect.setGpuConfig(custom, "2d")
+        if (gpu) {
+            AvfReflect.setGpuConfig(custom, AvfReflect.GPU_GFXSTREAM)
+        } else if (settings.network) {
+            AvfReflect.setGpuConfig(custom, AvfReflect.GPU_2D)
+        }
         if (settings.audio) AvfReflect.setAudioConfig(custom)
-        // Hands the guest's free pages back to Android while the VM runs.
-        AvfReflect.useAutoMemoryBalloon(custom, true)
+        // Hands the guest's free pages back to Android while the VM runs; crosvm can't free
+        // the app's shared memory, so then the guest keeps what it touched.
+        AvfReflect.useAutoMemoryBalloon(custom, !sharedRam)
 
         val b = AvfReflect.newVmConfigBuilder(context)
         AvfReflect.setProtectedVm(b, false)
@@ -181,9 +281,19 @@ class AvfEngine(private val context: Context) : VmEngine {
                 launch(settings, console)
             }
 
-            stopRequested || reason == AvfReasons.STOP_REASON_SHUTDOWN -> _state.value = VmState.Stopped
+            stopRequested || reason == AvfReasons.STOP_REASON_SHUTDOWN -> {
+                // Stopped before its agent answered: the GPU may have hung the boot.
+                if (launchGpu && stopRequested && !agentUp.get()) refuseGpu(console)
+                _state.value = VmState.Stopped
+            }
 
-            else -> _state.value = VmState.Failed(lastError ?: "The VM stopped: ${AvfReasons.stopReason(reason)}")
+            // The guest never came up with the GPU: try it without, now.
+            launchGpu && !agentUp.get() -> withoutGpu(settings, console)
+
+            else -> {
+                if (launchGpu) refuseGpu(console)
+                _state.value = VmState.Failed(lastError ?: "The VM stopped: ${AvfReasons.stopReason(reason)}")
+            }
         }
     }
 
@@ -211,6 +321,7 @@ class AvfEngine(private val context: Context) : VmEngine {
 
     private fun cleanup(console: ConsoleLog) {
         vm = null
+        GuestRam.release()
         console.input = null
         consoleStreams?.let { (o, i) ->
             runCatching { i.close() }

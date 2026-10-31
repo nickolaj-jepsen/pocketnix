@@ -14,9 +14,16 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    testOptions {
+        // The emulator touches android.util.Log and SystemClock.
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
     api(project(":terminal-emulator"))
     implementation("androidx.annotation:annotation:1.9.0")
+
+    testImplementation(libs.junit)
 }

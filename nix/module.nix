@@ -11,7 +11,7 @@
   ...
 }: let
   cfg = config.pocketnix.guest;
-  inherit (lib) mkOption mkEnableOption mkIf mkDefault mkMerge types;
+  inherit (lib) mkOption mkEnableOption mkIf mkDefault mkAfter mkMerge types;
 
   extraKey = types.submodule {
     options = {
@@ -42,6 +42,7 @@
           inherit (f) guestPort hostPort lan protocol;
         })
         cfg.forwards;
+      forwardOffers = {inherit (cfg.forwardOffers) enable lan;};
       terminal = {
         profiles = lib.mapAttrsToList (name: p: {inherit name;} // lib.optionalAttrs (p.command != null) {inherit (p) command;}) cfg.terminal.profiles;
         inherit (cfg.terminal) defaultProfile;
@@ -63,7 +64,8 @@
             // lib.optionalAttrs (upd.buildHost.sshKey != null) {inherit (upd.buildHost) sshKey;};
         }
         // lib.optionalAttrs (upd.published.url != null) {published = {inherit (upd.published) url;};}
-        // lib.optionalAttrs (upd.checkInterval != null) {inherit (upd) checkInterval;};
+        // lib.optionalAttrs (upd.checkInterval != null) {inherit (upd) checkInterval;}
+        // lib.optionalAttrs (upd.keepGenerations != null) {inherit (upd) keepGenerations;};
       share = lib.filterAttrs (_: v: v != null) {inherit (cfg.share) directory command;};
       power.wakeLocks = {inherit (cfg.power.wakeLocks) enable ignore;};
       host = {inherit (cfg.host) timeZone;};
@@ -71,6 +73,13 @@
     // lib.optionalAttrs (cfg.terminal.historyFile != null) {history = cfg.terminal.historyFile;}
     // lib.optionalAttrs (cfg.files.root != null) {filesRoot = cfg.files.root;}
     // lib.optionalAttrs (cfg.hostFolders.mountPoint != null) {hostFolders = {inherit (cfg.hostFolders) mountPoint;};}
+    // lib.optionalAttrs cfg.managed.enable {
+      managed = {
+        inherit (cfg.managed) flake cpuQuota;
+        attr = config.networking.hostName;
+        inherit adhocProfile;
+      };
+    }
     // lib.optionalAttrs gui.enable {
       gui = {
         enable = true;
@@ -78,13 +87,55 @@
         appDefaults = lib.mapAttrs (_: a: lib.filterAttrs (_: v: v != null) {inherit (a) size input;}) gui.appDefaults;
       };
       guiSocket = guiSocketName;
-    };
+    }
+    // lib.optionalAttrs (gui.enable && config.services.pipewire.enable) {inherit audioPipe;}
+    // lib.optionalAttrs cfg.gpu.enable {gpu = true;};
   upd = cfg.updates;
+  mgd = cfg.managed;
+  # Relative to the user's home. Apps run without being kept live here; it's
+  # emptied at boot, before the garbage collection.
+  adhocProfile = ".local/state/nix/profiles/pocketnix-adhoc";
+  # The flake a managed guest starts from.
+  managedSeed = pkgs.runCommand "pocketnix-managed-seed" {} ''
+    mkdir $out
+    substitute ${./managed/flake.nix} $out/flake.nix --subst-var-by version ${lib.fileContents ../VERSION}
+    cp ${./managed/configuration.nix} $out/configuration.nix
+    echo '${builtins.toJSON mgd.selections}' > $out/pocketnix.json
+  '';
+
+  # go/internal/protocol's GuestSocket, where pocketnix-guest looks by default.
+  guestSocket = "/run/pocketnix/guest.sock";
+
+  # The agent's --prune-marker: outside /run/pocketnix, which systemd empties
+  # whenever the agent stops, restarts included, so a restart would prune again.
+  pruneMarker = "/run/pocketnix-pruned";
+
+  # PipeWire's pipe sink writes the guest's sound here, and the agent streams it to the app.
+  # Outside /run/pocketnix, which the agent's restarts recreate under PipeWire.
+  audioPipe = "/run/pocketnix-audio";
 
   gui = cfg.gui;
   # In the user's runtime directory, where the agent dials it as root.
   guiSocketName = "pocketnix-gui.sock";
   waylandDisplay = "wayland-0";
+
+  # The session variables the module sets, by what turns each on. pam_env
+  # puts them in the user manager's environment too, and so in user services
+  # and D-Bus-activated apps; tabs' login shells read them from /etc/profile.
+  sessionEnvs = [
+    {
+      on = cfg.gui.enable;
+      vars = {
+        WAYLAND_DISPLAY = waylandDisplay;
+        NIXOS_OZONE_WL = "1";
+      };
+    }
+    # Mesa's WSI copies each frame into a wl_shm buffer, the only kind the compositor takes.
+    {
+      on = cfg.gpu.enable;
+      vars.MESA_VK_WSI_DEBUG = "sw";
+    }
+  ];
   # gui.defaults' options, or with inheriting an app's, where null takes the default.
   appSettings = inheriting: let
     opt = values: default: description:
@@ -350,6 +401,27 @@ in {
       }));
     };
 
+    forwardOffers = {
+      enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Offer a phone forward for each unprivileged TCP port that
+          `pocketnix.guest.user` listens on where a forward reaches it (any
+          address, or loopback), unless another user listens there too or it
+          is already in `forwards`. The app asks in a notification and picks
+          the phone port: the same one, or the next free one above it. An
+          allowed forward lasts until its listener has been gone for a while
+          or the guest reboots; put a port wanted for good in `forwards`.
+        '';
+      };
+      lan = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Allowed offers listen on every interface instead of 127.0.0.1, as a forward with `lan` does.";
+      };
+    };
+
     terminal = {
       profiles = mkOption {
         default = {shell = {};};
@@ -518,6 +590,53 @@ in {
         example = "30m";
         description = "How often the agent checks for a newer system in the background (a Go duration); null checks only when asked in the app.";
       };
+      keepGenerations = mkOption {
+        type = types.nullOr types.ints.unsigned;
+        default = 0;
+        example = 2;
+        description = ''
+          How many system generations to keep besides the running and the
+          booted one. After each boot and each switch the agent deletes the
+          rest and collects the store's garbage; null keeps every generation.
+        '';
+      };
+    };
+
+    managed = {
+      enable = mkEnableOption ''
+        a guest the phone manages: its system is the flake at `managed.flake`,
+        configured from the app and rebuilt on the phone. `nixosModules.managed`
+        turns it on'';
+      flake = mkOption {
+        type = types.str;
+        default = "/etc/nixos";
+        description = "The guest's own flake, whose `nixosConfigurations.<hostName>` the agent rebuilds; seeded on first boot when it has no flake.nix.";
+      };
+      selections = {
+        user = mkOption {
+          # As go/internal/agent's userName and the app's Selections.USER_NAME.
+          type = types.strMatching "|[a-z_][a-z0-9_-]{0,31}";
+          default = "";
+          description = "The user the app set up; empty runs tabs as root until it has.";
+        };
+        keepGenerations = mkOption {
+          type = types.ints.unsigned;
+          default = 0;
+          description = "The app's `updates.keepGenerations`.";
+        };
+        # Hand-copied as go/internal/protocol's Services and the app's managed SERVICES.
+        services = lib.genAttrs ["ssh" "tailscale" "podman" "gui"] (name:
+          mkOption {
+            type = types.bool;
+            default = false;
+            description = "The app's ${name} switch.";
+          });
+      };
+      cpuQuota = mkOption {
+        type = types.strMatching "[0-9]+%";
+        default = "200%";
+        description = "CPU that evaluating and building the guest's system may use (systemd's `CPUQuota=`, 100% per core): the guest's vCPUs are the phone's.";
+      };
     };
 
     integrations = {
@@ -628,10 +747,11 @@ in {
       enable = mkEnableOption ''
         the guest's Wayland apps as Android windows: the pocketnix compositor
         as a socket-activated user service with `WAYLAND_DISPLAY` set for the
-        user's session, and by default PipeWire (the user in `audio`),
-        xdg-desktop-portal (and with it the FileChooser integration) without
-        its location and wallpaper portals, an icon theme read by librsvg and
-        a basic font set;
+        user's session, and by default PipeWire (the user in `audio`) with
+        an "Android" output the app plays, xdg-desktop-portal (and with it the FileChooser integration) without
+        its location and wallpaper portals, an icon theme read by librsvg, a
+        basic font set, and wl-clipboard with the Wayland clipboard bridged to
+        Android's while the compositor runs;
         CJK fonts need `fonts.enableDefaultPackages` or your own
       '';
       package = mkOption {
@@ -653,6 +773,18 @@ in {
         type = types.attrsOf (types.submodule {options = appSettings true;});
       };
     };
+
+    gpu.enable = mkEnableOption ''
+      the phone's GPU for the guest's Vulkan apps (experimental): from the
+      VM's next start the app gives it a gfxstream GPU, and starts it without
+      one where the phone's AVF can't. It installs Mesa's drivers, presents
+      Vulkan windows through shared memory (the compositor takes no dmabufs)
+      and, with the AVF kernel, loads `vgpu_relinquish`, without which Pixel
+      hosts that never unmap a guest page (android14-6.1) map GPU memory
+      only once per boot. OpenGL stays software rendered. Every guest user
+      that can open the render node reaches the phone's gfxstream decoder
+      and GPU driver, which parse its command streams outside the VM
+    '';
 
     avf.enable = mkOption {
       type = types.bool;
@@ -730,7 +862,7 @@ in {
         # Updates: ssh to the build host, nix to fetch, systemd-run to switch.
         path = [config.nix.package config.programs.ssh.package config.systemd.package];
         serviceConfig = {
-          ExecStart = lib.escapeShellArgs ([(lib.getExe' cfg.package "pocketnix-agent") "--guest-socket" "/run/pocketnix/guest.sock" "--state-dir" "/var/lib/pocketnix" "--host-state" "/run/pocketnix/host.json"] ++ lib.concatMap (a: ["--listen" a]) cfg.agent.listen);
+          ExecStart = lib.escapeShellArgs ([(lib.getExe' cfg.package "pocketnix-agent") "--guest-socket" guestSocket "--state-dir" "/var/lib/pocketnix" "--host-state" "/run/pocketnix/host.json" "--prune-marker" pruneMarker] ++ lib.concatMap (a: ["--listen" a]) cfg.agent.listen);
           RuntimeDirectory = "pocketnix";
           RuntimeDirectoryMode = "0755";
           StateDirectory = "pocketnix";
@@ -907,6 +1039,97 @@ in {
       };
     })
 
+    (mkIf mgd.enable (let
+      sel = mgd.selections;
+      nixpkgs = self.inputs.nixpkgs;
+    in {
+      networking.hostName = mkDefault "pocketnix";
+      pocketnix.guest.user = mkIf (sel.user != "") sel.user;
+      users.users = mkIf (sel.user != "") {
+        ${sel.user} = {
+          isNormalUser = true;
+          extraGroups = ["wheel"];
+        };
+      };
+      security.sudo.wheelNeedsPassword = mkDefault false;
+      # Rebuilding on the phone costs minutes of evaluation: only when asked.
+      pocketnix.guest.updates.checkInterval = mkDefault null;
+      # A default, so configuration.nix can override the app.
+      pocketnix.guest.updates.keepGenerations = mkDefault sel.keepGenerations;
+
+      nix.settings = {
+        experimental-features = ["nix-command" "flakes"];
+        # pocketnix's flake.nix has the same key.
+        extra-substituters = ["https://pocketnix.cachix.org"];
+        extra-trusted-public-keys = ["pocketnix.cachix.org-1:KklXzNwjpGzopowh99lwsL3IeaidLtH+Fw7wniLw9Nw="];
+        # A full-width build in the VM freezes the whole phone.
+        max-jobs = mkDefault 1;
+        cores = mkDefault 2;
+      };
+      # Builds run in the daemon; the agent runs evaluation under the same quota.
+      nix.daemonCPUSchedPolicy = mkDefault "idle";
+      nix.daemonIOSchedClass = mkDefault "idle";
+      systemd.services.nix-daemon.serviceConfig.CPUQuota = mgd.cpuQuota;
+      # `nixpkgs#…` is the system's own nixpkgs, fetched by rev rather than kept
+      # in the closure: what the app's package index lists, and what the cache has.
+      nix.registry.nixpkgs.to = {
+        type = "github";
+        owner = "NixOS";
+        repo = "nixpkgs";
+        inherit (nixpkgs) rev narHash;
+      };
+      environment.profiles = mkAfter ["$HOME/${adhocProfile}"];
+
+      services.openssh = mkIf sel.services.ssh {
+        enable = true;
+        settings.PasswordAuthentication = mkDefault false;
+        settings.KbdInteractiveAuthentication = mkDefault false;
+      };
+      pocketnix.guest.forwards.ssh = mkIf sel.services.ssh {
+        guestPort = 22;
+        # The app's managed SERVICES names this port.
+        hostPort = 2022;
+      };
+      services.tailscale = mkIf sel.services.tailscale {
+        enable = true;
+        # `tailscale up` from a tab, without sudo.
+        extraSetFlags = lib.optional (sel.user != "") "--operator=${sel.user}";
+      };
+      virtualisation.podman.enable = mkIf sel.services.podman true;
+      pocketnix.guest.gui = mkIf sel.services.gui {
+        enable = true;
+        # Desktop layouts; phone density leaves them a column wide.
+        appDefaults.firefox.size = mkDefault "compact";
+      };
+      # Its sessions outlive the app's tabs, which end with the app's process.
+      environment.systemPackages = [pkgs.zellij] ++ lib.optional sel.services.gui pkgs.foot;
+      pocketnix.guest.terminal = {
+        profiles = {
+          shell = {};
+          zellij.command = "zellij attach --create main";
+        };
+        theme.colors = lib.mapAttrs (_: mkDefault) (import ./catppuccin-mocha.nix);
+        theme.fontFamily = mkDefault {
+          package = pkgs.jetbrains-mono;
+          family = "JetBrains Mono";
+        };
+      };
+
+      systemd.services.pocketnix-managed-seed = {
+        description = "Seed the guest's flake";
+        wantedBy = ["multi-user.target"];
+        before = ["pocketnix-agent.service"];
+        unitConfig.ConditionPathExists = "!${mgd.flake}/flake.nix";
+        serviceConfig.Type = "oneshot";
+        script = ''
+          mkdir -p ${lib.escapeShellArg mgd.flake}
+          for f in ${managedSeed}/*; do
+            install -m 0644 "$f" ${lib.escapeShellArg mgd.flake}/
+          done
+        '';
+      };
+    }))
+
     {
       # Tabs get no login session, so only lingering starts the user manager
       # and with it the session bus (/run/user/<uid>/bus) they and notifyd use.
@@ -924,6 +1147,32 @@ in {
           ExecStart = "${guestExe} notifyd";
         };
       };
+    })
+
+    (let
+      on = lib.foldl' (vars: e: vars // lib.optionalAttrs e.on e.vars) {} sessionEnvs;
+      # Each of them the system sets, this module or not.
+      kept = lib.concatStringsSep "," (lib.attrNames config.environment.sessionVariables);
+      systemctl = "${config.systemd.package}/bin/systemctl";
+    in {
+      environment.sessionVariables = on;
+      # A switch finds the user manager running, its environment set by pam_env
+      # when it started. The manager's POCKETNIX_SESSION_ENV lists what this
+      # set, so a switch turning an option off unsets only what the module set.
+      system.userActivationScripts.pocketnix-env = ''
+        was=$(${systemctl} --user show-environment | ${pkgs.gnused}/bin/sed -n 's/^POCKETNIX_SESSION_ENV=//p')
+        for n in ''${was//,/ }; do
+          case ",${kept}," in
+            *",$n,"*) ;;
+            *) ${systemctl} --user unset-environment "$n" ;;
+          esac
+        done
+        ${
+          if on == {}
+          then "${systemctl} --user unset-environment POCKETNIX_SESSION_ENV"
+          else "${systemctl} --user set-environment ${lib.escapeShellArgs (lib.mapAttrsToList (n: v: "${n}=${v}") on)} POCKETNIX_SESSION_ENV=${lib.concatStringsSep "," (lib.attrNames on)}"
+        }
+      '';
     })
 
     (mkIf gui.enable {
@@ -962,32 +1211,43 @@ in {
         # profiles, from pam_env), which a unit's own PATH would replace.
         enableDefaultPath = false;
         serviceConfig = {
-          ExecStart = lib.getExe' gui.package "pocketnix-compositor";
+          ExecStart = lib.escapeShellArgs [(lib.getExe' gui.package "pocketnix-compositor") "--guest-socket" guestSocket];
           # Rescans the app list.
           ExecReload = "${pkgs.coreutils}/bin/kill -HUP $MAINPID";
           Sockets = ["pocketnix-gui.socket" "pocketnix-wayland.socket"];
         };
       };
-      # pam_env puts them in the user manager's environment too, and so in
-      # user services and D-Bus-activated apps; tabs' login shells read them
-      # from /etc/profile.
-      environment.sessionVariables = {
-        WAYLAND_DISPLAY = waylandDisplay;
-        NIXOS_OZONE_WL = "1";
+      # Started with the compositor, not by default.target: dialing the Wayland
+      # socket would socket-activate the compositor at every boot.
+      systemd.user.services.pocketnix-clipboard = {
+        description = "pocketnix clipboard between Wayland apps and Android";
+        wantedBy = ["pocketnix-compositor.service"];
+        bindsTo = ["pocketnix-compositor.service"];
+        partOf = ["pocketnix-compositor.service"];
+        after = ["pocketnix-compositor.service"];
+        path = [pkgs.wl-clipboard];
+        environment.WAYLAND_DISPLAY = waylandDisplay;
+        serviceConfig = {
+          ExecStart = "${guestExe} clipboard";
+          Restart = "on-failure";
+          RestartSec = 1;
+        };
       };
-      # A switch turning GUI on finds the user manager running: pam_env set its
-      # environment when it started, and an older switch-to-configuration starts
-      # no new user units. Every boot and switch runs this in each user's manager,
-      # and a running compositor rescans the apps the switch changed.
+      # A switch turning GUI on finds the user manager running, and an older
+      # switch-to-configuration starts no new user units. Every boot and switch
+      # runs this in each user's manager, and a running compositor rescans the
+      # apps the switch changed.
       system.userActivationScripts.pocketnix-gui = let
         systemctl = "${config.systemd.package}/bin/systemctl";
-      in ''
-        ${systemctl} --user set-environment WAYLAND_DISPLAY=${waylandDisplay} NIXOS_OZONE_WL=1
-        ${systemctl} --user start --no-block pocketnix-gui.socket pocketnix-wayland.socket
-        if ${systemctl} --user --quiet is-active pocketnix-compositor.service; then
-          ${systemctl} --user reload --no-block pocketnix-compositor.service || true
-        fi
-      '';
+      in {
+        deps = ["pocketnix-env"];
+        text = ''
+          ${systemctl} --user start --no-block pocketnix-gui.socket pocketnix-wayland.socket
+          if ${systemctl} --user --quiet is-active pocketnix-compositor.service; then
+            ${systemctl} --user reload --no-block pocketnix-compositor.service || true
+          fi
+        '';
+      };
 
       services.pipewire = {
         enable = mkDefault true;
@@ -1000,7 +1260,29 @@ in {
             actions.update-props."audio.format" = "S16LE";
           }
         ];
+        # Sound for the app's own player (the agent's audio stream); with AVF's
+        # sound device, its card outranks this sink.
+        extraConfig.pipewire.pocketnix-audio."context.modules" = [
+          {
+            name = "libpipewire-module-pipe-tunnel";
+            args = {
+              "tunnel.mode" = "sink";
+              "pipe.filename" = audioPipe;
+              # go/internal/protocol's StreamAudio format.
+              "audio.format" = "S16LE";
+              "audio.rate" = 48000;
+              "audio.channels" = 2;
+              "audio.position" = ["FL" "FR"];
+              "stream.props" = {
+                "node.name" = "pocketnix-android";
+                "node.description" = "Android";
+                "priority.session" = 100;
+              };
+            };
+          }
+        ];
       };
+      systemd.tmpfiles.rules = lib.mkIf config.services.pipewire.enable ["p ${audioPipe} 0600 ${cfg.user} - -"];
       # logind gives /dev/snd only to sessions on a seat, and the user manager
       # PipeWire runs in, tabs and the console have none.
       users.users.${cfg.user}.extraGroups = ["audio"];
@@ -1028,12 +1310,23 @@ in {
       # GTK's own loaders can't read SVG, so most icons would draw blank.
       programs.gdk-pixbuf.modulePackages = [pkgs.librsvg];
       # GTK's stock icons, image-missing too, come from a theme, which NixOS
-      # installs (with its cache) only for a desktop.
-      environment.systemPackages = [pkgs.adwaita-icon-theme];
+      # installs (with its cache) only for a desktop. wl-copy and wl-paste
+      # reach the clipboard the bridge shares with Android.
+      environment.systemPackages = [pkgs.adwaita-icon-theme pkgs.wl-clipboard];
       gtk.iconCache.enable = mkDefault true;
       # enableDefaultPackages adds CJK, unifont and freefont (~145 MiB) to this.
       fonts.packages = [pkgs.dejavu_fonts pkgs.liberation_ttf pkgs.noto-fonts-color-emoji];
     })
+
+    (mkIf cfg.gpu.enable (let
+      kernelPackages = config.boot.kernelPackages;
+      # Only the AVF kernel carries the tree to build against.
+      relinquish = lib.optional (kernelPackages.kernel ? kernelSource) (kernelPackages.callPackage ./vgpu-relinquish/package.nix {});
+    in {
+      hardware.graphics.enable = true;
+      boot.extraModulePackages = relinquish;
+      boot.kernelModules = lib.optional (relinquish != []) "vgpu_relinquish";
+    }))
 
     (mkIf cfg.integrations.xdgOpen {
       environment.systemPackages = [openDesktop];

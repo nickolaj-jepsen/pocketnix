@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -15,7 +17,6 @@ A 101 (pocketnix.debug) S 1 1 0 0 -1 0 0 0 0 0 5 5 0 0 20 0 1 0 1 1 1
 V 200 (crosvm) S 1 1 0 0 -1 0 0 0 0 0 400 100 0 0 20 0 1 0 1 1 1
 S 300 (surfaceflinger) S 1 1 0 0 -1 0 0 0 0 0 7 3 0 0 20 0 1 0 1 1 1
 P cpu  100 0 50 800 50 0 0 0 0 0
-F cpu4 1800000
 `
 	s, err := parseAndroidSample(out)
 	if err != nil {
@@ -27,8 +28,58 @@ F cpu4 1800000
 			t.Errorf("%s = %v ticks, want %v", g, s.groups[g], v)
 		}
 	}
-	if s.vm["crosvm"] != 500 || s.freqs["cpu4"] != 1800000 || s.uptime != 1000.5 {
-		t.Errorf("vm %v, freqs %v, uptime %v", s.vm, s.freqs, s.uptime)
+	if s.vm["crosvm"] != 500 || s.uptime != 1000.5 {
+		t.Errorf("vm %v, uptime %v", s.vm, s.uptime)
+	}
+}
+
+// stat is a thread's /proc stat line with the given utime and processor.
+func stat(tid int, name string, utime, cpu int) string {
+	f := make([]string, 37)
+	for i := range f {
+		f[i] = "0"
+	}
+	f[0], f[11], f[36] = "S", fmt.Sprint(utime), fmt.Sprint(cpu)
+	return fmt.Sprintf("%d (%s) %s", tid, name, strings.Join(f, " "))
+}
+
+func TestClockReportWeighsClocksByThreadTime(t *testing.T) {
+	out := strings.Join([]string{
+		"C 200 /apex/com.android.virt/bin/crosvm run --host-cpu-topology",
+		"M 200 Cpus_allowed_list:	0-8",
+		"R policy0 0 1 2 3",
+		"R policy4 4 5 6 7",
+		"T 100.0", "F policy0 500000", "F policy4 400000",
+		"S 100 " + stat(101, "gui-link", 0, 0),
+		"S 200 " + stat(201, "crosvm_vcpu 4", 0, 4),
+		"T 100.2", "F policy0 500000", "F policy4 2000000",
+		"S 100 " + stat(101, "gui-link", 2, 1),
+		"S 200 " + stat(201, "crosvm_vcpu 4", 10, 5),
+		"T 100.4", "F policy0 1000000", "F policy4 1000000",
+		"S 100 " + stat(101, "gui-link", 4, 2),
+		"S 200 " + stat(201, "crosvm_vcpu 4", 15, 1),
+		"T 100.6", "F policy0 1000000",
+	}, "\n")
+	r := clockReport(out)
+	// 10 ticks at 2000 MHz on policy4, then 5 at 1000 on policy0.
+	if mhz := num(dig(r, "vm", "mhz")); math.Abs(mhz-1666.7) > 0.1 {
+		t.Errorf("vm at %v MHz, want 1666.7", mhz)
+	}
+	if p := num(dig(r, "vm", "policyPct", "policy4")); math.Abs(p-66.7) > 0.1 {
+		t.Errorf("vm on policy4 %v%%, want 66.7", p)
+	}
+	if mhz := num(dig(r, "gui-link", "mhz")); mhz != 750 {
+		t.Errorf("gui-link at %v MHz, want 750", mhz)
+	}
+	if dig(r, "vcpus", "crosvm_vcpu 4") == nil {
+		t.Errorf("no vcpu thread in %v", r["vcpus"])
+	}
+	// The cut-off last sample is dropped.
+	if n := r["samples"]; n != 3 {
+		t.Errorf("%v samples, want 3", n)
+	}
+	if max := num(dig(r, "policies", "policy0", "mhzMax")); max != 1000 {
+		t.Errorf("policy0 max %v MHz", max)
 	}
 }
 
@@ -97,5 +148,23 @@ func TestReportTakesTheMedianRunPerWorkload(t *testing.T) {
 	}
 	if _, err := benchReport(dir, dir); err != nil {
 		t.Errorf("report against itself: %v", err)
+	}
+}
+
+func TestReportNotesWhatThePhonesVMRanWith(t *testing.T) {
+	dir := t.TempDir()
+	for i, ram := range []bool{true, false} {
+		r := map[string]any{"workload": "noise", "client": map[string]any{"fps": 30.0, "seconds": 10.0}, "app": map[string]any{"guestRam": ram, "gpu": "2d"}}
+		b, _ := json.Marshal(r)
+		os.WriteFile(filepath.Join(dir, "01-noise-"+string(rune('1'+i))+".json"), b, 0o644)
+	}
+	runs, err := loadRuns(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, note := range []string{"guestRam=true", "guestRam=false", "gpu=2d"} {
+		if !runs[0].notes[note] {
+			t.Errorf("no note %q in %v", note, runs[0].notes)
+		}
 	}
 }

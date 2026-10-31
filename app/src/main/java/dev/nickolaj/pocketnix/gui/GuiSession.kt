@@ -42,7 +42,7 @@ import org.json.JSONObject
 class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listener {
     // Guards the state and the renderers; the link's thread, the render thread and the main thread take it.
     private val lock = Any()
-    private val state = GuiState(GuiNative)
+    private val state = GuiState()
     private val link = GuiLink(appVersion, this)
 
     /** The guest's app list and icons, kept for when the VM is off. */
@@ -214,8 +214,8 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         when (msg) {
             is GuiMessage.Group -> {
                 val start = System.nanoTime()
-                // Decompressing is the slow part, and needs no state: keep it out of the lock.
-                val g = GuiMessage.Group(msg.commits.map { it.unpacked(GuiNative) })
+                // Decoding is the slow part, and needs no state: keep it out of the lock.
+                val g = GuiMessage.Group(msg.commits.map { c -> c.unpacked(GuiNative) { link.send(Gui.released(it)) } })
                 val unpacked = System.nanoTime()
                 synchronized(lock) {
                     val locked = System.nanoTime()
@@ -233,7 +233,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                 GuiStats.add("wireBytes", msg.commits.sumOf { it.data.size.toLong() })
                 GuiStats.add("pixelBytes", msg.commits.filter { it.buffer }.sumOf { it.pixelBytes })
                 GuiStats.record("groupWork", work)
-                hints.report(work, frameNs)
+                hints.report(work, frameNs, GuiNative.unpackTids())
             }
 
             is GuiMessage.Toplevel -> {
@@ -678,10 +678,10 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
     }
 
     /** Window [id]'s geometry in window pixels, larger than its view when the client's minimum is. */
-    internal fun contentSize(id: Int): Pair<Int, Int> = synchronized(lock) { state.windows[id]?.toplevel }?.let { it.width to it.height } ?: (0 to 0)
+    internal fun contentSize(id: Int): Pair<Int, Int> = inputRead { state.windows[id]?.toplevel }?.let { it.width to it.height } ?: (0 to 0)
 
     /** The id window [id]'s settings go by: its app-list entry's, else its app id; "" for neither. */
-    fun appKey(id: Int): String = appKey(synchronized(lock) { state.windows[id]?.toplevel })
+    fun appKey(id: Int): String = appKey(inputRead { state.windows[id]?.toplevel })
 
     private fun appKey(t: GuiMessage.Toplevel?): String = t?.app?.ifEmpty { t.appId }.orEmpty()
 
@@ -694,7 +694,17 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
     }
 
     /** Whether window [id]'s client has a wl_touch, so Touch mode can reach it. */
-    fun hasTouch(id: Int): Boolean = synchronized(lock) { state.windows[id]?.toplevel?.touch } == true
+    fun hasTouch(id: Int): Boolean = inputRead { state.windows[id]?.toplevel?.touch } == true
+
+    /** [block] under the session's lock; on the main thread, which input waits on, the wait is recorded as `mainLockWait`. */
+    private inline fun <T> inputRead(block: () -> T): T {
+        if (!Looper.getMainLooper().isCurrentThread) return synchronized(lock, block)
+        val asked = System.nanoTime()
+        return synchronized(lock) {
+            GuiStats.record("mainLockWait", System.nanoTime() - asked)
+            block()
+        }
+    }
 
     /** What shows window [id], for its menu's zoom items; null while nothing does. */
     fun surfaceOf(id: Int): WindowSurface? = views[id]?.host?.surface

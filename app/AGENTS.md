@@ -14,18 +14,24 @@ that cross directories.
   reach them by reflection with in-process HiddenApiBypass. Its
   `GpuConfig.Builder` takes boxed `Boolean`s on GrapheneOS 17, so a
   `boolean.class` lookup throws (`AvfReflect.set` tries both).
-- A third-party VM can have the phone's GPU, but nothing yet composites on it.
-  `GpuConfig(backend=gfxstream, vulkan=true, egl=false, gles=false, glx=false,
-  surfaceless=true, context-types=[gfxstream-vulkan, gfxstream-composer])`
-  (the Terminal app's own config) reaches crosvm as `--gpu=…`, and the guest's Mesa gfxstream ICD then runs
-  `vulkaninfo` against the real GPU ("Virtio-GPU GFXStream (Mali-G715)").
-  Leaving `egl`/`gles` unset is not equivalent: virtmgr defaults them true and
-  the guest's ASG stream then dies on `mmap64: Invalid argument`. Two blockers
-  stop a compositor anyway: the ICD lacks `VK_EXT_physical_device_drm`
-  (wlroots' Vulkan renderer refuses the device) and zink needs robustness2's
-  `nullDescriptor` (also absent). `backend=virglrenderer` answers "No virgl
-  contexts available on host", and adding `venus` panics crosvm's `v_gpu`
-  thread (SIGABRT).
+- A third-party VM gets the phone's GPU through gfxstream (`AvfReflect.GPU_GFXSTREAM`),
+  but the Pixel's android14-6.1 pKVM unmaps nothing from a running VM: deleting
+  a memslot is EPERM, and a guest page stays on the host page it first
+  faulted on. With crosvm's default per-blob memslots the first GPU context
+  after boot works and every later one fails (crosvm: `ResourceUnmapBlob:
+  ErrUnspec`, then `File exists`; the guest: `mmap64 failed with (Invalid
+  argument)`). `fixed-blob-mapping=true` registers the window once,
+  `system-blob=true` gives Vulkan memory the shm fd that needs (pKVM 6.1 also
+  maps only swap-backed pages), and the guest's `vgpu_relinquish` drops the
+  stale pages. GpuConfig has no field for either option; virtmgr pastes
+  `backend` into `--gpu=` unchecked. android15-6.6 and later appear to
+  restrict only protected VMs (read from kernel source, not tried on a device).
+- crosvm and gfxstream log to logcat (tags `crosvm`, `GFXSTREAM`).
+- zink refuses gfxstream: let `VK_EXT_robustness2` through the guest ICD's
+  allowlist (Mesa 26.3 does) and `nullDescriptor` still reads false in the
+  guest, though the Mali driver has it. `backend=virglrenderer` answers "No
+  virgl contexts available on host", and adding `venus` panics crosvm's
+  `v_gpu` thread (SIGABRT).
 - Only the display *surface* handoff is sealed to `vmlauncher_app` (sepolicy),
   which is why the guest gets a render node but no scanout. GrapheneOS's own
   Terminal app is not a better reference: its `GraphicsManager` offers only
@@ -40,6 +46,27 @@ that cross directories.
 - An app can't `FIONREAD` a vsock fd, so `available()` on its stream throws,
   and a `BufferedInputStream` calls it after every short read: big PTY output
   and forwards died. `AgentLink`'s buffer hides it; TCP tests can't catch it.
+- The Java config never sets several `VirtualMachineRawConfig` fields
+  (`customMemoryBackingFiles`, `boostUclamp`); `AvfReflect.editRawConfig`
+  reaches them through the binder `VirtualMachine.run` uses.
+- crosvm maps app-made memory as guest RAM (`--file-backed-mapping …,ram`), as
+  a memory region of its own: a virtio buffer across its edge kills the device
+  ("invalid descriptor chain memory regions"), and u-boot's kernel load
+  straddles a range at the top of RAM. Only all of RAM, from `0x8000_0000`,
+  has no edge.
+- AVF's sound device (`crosvm_vu_snd`, vhost-user) must map guest RAM, and
+  sepolicy denies it the app's descriptor (`avc: denied { use }`): it dies and
+  the VM with it. App-made guest RAM and the AVF speaker exclude each other.
+- The balloon's free-page reporting fails on app-made (ashmem) guest RAM
+  ("failed to handle the inflate balloon event … I/O error"), so with it the
+  guest keeps the memory it touched.
+- The host refuses crosvm's own `sched_setattr` and `sched_setaffinity` for
+  its vCPUs ("Failed to boost vcpu util", "Failed to set CPU affinity":
+  EPERM), so `--host-cpu-topology`'s pinning and `boostUclamp` do nothing; the
+  vCPUs run anywhere, often on little cores. The app can't reach crosvm's
+  threads either.
+- `SharedMemory.create` takes an `Int` size and hides its descriptor; the
+  NDK's `ASharedMemory_create` takes a `size_t`.
 - The app's vsock fds carry virtmgr's label
   (`untrusted_app_all_virtualizationmanager`), and sepolicy denies the app
   `setopt` and `shutdown` on them: `SO_VM_SOCKETS_BUFFER_SIZE` can't be

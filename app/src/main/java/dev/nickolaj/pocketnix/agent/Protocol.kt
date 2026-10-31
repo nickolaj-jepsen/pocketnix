@@ -107,7 +107,13 @@ data class GuestConfig(
     val theme: Theme,
     val snippets: List<Snippet> = emptyList(),
     /** Null from an agent without GUI support. */
-    val gui: GuiConfig? = null
+    val gui: GuiConfig? = null,
+    /** The flake of a guest the app manages, or null. */
+    val managedFlake: String? = null,
+    /** The module asks for the phone's GPU from the VM's next start. */
+    val gpu: Boolean = false,
+    /** The agent serves the `audio` stream (go/internal/protocol's Config.Audio). */
+    val audio: Boolean = false
 ) {
     companion object {
         fun parse(json: String): GuestConfig = parse(JSONObject(json))
@@ -141,7 +147,10 @@ data class GuestConfig(
                 snippets = t.optJSONArray("snippets").objects().map {
                     Snippet(it.getString("name"), it.getString("command"), it.optBoolean("submit"))
                 },
-                gui = o.optJSONObject("gui")?.let(GuiConfig::parse)
+                gui = o.optJSONObject("gui")?.let(GuiConfig::parse),
+                managedFlake = o.optJSONObject("managed")?.optStringOrNull("flake"),
+                gpu = o.optBoolean("gpu"),
+                audio = o.optBoolean("audio")
             )
         }
     }
@@ -173,7 +182,14 @@ data class Updates(
     val error: String?,
     val log: List<String>,
     /** Newest first. */
-    val generations: List<Generation>
+    val generations: List<Generation>,
+    /** What applying [available] costs; the local source only. */
+    val plan: Plan? = null,
+    /** What the last operation stopped short of building; repeat it allowing builds to go on. */
+    val blocked: Plan? = null,
+    /** The nixpkgs attributes in a managed guest's user profile. */
+    val packages: List<String> = emptyList(),
+    val run: RunResult? = null
 ) {
     val busy: Boolean get() = state != "idle"
 
@@ -201,10 +217,53 @@ data class Updates(
                     current = it.optBoolean("current"),
                     booted = it.optBoolean("booted")
                 )
+            },
+            plan = o.optJSONObject("plan")?.let(Plan::parse),
+            blocked = o.optJSONObject("blocked")?.let(Plan::parse),
+            packages = o.optJSONArray("packages").strings(),
+            run = o.optJSONObject("run")?.let {
+                RunResult(it.getString("package"), it.optJSONArray("apps").strings(), it.optStringOrNull("command"))
             }
         )
     }
 }
+
+/** The guest's listeners the app may offer to forward (go/internal/protocol PortListeners). */
+data class PortListeners(
+    /** Allowed forwards bind 0.0.0.0, not 127.0.0.1. */
+    val lan: Boolean,
+    /** Guest ports, ascending, at most [MAX_PORTS]. */
+    val ports: List<Int>
+) {
+    companion object {
+        const val TYPE = "port-listeners"
+
+        /** Each port is a notification and a bind probe; go/internal/protocol's MaxPortListeners is the agent's side. */
+        const val MAX_PORTS = 32
+
+        /** Null for anything but a well-formed port-listeners message; never throws. */
+        fun parse(line: String): PortListeners? = runCatching { JSONObject(line) }.getOrNull()?.let(::parse)
+
+        fun parse(o: JSONObject): PortListeners? {
+            if (o.optString("type") != TYPE) return null
+            val a = o.optJSONArray("ports") ?: return null
+            val ports = (0 until a.length()).map { i ->
+                (a.opt(i) as? Int)?.takeIf { it in 1..65535 } ?: return null
+            }
+            return PortListeners(o.optBoolean("lan"), ports.sorted().distinct().take(MAX_PORTS))
+        }
+    }
+}
+
+/** What realising a system or package costs: bytes to download, and the packages it would compile on the phone. */
+data class Plan(val download: Long, val builds: List<String>) {
+    companion object {
+        fun parse(o: JSONObject) = Plan(o.optLong("download"), o.optJSONArray("builds").strings())
+    }
+}
+
+/** How to start what a run request fetched: launch one of [apps], or else run [command] in a tab. */
+data class RunResult(val pkg: String, val apps: List<String>, val command: String?)
 
 private fun JSONArray?.strings(): List<String> = if (this == null) emptyList() else (0 until length()).map { getString(it) }
 

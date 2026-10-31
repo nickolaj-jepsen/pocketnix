@@ -7,6 +7,7 @@
     <string name="guest_low_channel">Guest notifications, low urgency</string>
     <string name="guest_critical_channel">Guest notifications, critical</string>
     <string name="share_label">Send to pocketnix</string>
+    <string name="forward_offers_channel">Port forward offers</string>
     <string name="gui_channel">Guest windows</string>
     <string name="gui_launcher">pocketnix apps</string>
 </resources>

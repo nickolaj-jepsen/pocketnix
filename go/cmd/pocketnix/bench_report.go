@@ -138,6 +138,11 @@ func runMetrics(r map[string]any) map[string]float64 {
 		"takeMs":      per(comp("takeBufferNs"), comp("buffersTaken")) / 1e6,
 		"packMs":      per(comp("packNs"), groups) / 1e6,
 		"compressMs":  per(comp("compressNs"), groups) / 1e6,
+		"shardMaxMs":  per(comp("compressShardMaxNs"), groups) / 1e6,
+		"shardSumMs":  per(comp("compressShardNs"), groups) / 1e6,
+		"vmMHz":       num(dig(r, "android", "clocks", "vm", "mhz")),
+		"linkMHz":     num(dig(r, "android", "clocks", "gui-link", "mhz")),
+		"unpackMHz":   num(dig(r, "android", "clocks", "gui-unpack", "mhz")),
 		"present50":   quantileMs(dig(r, "client", "sources", "compositor", "histograms", "sentToPresented"), 0.5),
 		"wireMBs":     per(comp("bytesSent"), secs) / 1e6,
 		"compPct":     num(c("guest", "procPctOfOne", "compositor")),
@@ -153,6 +158,7 @@ func runMetrics(r map[string]any) map[string]float64 {
 		"bufferH":     num(c("window", "bufferHeight")),
 		"appInput50":  quantileMs(dig(r, "app", "histograms", "inputToCommitted"), 0.5),
 		"appCommit50": quantileMs(dig(r, "app", "histograms", "applyToCommitted"), 0.5),
+		"mainLock95":  quantileMs(dig(r, "app", "histograms", "mainLockWait"), 0.95),
 	}
 	// The app's work a group, or the sink's on the desktop.
 	if app, ok := dig(r, "app", "counters").(map[string]any); ok {
@@ -167,6 +173,11 @@ func runMetrics(r map[string]any) map[string]float64 {
 		m["decodeMs"] = per(num(sink["decodeNs"]), n) / 1e6
 		m["copyMs"] = per(num(sink["applyNs"]), n) / 1e6
 		m["fenceMs"] = math.NaN()
+	}
+	if shares, ok := dig(r, "android", "clocks", "vm", "policyPct").(map[string]any); ok {
+		for policy, pct := range shares {
+			m["vmPct:"+policy] = num(pct)
+		}
 	}
 	if b, _ := dig(r, "android", "after", "charging").(bool); b {
 		m["powerMw"] = math.NaN()
@@ -211,6 +222,13 @@ func loadRuns(dir string) ([]*workloadRuns, error) {
 		}
 		if b, _ := dig(r, "android", "after", "charging").(bool); b {
 			w.notes["charging: no power figure"] = true
+		}
+		// What the app's VM ran with; runs that differ get a note each.
+		if v, ok := dig(r, "app", "guestRam").(bool); ok {
+			w.notes[fmt.Sprintf("guestRam=%t", v)] = true
+		}
+		if v, ok := dig(r, "app", "gpu").(string); ok {
+			w.notes["gpu="+v] = true
 		}
 	}
 	if len(order) == 0 {
@@ -276,14 +294,32 @@ func benchReport(dir, baseline string) (string, error) {
 	t.Flush()
 	fmt.Fprintf(&sb, "\nstages, ms a frame (compositor: take = shm copy and scroll detection per buffer, pack, compress; app: decode, buffer copy, fence wait), and latencies in ms\n\n")
 	t = tabwriter.NewWriter(&sb, 0, 0, 2, ' ', tabwriter.AlignRight)
-	fmt.Fprintln(t, "workload\ttake\tpack\tcompress\tdecode\tcopy\tfence\tsent→presented p50\tSF commit p50\tapp input→shown p50\t")
+	fmt.Fprintln(t, "workload\ttake\tpack\tcompress\tslowest shard\tall shards\tdecode\tcopy\tfence\tsent→presented p50\tSF commit p50\tapp input→shown p50\tmain thread's lock wait p95\t")
 	for _, w := range runs {
-		fmt.Fprintf(t, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\n", w.name,
+		fmt.Fprintf(t, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t\n", w.name,
 			f1(w.median("takeMs")), f1(w.median("packMs")), f1(w.median("compressMs")),
+			f1(w.median("shardMaxMs")), f1(w.median("shardSumMs")),
 			f1(w.median("decodeMs")), f1(w.median("copyMs")), f1(w.median("fenceMs")),
-			f1(w.median("present50")), f1(w.median("appCommit50")), f1(w.median("appInput50")))
+			f1(w.median("present50")), f1(w.median("appCommit50")), f1(w.median("appInput50")), f2(w.median("mainLock95")))
 	}
 	t.Flush()
+	if policies := vmPolicies(runs); len(policies) > 0 {
+		fmt.Fprintf(&sb, "\nclocks over the run: MHz the threads ran at, weighted by their CPU time, and the VM's time per cpufreq policy\n\n")
+		t = tabwriter.NewWriter(&sb, 0, 0, 2, ' ', tabwriter.AlignRight)
+		fmt.Fprint(t, "workload\tvm MHz\tgui-link MHz\tgui-unpack MHz\t")
+		for _, p := range policies {
+			fmt.Fprintf(t, "vm %% %s\t", p)
+		}
+		fmt.Fprintln(t)
+		for _, w := range runs {
+			fmt.Fprintf(t, "%s\t%s\t%s\t%s\t", w.name, f1(w.median("vmMHz")), f1(w.median("linkMHz")), f1(w.median("unpackMHz")))
+			for _, p := range policies {
+				fmt.Fprintf(t, "%s\t", f1(w.median("vmPct:"+p)))
+			}
+			fmt.Fprintln(t)
+		}
+		t.Flush()
+	}
 	for _, w := range runs {
 		var notes []string
 		for n := range w.notes {
@@ -331,6 +367,26 @@ func benchReport(dir, baseline string) (string, error) {
 	}
 	sb.WriteString("\n")
 	return sb.String(), nil
+}
+
+// vmPolicies are the cpufreq policies any run reports the VM's time on.
+func vmPolicies(runs []*workloadRuns) []string {
+	seen := map[string]bool{}
+	for _, w := range runs {
+		for _, r := range w.runs {
+			for k := range r {
+				if p, ok := strings.CutPrefix(k, "vmPct:"); ok {
+					seen[p] = true
+				}
+			}
+		}
+	}
+	var out []string
+	for p := range seen {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func change(was, now float64) string {

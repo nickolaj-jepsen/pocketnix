@@ -25,19 +25,17 @@ type androidSample struct {
 	vm     map[string]float64
 	busy   float64
 	idle   float64
-	freqs  map[string]int
 }
 
 // sampleScript prints one tagged line per thing measured: U uptime, A an
 // app thread's stat, V a VM process's stat, S surfaceflinger's, P the
-// phone's CPU line, F each CPU's clock.
+// phone's CPU line.
 func sampleScript(pkg string) string {
 	return `pid=$(pidof ` + pkg + `); uid=$(stat -c %u /proc/$pid); echo "U $(cat /proc/uptime)";
 for t in /proc/$pid/task/*; do echo "A $(cat $t/stat)"; done;
 ps -A -o PID=,UID= | while read p u; do [ "$u" = "$uid" ] && [ "$p" != "$pid" ] && echo "V $(cat /proc/$p/stat)"; done;
 for p in $(pidof surfaceflinger); do echo "S $(cat /proc/$p/stat)"; done;
-echo "P $(head -1 /proc/stat)";
-for c in /sys/devices/system/cpu/cpu[0-9]*; do echo "F ${c##*/} $(cat $c/cpufreq/scaling_cur_freq 2>/dev/null)"; done`
+echo "P $(head -1 /proc/stat)"`
 }
 
 func (p *phone) sample() (androidSample, error) {
@@ -52,7 +50,7 @@ func (p *phone) sample() (androidSample, error) {
 var appThreads = map[string]bool{"gui-link": true, "gui-render": true, "gui-writer": true, "RenderThread": true}
 
 func parseAndroidSample(out string) (androidSample, error) {
-	s := androidSample{groups: map[string]float64{}, vm: map[string]float64{}, freqs: map[string]int{}}
+	s := androidSample{groups: map[string]float64{}, vm: map[string]float64{}}
 	for _, line := range strings.Split(out, "\n") {
 		tag, rest, ok := strings.Cut(strings.TrimSpace(line), " ")
 		if !ok {
@@ -95,11 +93,6 @@ func parseAndroidSample(out string) (androidSample, error) {
 			// cpu user nice system idle iowait irq softirq
 			s.busy = v(1) + v(2) + v(3) + v(6) + v(7)
 			s.idle = v(4) + v(5)
-		case "F":
-			f := strings.Fields(rest)
-			if len(f) == 2 {
-				s.freqs[f[0]], _ = strconv.Atoi(f[1])
-			}
 		}
 	}
 	if s.uptime == 0 {

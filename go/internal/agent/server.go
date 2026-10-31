@@ -43,6 +43,8 @@ type Server struct {
 	clipboard string
 	notes     notifications
 	transfers transfers
+	// clipWatchers are the guest connections following the clipboard.
+	clipWatchers clipWatchers
 
 	// HostFile is where the phone's state goes as JSON; empty writes none.
 	HostFile string
@@ -52,6 +54,14 @@ type Server struct {
 	host      hostTracker
 	wakes     wakeTracker
 	hostfs    hostFolders
+
+	// PortPoll is how often the port watcher polls /proc without hints;
+	// zero is PortPollInterval.
+	PortPoll time.Duration
+	// ProcNet holds the tcp and tcp6 tables the port watcher reads; empty
+	// is /proc/net.
+	ProcNet string
+	ports   portWatch
 }
 
 // New loads the config file at path.
@@ -64,6 +74,7 @@ func New(path string) (*Server, error) {
 	s.Updates.Configure(cfg.Updates)
 	s.Updates.Changed = func() { s.pushLatest(func() any { return s.Updates.State() }) }
 	s.Updates.Offline = s.knownOffline
+	s.portsConfigured()
 	return s, nil
 }
 
@@ -80,6 +91,7 @@ func (s *Server) Reload() error {
 	s.pushLatest(func() any { return configMessage(s.config()) })
 	s.Updates.Configure(cfg.Updates)
 	s.wakeChanged()
+	s.portsConfigured()
 	return nil
 }
 
@@ -90,7 +102,7 @@ func (s *Server) push(msg any) {
 
 // pushLatest sends msg() to every control stream, called with the stream's
 // writer held: a stream that just opened has its snapshot out first, and
-// what follows it is never older.
+// what follows it is never older. A nil msg() sends nothing.
 func (s *Server) pushLatest(msg func() any) {
 	s.mu.Lock()
 	controls := make([]*lockedWriter, 0, len(s.controls))
@@ -100,7 +112,10 @@ func (s *Server) pushLatest(msg func() any) {
 	s.mu.Unlock()
 	for _, w := range controls {
 		w.mu.Lock()
-		err := protocol.WriteJSON(unlocked{w}, msg())
+		var err error
+		if m := msg(); m != nil {
+			err = protocol.WriteJSON(unlocked{w}, m)
+		}
 		w.mu.Unlock()
 		if err != nil {
 			log.Printf("push: %v", err)
@@ -117,14 +132,20 @@ func (s *Server) config() *File {
 func configMessage(f *File) protocol.Config {
 	c := f.Config
 	c.Type = protocol.TypeConfig
+	c.Audio = f.AudioPipe != ""
 	if c.Hostname == "" {
 		c.Hostname, _ = os.Hostname()
 	}
 	return c
 }
 
-// Serve accepts connections on l until it fails.
+// Serve accepts connections on l until it fails. A TCP l's port is never
+// offered for forwarding.
 func (s *Server) Serve(l net.Listener) error {
+	if a, ok := l.Addr().(*net.TCPAddr); ok {
+		s.ownPort(a.Port, 1)
+		defer s.ownPort(a.Port, -1)
+	}
 	for {
 		c, err := l.Accept()
 		if err != nil {
@@ -169,6 +190,8 @@ func (s *Server) handle(c net.Conn) {
 		s.serveFont(c)
 	case protocol.StreamGUI:
 		s.serveGUI(c)
+	case protocol.StreamAudio:
+		s.serveAudio(c)
 	case protocol.StreamFile:
 		s.serveFile(c, hello)
 	case protocol.StreamShare:
@@ -253,6 +276,9 @@ func (s *Server) serveControl(c net.Conn) {
 	if err == nil {
 		err = protocol.WriteJSON(unlocked{w}, s.wake())
 	}
+	if p, ok := s.portSnapshot(); ok && err == nil {
+		err = protocol.WriteJSON(unlocked{w}, p)
+	}
 	w.mu.Unlock()
 	if err != nil {
 		return
@@ -306,9 +332,26 @@ func (s *Server) request(req protocol.Request) (any, error) {
 	case protocol.TypeUpdates:
 		return s.Updates.State(), nil
 	case protocol.TypeUpdateCheck:
-		return ack, s.Updates.Check()
+		return ack, s.Updates.Check(Options{Pin: req.Pin})
 	case protocol.TypeUpdateApply:
-		return ack, s.Updates.Apply()
+		return ack, s.Updates.Apply(Options{Pin: req.Pin, AllowBuilds: req.AllowBuilds})
+	case protocol.TypeSelections:
+		changed := false
+		if req.Selections != nil {
+			var err error
+			if changed, err = s.Updates.WriteSelections(*req.Selections); err != nil {
+				return nil, err
+			}
+		}
+		sel, err := s.Updates.ReadSelections()
+		sel.Changed = changed
+		return sel, err
+	case protocol.TypePackageAdd:
+		return ack, s.Updates.AddPackages(req.Packages, req.AllowBuilds)
+	case protocol.TypePackageRemove:
+		return ack, s.Updates.RemovePackages(req.Packages)
+	case protocol.TypeRun:
+		return ack, s.Updates.Run(req.Package, req.AllowBuilds)
 	case protocol.TypeUpdateCancel:
 		return ack, s.Updates.Cancel()
 	case protocol.TypeSwitchGeneration:
@@ -317,11 +360,12 @@ func (s *Server) request(req protocol.Request) (any, error) {
 		entries, err := history(s.config(), req.Limit)
 		return protocol.History{Type: protocol.TypeHistory, Entries: entries}, err
 	case protocol.TypeSetClipboard:
-		if len(req.Text) > maxClipboard {
-			return nil, fmt.Errorf("clipboard text over %d KiB", maxClipboard>>10)
+		if len(req.Text) > protocol.MaxClipboardText {
+			return nil, fmt.Errorf("clipboard text over %d KiB", protocol.MaxClipboardText>>10)
 		}
 		s.setClipboard(req.Text)
-		s.setClipboardTypes(req.Types, req.Text)
+		s.setClipboardTypes(req.Types, req.Text, false)
+		s.publishClipboard()
 		return ack, nil
 	case protocol.TypeShareText:
 		p, err := s.shareText(req.Text)
@@ -332,6 +376,8 @@ func (s *Server) request(req protocol.Request) (any, error) {
 		return ack, s.guestDone(req)
 	case protocol.TypeHostFolders:
 		return ack, s.applyHostFolders(req.Folders)
+	case protocol.TypeResolvePath:
+		return s.resolvePath(req.Path)
 	default:
 		// Answered, so a newer app's later requests still pair with their replies.
 		return nil, fmt.Errorf("unknown request %q", req.Type)
@@ -354,7 +400,19 @@ func (s *Server) serveForward(c net.Conn, port int) {
 		reject(c, fmt.Sprintf("port %d out of range", port))
 		return
 	}
+	if !moduleForward(s.config().Forwards, port) {
+		if err := s.sessionListener(port); err != nil {
+			reject(c, err.Error())
+			return
+		}
+	}
 	t, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 10*time.Second)
+	// A server for "localhost" may listen on ::1 alone (Node, Vite).
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		if t6, err6 := net.DialTimeout("tcp", net.JoinHostPort("::1", strconv.Itoa(port)), 10*time.Second); err6 == nil {
+			t, err = t6, nil
+		}
+	}
 	if err != nil {
 		reject(c, err.Error())
 		return

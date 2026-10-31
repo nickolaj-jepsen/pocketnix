@@ -170,6 +170,42 @@ class GuiReaderTest {
     }
 
     @Test
+    fun readsPagesCommitsFromGuestRam() {
+        val content = pixels(48 * 32 * 4)
+        // The content's two pages, the second one first in guest RAM.
+        val ram = ByteArray(3 * Gui.GUEST_PAGE)
+        System.arraycopy(content, 0, ram, 2 * Gui.GUEST_PAGE, Gui.GUEST_PAGE)
+        System.arraycopy(content, Gui.GUEST_PAGE, ram, 0, content.size - Gui.GUEST_PAGE)
+        val base = 0x8000_0000L
+        val f = CompositorFrames().commit(
+            4, 4, 48, 32, listOf(intArrayOf(0, 0, 48, 32)), content, Gui.FLAG_BUFFER or Gui.FLAG_FULL,
+            encoded = pageList(base + 2 * Gui.GUEST_PAGE, base), encoding = Gui.ENCODING_PAGES
+        )
+        val c = (read(f).single() as GuiMessage.Group).commits.single()
+        val released = mutableListOf<Int>()
+        assertArrayEquals(content, c.unpacked(ArrayGuestRam(base, ram)) { released += it }.data.copyOf(content.size))
+        assertEquals("its slot goes back once copied", listOf(c.seq), released)
+    }
+
+    @Test
+    fun rejectsAPageListOfTheWrongLength() = assertViolation(
+        CompositorFrames().commit(
+            4, 4, 48, 32, listOf(intArrayOf(0, 0, 48, 32)), pixels(48 * 32 * 4), Gui.FLAG_BUFFER or Gui.FLAG_FULL,
+            encoded = pageList(0x8000_0000L), encoding = Gui.ENCODING_PAGES
+        )
+    )
+
+    @Test
+    fun pagesNeedGuestRam() {
+        val f = CompositorFrames().commit(
+            4, 4, 1, 1, listOf(intArrayOf(0, 0, 1, 1)), pixels(4), Gui.FLAG_BUFFER or Gui.FLAG_FULL,
+            encoded = pageList(0x8000_0000L), encoding = Gui.ENCODING_PAGES
+        )
+        val c = (read(f).single() as GuiMessage.Group).commits.single()
+        assertThrows(GuiProtocolException::class.java) { c.unpacked(JavaUnpacker) {} }
+    }
+
+    @Test
     fun endsCleanlyAtAFrameBoundary() {
         assertNull(GuiReader(ByteArrayInputStream(ByteArray(0))).next())
     }

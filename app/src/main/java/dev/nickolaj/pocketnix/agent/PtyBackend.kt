@@ -7,11 +7,12 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** A terminal tab: one PTY stream to the agent, running [profile] (null for the default). */
+/** A terminal tab: one PTY stream to the agent, running [profile] (null for the default), or [command] in its login shell. */
 class PtyBackend(
     private val dialer: AgentDialer,
     private val profile: String?,
-    private val appVersion: String
+    private val appVersion: String,
+    private val command: String? = null
 ) : TerminalBackend {
     @Volatile private var stream: AgentStream? = null
     private val connected = CountDownLatch(1)
@@ -38,6 +39,7 @@ class PtyBackend(
             val (s, hello) = dialer.open(
                 Protocol.hello("pty", appVersion) {
                     profile?.let { put("profile", it) }
+                    command?.let { put("command", it) }
                     put("rows", rows)
                     put("cols", columns)
                 }

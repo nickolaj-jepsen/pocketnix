@@ -2,6 +2,7 @@ package dev.nickolaj.pocketnix.gui
 
 import android.annotation.SuppressLint
 import android.app.ActivityManager
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -29,7 +30,9 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
@@ -176,13 +179,15 @@ class GuiWindowActivity :
         val typingRow: (@Composable () -> Unit)? = if (typing) {
             {
                 modifierRevision.let {}
-                ExtraKeysBar(
-                    rows = extraKeyRows(config),
-                    modifiers = s.ime.modifiers,
-                    revision = modifierRevision,
-                    foreground = BAR_TEXT,
-                    onKey = s.ime::extraKey
-                )
+                // The bar is dark whatever the system theme.
+                CompositionLocalProvider(LocalContentColor provides BAR_TEXT) {
+                    ExtraKeysBar(
+                        rows = extraKeyRows(config),
+                        modifiers = s.ime.modifiers,
+                        revision = modifierRevision,
+                        onKey = s.ime::extraKey
+                    )
+                }
             }
         } else {
             null
@@ -306,8 +311,8 @@ class GuiWindowActivity :
         val name = vm.gui.catalog.app(l.app)?.label ?: l.app
         watch?.cancel()
         watch = scope.launch {
-            val vmFlows = combine(vm.state, vm.control.link, vm.agentLate, vm.config, vm.gui.ready) { s, link, late, cfg, ready ->
-                { ls: LaunchState -> splashStatus(name, s, link, late, cfg?.gui?.enable, ready, ls) }
+            val vmFlows = combine(vm.phase, vm.config, vm.gui.ready) { phase, cfg, ready ->
+                { ls: LaunchState -> splashStatus(name, phase, cfg?.gui?.enable, ready, ls, managed = cfg?.managedFlake != null) }
             }
             combine(vmFlows, l.state) { status, ls -> status(ls) to ls }.collect { (status, ls) ->
                 when (ls) {
@@ -373,6 +378,8 @@ class GuiWindowActivity :
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        // Android lets an app read the clipboard only while it has focus.
+        if (hasFocus) getSystemService(ClipboardManager::class.java)?.primaryClip?.takeIf { it.itemCount > 0 }?.let(vm::syncClipboard)
         // Kept on a splash too: the window it becomes has the focus it had.
         focused = hasFocus
         val s = surface ?: return

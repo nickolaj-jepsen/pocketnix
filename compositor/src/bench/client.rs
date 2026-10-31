@@ -72,6 +72,7 @@ enum Mode {
     Rect,
     Idle,
     Touch,
+    Video,
 }
 
 struct Opts {
@@ -82,6 +83,7 @@ struct Opts {
     res: f64,
     scroll: u32,
     rect: u32,
+    full_damage: bool,
     fullscreen: bool,
     timeout: f64,
     stats: Vec<(String, PathBuf)>,
@@ -96,6 +98,7 @@ fn parse(args: &[String]) -> Result<Opts> {
         res: 1.0,
         scroll: 8,
         rect: 64,
+        full_damage: false,
         fullscreen: false,
         timeout: 60.0,
         stats: Vec::new(),
@@ -112,6 +115,7 @@ fn parse(args: &[String]) -> Result<Opts> {
                     "rect" => Mode::Rect,
                     "idle" => Mode::Idle,
                     "touch" => Mode::Touch,
+                    "video" => Mode::Video,
                     m => bail!("unknown mode {m:?}"),
                 }
             }
@@ -121,6 +125,7 @@ fn parse(args: &[String]) -> Result<Opts> {
             "--res" => o.res = parsed(&mut it, arg)?,
             "--scroll" => o.scroll = parsed(&mut it, arg)?,
             "--rect" => o.rect = parsed(&mut it, arg)?,
+            "--full-damage" => o.full_damage = true,
             "--fullscreen" => o.fullscreen = true,
             "--timeout" => o.timeout = parsed(&mut it, arg)?,
             "--no-default-stats" => default_stats = false,
@@ -221,6 +226,7 @@ struct Bench {
     next_generation: u32,
     next_buffer: usize,
     page: Vec<u8>,
+    scene: Option<Scene>,
     frame_no: u64,
     /// Frames committed and not yet called back: number, commit time, the input it answers.
     timed: VecDeque<(u64, Instant, Option<Instant>)>,
@@ -276,6 +282,7 @@ pub fn run(args: &[String]) -> Result<()> {
         next_generation: 1,
         next_buffer: 0,
         page: Vec::new(),
+        scene: None,
         frame_no: 0,
         timed: VecDeque::new(),
         frame_pending: false,
@@ -470,14 +477,19 @@ impl Bench {
             let px = buffers.pixels(i);
             match self.opts.mode {
                 Mode::Noise => noise(px, 0x9e37_79b9_7f4a_7c15 ^ (i as u64 + 1) * 0x1234_5678_9abc_def1),
+                // Buffers that differ outside the rect would change every row they show.
+                Mode::Rect if self.opts.full_damage => gradient(px, w, h, 0),
                 Mode::Gradient | Mode::Rect | Mode::Idle => gradient(px, w, h, i * 37),
                 Mode::Touch => fill(px, COLORS[0]),
-                Mode::Scroll => {}
+                Mode::Scroll | Mode::Video => {}
             }
         }
         if self.opts.mode == Mode::Scroll {
             let line = ((16.0 * self.scale * self.opts.res).round() as usize).max(4);
             self.page = text_page(w, (h * 2).max(line * 4), line);
+        }
+        if self.opts.mode == Mode::Video {
+            self.scene = Some(Scene::new(w, h));
         }
         self.buffers = Some(buffers);
         if let Some(v) = &self.viewport {
@@ -515,6 +527,11 @@ impl Bench {
         let start = Instant::now();
         let damage = match mode {
             Mode::Noise | Mode::Gradient | Mode::Idle => (0, 0, w, h),
+            Mode::Video => {
+                let stride = bufs.stride as usize;
+                self.scene.as_ref().expect("allocated").draw(bufs.pixels(i), stride, frame);
+                (0, 0, w, h)
+            }
             Mode::Touch => {
                 let c = COLORS[(frame as usize) % COLORS.len()];
                 fill(bufs.pixels(i), c);
@@ -532,7 +549,7 @@ impl Bench {
                         p.copy_from_slice(&c);
                     }
                 }
-                (x0, y0, side, side)
+                if self.opts.full_damage { (0, 0, w, h) } else { (x0, y0, side, side) }
             }
             Mode::Scroll => {
                 let row = w as usize * 4;
@@ -680,6 +697,94 @@ fn gradient(px: &mut [u8], w: usize, h: usize, phase: usize) {
             let p = &mut px[(y * w + x) * 4..][..4];
             p.copy_from_slice(&[((x + phase) * 255 / w.max(1)) as u8, ((y + phase) * 255 / h.max(1)) as u8, 0x80, 0xff]);
         }
+    }
+}
+
+/// Video-like frames: two smooth colour fields panning past each other, the
+/// second one only in the middle of the frame, so every pixel changes every
+/// frame and none of it is a scroll. zstd packs them about as well as frames
+/// of filmed HD video (2.1x against 2.2x).
+struct Scene {
+    w: usize,
+    h: usize,
+    layers: [Vec<u8>; 2],
+}
+
+impl Scene {
+    /// How far the layers pan each way, in buffer pixels.
+    const MARGIN: usize = 128;
+
+    fn new(w: usize, h: usize) -> Self {
+        let (lw, lh) = (w + 2 * Self::MARGIN, h + 2 * Self::MARGIN);
+        let mut seed = 0x6a09_e667_f3bc_c909u64;
+        let mut layer = || {
+            let coarse = Field::new(lw, lh, 256, &mut seed);
+            let fine = Field::new(lw, lh, 48, &mut seed);
+            let mut px = vec![0xffu8; lw * lh * 4];
+            for y in 0..lh {
+                for x in 0..lw {
+                    let p = &mut px[(y * lw + x) * 4..][..3];
+                    for (c, v) in p.iter_mut().enumerate() {
+                        *v = ((0.7 * coarse.at(x, y, c) + 0.3 * fine.at(x, y, c)) * 255.0) as u8;
+                    }
+                }
+            }
+            px
+        };
+        Self { w, h, layers: [layer(), layer()] }
+    }
+
+    fn draw(&self, px: &mut [u8], stride: usize, frame: u64) {
+        let (w, h, m) = (self.w, self.h, Self::MARGIN as f64);
+        let t = frame as f64;
+        let at = |s: f64| (m + m * s).round() as usize;
+        let a = (at((t * 0.05).sin()), at((t * 0.031).cos()));
+        let b = (at(-(t * 0.043).sin()), at((t * 0.027).sin()));
+        let lw = w + 2 * Self::MARGIN;
+        for y in 0..h {
+            let row = &mut px[y * stride..][..w * 4];
+            let src = |l: usize, (ox, oy): (usize, usize), x0: usize, n: usize| {
+                &self.layers[l][((y + oy) * lw + ox + x0) * 4..][..n * 4]
+            };
+            row.copy_from_slice(src(0, a, 0, w));
+            if (h / 4..3 * h / 4).contains(&y) {
+                row[w / 4 * 4..(3 * w / 4) * 4].copy_from_slice(src(1, b, w / 4, 3 * w / 4 - w / 4));
+            }
+        }
+    }
+}
+
+/// Smooth random colour: a grid of random values `cell` pixels apart,
+/// smoothstep-interpolated.
+struct Field {
+    cell: usize,
+    cols: usize,
+    grid: Vec<f32>,
+}
+
+impl Field {
+    fn new(w: usize, h: usize, cell: usize, seed: &mut u64) -> Self {
+        let (cols, rows) = (w / cell + 2, h / cell + 2);
+        let grid = (0..cols * rows * 3)
+            .map(|_| {
+                *seed ^= *seed << 13;
+                *seed ^= *seed >> 7;
+                *seed ^= *seed << 17;
+                (*seed >> 40) as f32 / (1u64 << 24) as f32
+            })
+            .collect();
+        Self { cell, cols, grid }
+    }
+
+    fn at(&self, x: usize, y: usize, c: usize) -> f32 {
+        let s = |f: f32| f * f * (3.0 - 2.0 * f);
+        let (gx, gy) = (x / self.cell, y / self.cell);
+        let fx = s((x % self.cell) as f32 / self.cell as f32);
+        let fy = s((y % self.cell) as f32 / self.cell as f32);
+        let g = |cx: usize, cy: usize| self.grid[(cy * self.cols + cx) * 3 + c];
+        let top = g(gx, gy) * (1.0 - fx) + g(gx + 1, gy) * fx;
+        let bottom = g(gx, gy + 1) * (1.0 - fx) + g(gx + 1, gy + 1) * fx;
+        top * (1.0 - fy) + bottom * fy
     }
 }
 

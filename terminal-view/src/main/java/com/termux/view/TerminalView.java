@@ -20,7 +20,6 @@ import android.view.HapticFeedbackConstants;
 import android.view.InputDevice;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
-import android.view.Menu;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -36,6 +35,7 @@ import android.widget.Scroller;
 import androidx.annotation.RequiresApi;
 
 import com.termux.terminal.KeyHandler;
+import com.termux.terminal.TerminalBuffer;
 import com.termux.terminal.TerminalEmulator;
 import com.termux.terminal.TerminalSession;
 import com.termux.view.textselection.TextSelectionCursorController;
@@ -620,14 +620,6 @@ public final class TerminalView extends View {
         }
     }
 
-    /** This must be called by the hosting activity in {@link Activity#onContextMenuClosed(Menu)}
-     * when context menu for the {@link TerminalView} is started by
-     * {@link TextSelectionCursorController#ACTION_MORE} is closed. */
-    public void onContextMenuClosed(Menu menu) {
-        // Unset the stored text since it shouldn't be used anymore and should be cleared from memory
-        unsetStoredSelectedText();
-    }
-
     /**
      * Sets the text size, which in turn sets the number of rows and columns.
      *
@@ -739,7 +731,7 @@ public final class TerminalView extends View {
             return true;
         } else if (event.isFromSource(InputDevice.SOURCE_MOUSE)) {
             if (event.isButtonPressed(MotionEvent.BUTTON_SECONDARY)) {
-                if (action == MotionEvent.ACTION_DOWN) showContextMenu();
+                if (action == MotionEvent.ACTION_DOWN) mClient.onContextMenu(event.getX(), event.getY());
                 return true;
             } else if (event.isButtonPressed(MotionEvent.BUTTON_TERTIARY)) {
                 ClipboardManager clipboardManager = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
@@ -1158,10 +1150,22 @@ public final class TerminalView extends View {
      */
     public String getHyperlinkAt(float x, float y) {
         if (mEmulator == null || mRenderer == null) return null;
-        int col = (int) (x / mRenderer.mFontWidth);
-        int row = (int) ((y - mRenderer.mFontLineSpacingAndAscent) / mRenderer.mFontLineSpacing) + mTopRow;
-        if (col < 0 || col >= mEmulator.mColumns || row < 0 || row >= mEmulator.mRows) return null;
-        return mEmulator.getScreen().getHyperlinkAt(row, col);
+        TerminalBuffer screen = mEmulator.getScreen();
+        int[] cell = cellAt(x, y, mRenderer.mFontWidth, mRenderer.mFontLineSpacingAndAscent, mRenderer.mFontLineSpacing,
+            mTopRow, mEmulator.mColumns, mEmulator.mRows, screen.getActiveTranscriptRows());
+        return cell == null ? null : screen.getHyperlinkAt(cell[1], cell[0]);
+    }
+
+    /**
+     * The cell under view-relative pixels (x, y) with the view scrolled to topRow, as {column, external row}
+     * (negative rows are scrollback), or null when no cell of the buffer is there.
+     */
+    static int[] cellAt(float x, float y, float fontWidth, int lineSpacingAndAscent, int lineSpacing,
+                        int topRow, int columns, int screenRows, int transcriptRows) {
+        int col = (int) (x / fontWidth);
+        int row = (int) ((y - lineSpacingAndAscent) / lineSpacing) + topRow;
+        if (x < 0 || col >= columns || row < -transcriptRows || row >= screenRows) return null;
+        return new int[]{col, row};
     }
 
     private CharSequence getText() {
@@ -1498,6 +1502,11 @@ public final class TerminalView extends View {
             return mTextSelectionCursorController.getSelectedText();
         else
             return null;
+    }
+
+    /** The selected text stored when the "More…" button was pressed, until {@link #unsetStoredSelectedText()}. */
+    public String getStoredSelectedText() {
+        return mTextSelectionCursorController == null ? null : mTextSelectionCursorController.getStoredSelectedText();
     }
 
     /** Unset the selected text stored before "MORE" button was pressed on the context menu. */

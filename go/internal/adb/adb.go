@@ -44,6 +44,14 @@ func (d Device) Stream(w io.Writer, args ...string) error {
 	return nil
 }
 
+// Start starts an adb command with its stdout going to w, and returns at
+// once; killing the returned command ends it.
+func (d Device) Start(w io.Writer, args ...string) (*exec.Cmd, error) {
+	c := d.cmd(args...)
+	c.Stdout = w
+	return c, c.Start()
+}
+
 // Shell runs a command line in the device's shell. adb itself doesn't report
 // a failing command through every Android version's adb, so this appends an
 // exit marker and checks it.

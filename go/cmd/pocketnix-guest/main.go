@@ -39,6 +39,7 @@ commands:
                                     session bus (notify-send's daemon)
   portal                            serve the FileChooser portal backend on
                                     the session bus
+  clipboard                         bridge the Wayland clipboard with Android's
   host                              print the phone's state (network, power,
                                     timezone) as JSON
 
@@ -155,6 +156,8 @@ func run(args []string) error {
 		return save(rest)
 	case "portal":
 		return portal(rest)
+	case "clipboard":
+		return clipboardBridge(rest)
 	case "host":
 		text, err := send(protocol.GuestRequest{Type: protocol.GuestHost})
 		if err != nil {

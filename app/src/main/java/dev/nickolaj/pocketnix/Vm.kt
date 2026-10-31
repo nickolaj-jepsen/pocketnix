@@ -4,10 +4,12 @@ import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.graphics.Typeface
+import android.os.SystemClock
 import android.util.Log
 import dev.nickolaj.pocketnix.agent.AgentException
 import dev.nickolaj.pocketnix.agent.ControlChannel
 import dev.nickolaj.pocketnix.agent.FontCache
+import dev.nickolaj.pocketnix.agent.Forward
 import dev.nickolaj.pocketnix.agent.GuestConfig
 import dev.nickolaj.pocketnix.agent.GuestFiles
 import dev.nickolaj.pocketnix.agent.HostStateSync
@@ -20,21 +22,29 @@ import dev.nickolaj.pocketnix.engine.ConsoleLog
 import dev.nickolaj.pocketnix.engine.TcpEngine
 import dev.nickolaj.pocketnix.engine.VmEngine
 import dev.nickolaj.pocketnix.engine.VmState
+import dev.nickolaj.pocketnix.engine.engineLine
 import dev.nickolaj.pocketnix.files.GuestDocumentsProvider
 import dev.nickolaj.pocketnix.files.PendingUploads
 import dev.nickolaj.pocketnix.files.Transfers
+import dev.nickolaj.pocketnix.forward.ForwardOffers
+import dev.nickolaj.pocketnix.forward.OfferNotifications
 import dev.nickolaj.pocketnix.forward.PortForwards
+import dev.nickolaj.pocketnix.forward.pickPhonePort
 import dev.nickolaj.pocketnix.gui.GuiSession
+import dev.nickolaj.pocketnix.gui.guard
+import dev.nickolaj.pocketnix.host.GuestAudio
 import dev.nickolaj.pocketnix.host.HostMonitor
 import dev.nickolaj.pocketnix.hostfs.HostFolderLinks
 import dev.nickolaj.pocketnix.hostfs.SafFolder
 import dev.nickolaj.pocketnix.hostfs.SharedFolders
+import dev.nickolaj.pocketnix.managed.ManagedGuest
 import dev.nickolaj.pocketnix.service.VmService
 import dev.nickolaj.pocketnix.service.wakeHoldersOf
 import dev.nickolaj.pocketnix.terminal.Tab
 import dev.nickolaj.pocketnix.terminal.TabAlerts
 import dev.nickolaj.pocketnix.terminal.Tabs
 import dev.nickolaj.pocketnix.terminal.TerminalTheme
+import dev.nickolaj.pocketnix.ui.TerminalActions
 import java.io.File
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -53,6 +63,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -80,6 +91,9 @@ class Vm(private val app: Context) {
     /** The guest's GUI windows, while its config turns GUI on. */
     val gui = GuiSession(app, appVersion)
 
+    /** The guest's sound, played while the agent is up. */
+    private val audio = GuestAudio(appVersion)
+
     private val avf by lazy { AvfEngine(app) }
     private val _engine = MutableStateFlow(pickEngine())
     val engine: StateFlow<VmEngine> = _engine.asStateFlow()
@@ -93,6 +107,18 @@ class Vm(private val app: Context) {
     /** Forwards that couldn't listen, for the UI. */
     val forwardErrors: StateFlow<List<String>> = _forwardErrors.asStateFlow()
 
+    // What forwards.listening() said after the last apply, to wait on.
+    private val listening = MutableStateFlow<List<Forward>>(emptyList())
+
+    /** The TCP forwards listening on their phone port now, which a localhost link may be pointed at. */
+    fun listeningForwards(): List<Forward> = listening.value
+
+    private val _offers = MutableStateFlow(ForwardOffers())
+
+    /** The guest listeners offered as forwards this boot, and the user's answers. */
+    val offers: StateFlow<ForwardOffers> = _offers.asStateFlow()
+    private val offerNotifications = OfferNotifications(app)
+
     private val _typeface = MutableStateFlow<Typeface?>(null)
 
     /** The module's font, or null for the default monospace. */
@@ -102,16 +128,28 @@ class Vm(private val app: Context) {
     private val _themeRevision = MutableStateFlow(0)
     val themeRevision: StateFlow<Int> = _themeRevision.asStateFlow()
 
+    /** Where the terminal colours came from: default, saved or module. */
+    private var themeSource = "default"
+
     private val _agentLate = MutableStateFlow(false)
 
     /** The guest runs but its agent hasn't answered in [AGENT_LATE_MS]: maybe a generation that won't boot. */
     val agentLate: StateFlow<Boolean> = _agentLate.asStateFlow()
 
+    /** What every status surface shows (see [vmPhase]). */
+    val phase: StateFlow<VmPhase> =
+        combine(state, control.link, stopping, agentLate, control.config) { s, link, stop, late, cfg -> vmPhase(s, link, stop, late, cfg?.hostname) }
+            .stateIn(scope, SharingStarted.Eagerly, vmPhase(state.value, control.link.value, stopping.value, agentLate.value, control.config.value?.hostname))
+
     val updates: StateFlow<Updates?> get() = control.updates
 
     private val bridge = GuestBridge(app) { control.config.value?.hostname }
     val transfers = Transfers(app, scope, control, bridge, ::files) { control.config.value?.hostname }
-    private var lastClipboardSent: Pair<String, List<String>>? = null
+
+    /** Links and shares from the terminal: see [TerminalActions]. */
+    val terminalActions = TerminalActions(app, scope, bridge, { control.config.value?.hostname }, ::listeningForwards, { _offers.value.listening }, ::forwardForLink) { path ->
+        control.call(JSONObject().put("type", "resolve-path").put("path", path)).optString("path")
+    }
 
     /** The phone's network, power and timezone, watched while the agent is connected. */
     val host = HostMonitor(app)
@@ -129,11 +167,15 @@ class Vm(private val app: Context) {
         wakeLocksAllowed.value = allowed
     }
 
+    /** The guest the app sets up and configures, when its module says it's one. */
+    val managed = ManagedGuest(app, scope, control, settings)
+
     /** Android folders mounted in the guest. */
     val sharedFolders = SharedFolders(app)
     val hostFolders = HostFolderLinks(control, appVersion) { SafFolder(app.contentResolver, android.net.Uri.parse(it.uri)) }
 
     init {
+        settings.terminalColors?.let { applyColors(it, "saved") }
         tabs.alerts = TabAlerts(app) { control.config.value?.hostname }
         gui.selectTab = tabs::selectWindow
         scope.launch { gui.tabWindows.collect { ws -> tabs.windowsChanged(ws.map { it.id }) } }
@@ -160,6 +202,15 @@ class Vm(private val app: Context) {
                 if (up) host.start() else host.stop()
             }
         }
+        scope.launch {
+            // On the config's word, not the link's: a reload can bring sound with the link up.
+            combine(control.link, control.config) { link, cfg -> link is ControlChannel.Link.Up && cfg?.audio == true }
+                .distinctUntilChanged()
+                .collect { on ->
+                    val dialer = _engine.value.dialer
+                    if (on && dialer != null) audio.start(dialer) else audio.stop()
+                }
+        }
         scope.launch { HostStateSync(control, host.state).run() }
         scope.launch {
             // Down, not Refused: an agent that answers (a version mismatch) booted fine.
@@ -173,20 +224,7 @@ class Vm(private val app: Context) {
                     }
                 }
         }
-        scope.launch {
-            state.collect { s ->
-                when (s) {
-                    VmState.Running -> _engine.value.dialer?.let { control.start(it) }
-
-                    VmState.Starting -> {}
-
-                    else -> {
-                        control.stop()
-                        control.clear()
-                    }
-                }
-            }
-        }
+        scope.launch { state.collect { s -> control.follow(s, _engine.value.dialer) } }
         scope.launch {
             // An agent restart keeps the windows; the reconnect's replay restores them. A stopped guest takes them along.
             combine(control.config, control.link, state) { cfg, link, s ->
@@ -208,17 +246,66 @@ class Vm(private val app: Context) {
         }
         scope.launch { control.config.map { it?.gui }.distinctUntilChanged().collect { gui.config(it) } }
         scope.launch {
-            combine(control.config, state) { cfg, s -> cfg?.forwards.orEmpty() to (s == VmState.Running) }
+            // Kept for the next start: the GPU is fixed while the VM runs.
+            control.config.map { it?.gpu }.distinctUntilChanged().collect { if (it != null) settings.guestGpu = it }
+        }
+        scope.launch {
+            // Offers belong to one guest boot; a dropped stream keeps the last snapshot, the next one replaces it.
+            combine(state, control.portListeners, control.config) { s, l, cfg -> Triple(s == VmState.Running, l, cfg?.forwards.orEmpty()) }
+                .collect { (running, l, module) ->
+                    _offers.update { o ->
+                        when {
+                            !running -> ForwardOffers()
+                            l == null -> o
+                            else -> o.observe(l.ports, l.lan, module, SystemClock.elapsedRealtime())
+                        }
+                    }
+                }
+        }
+        scope.launch {
+            _offers.collectLatest { o ->
+                val at = o.nextExpiry() ?: return@collectLatest
+                delay(at - SystemClock.elapsedRealtime())
+                _offers.update { it.expire(SystemClock.elapsedRealtime()) }
+            }
+        }
+        scope.launch {
+            var before = ForwardOffers()
+            _offers.collect { after ->
+                val notices = after.noticesSince(before)
+                before = after
+                for (port in notices.cancel) guard("withdrawing the offer of $port") { offerNotifications.cancel(port) }
+                for (o in notices.post) {
+                    val taken = after.takenPhonePorts(control.config.value?.forwards.orEmpty())
+                    val phone = withContext(Dispatchers.IO) { pickPhonePort(o.port, after.lan, taken) }
+                    guard("offering ${o.port}") { offerNotifications.post(o, phone, after.lan, control.config.value?.hostname) }
+                }
+            }
+        }
+        scope.launch {
+            combine(control.config, state, _offers) { cfg, s, o ->
+                val module = cfg?.forwards.orEmpty()
+                Triple(module, o.forwards(module), s == VmState.Running)
+            }
                 .distinctUntilChanged()
-                .collectLatest { (fw, running) ->
+                .collectLatest { (module, session, running) ->
+                    val fw = module + session
                     val dialer = if (running) _engine.value.dialer else null
                     _forwardErrors.value = withContext(Dispatchers.IO) { forwards.apply(fw, dialer) }
+                    listening.value = forwards.listening()
+                    // A session forward that can't listen goes back to an offer rather than into the retries.
+                    if (dialer != null) {
+                        for (f in session.filter { forwards.failure(it) != null }) {
+                            _offers.update { it.bindFailed(f.guestPort, f.hostPort, "Phone port ${f.hostPort} couldn't listen.") }
+                        }
+                    }
                     // A port another app holds may come free (that app stopped): keep trying, less and less often.
                     var wait = FORWARD_RETRY_MS
                     while (_forwardErrors.value.isNotEmpty() && dialer != null) {
                         delay(wait)
                         wait = (wait * 2).coerceAtMost(FORWARD_RETRY_MAX_MS)
                         _forwardErrors.value = withContext(Dispatchers.IO) { forwards.apply(fw, dialer) }
+                        listening.value = forwards.listening()
                     }
                 }
         }
@@ -231,7 +318,8 @@ class Vm(private val app: Context) {
         scope.launch {
             control.config.map { it?.theme }.distinctUntilChanged().collect { theme ->
                 if (theme == null) return@collect
-                applyColors(theme.colors)
+                applyColors(theme.colors, "module")
+                settings.terminalColors = theme.colors
                 loadFont(theme.font, theme.fontSha256)
             }
         }
@@ -312,12 +400,14 @@ class Vm(private val app: Context) {
     }
 
     /**
-     * Runs an update request ([generation] for switch-generation); progress
+     * Runs an update request ([generation] for switch-generation, [pin] for
+     * a managed guest's check or apply); progress
      * arrives in [updates]. Returns why the agent refused, or null.
      */
-    suspend fun updateRequest(type: String, generation: Int? = null): String? {
+    suspend fun updateRequest(type: String, generation: Int? = null, pin: String? = null): String? {
         val req = JSONObject().put("type", type)
         if (generation != null) req.put("generation", generation)
+        if (pin != null) req.put("pin", pin)
         return runCatching { control.call(req) }.exceptionOrNull()?.message
     }
 
@@ -340,11 +430,13 @@ class Vm(private val app: Context) {
         val types = (0 until desc.mimeTypeCount).map { desc.getMimeType(it) }.distinct()
         // An image's "text" is its URI.
         val text = if (types.any { it.startsWith("text/") }) clip.getItemAt(0).coerceToText(app)?.toString().orEmpty() else ""
-        if (text == bridge.lastGuestCopy || text to types == lastClipboardSent) return
+        val snapshot = ClipSnapshot(text, types, desc.timestamp)
+        val before = bridge.clipSync
+        if (!before.isNew(snapshot)) return
         if (control.link.value !is ControlChannel.Link.Up) return
         scope.launch {
             val req = JSONObject().put("type", "set-clipboard").put("text", text).put("types", JSONArray(types))
-            if (runCatching { control.call(req) }.isSuccess) lastClipboardSent = text to types
+            if (runCatching { control.call(req) }.isSuccess) bridge.clipSent(before, snapshot)
         }
     }
 
@@ -369,6 +461,60 @@ class Vm(private val app: Context) {
                 Log.w(TAG, "${req.optString("type")}: ${it.message}")
             }
         }
+    }
+
+    /**
+     * Answers guest [port]'s offer: allowing picks its phone port
+     * ([pickPhonePort]) and makes it a session forward, which listens once
+     * the forwards are applied; dismissing hides it for the rest of the boot.
+     * Throws when the port isn't offered, or no phone port is free (which the
+     * offer then says).
+     */
+    suspend fun answerOffer(port: Int, allow: Boolean) {
+        val o = _offers.value
+        val offer = o.offers[port] ?: error("guest port $port isn't offered")
+        if (!allow) {
+            _offers.update { it.dismiss(port) }
+            return
+        }
+        if (offer.state == ForwardOffers.State.ALLOWED) return
+        if (port !in o.listening) error("nothing listens on guest port $port")
+        val module = control.config.value?.forwards.orEmpty()
+        // Another Allow may take the picked port while this one probes: pick again then.
+        repeat(ALLOW_ATTEMPTS) {
+            val taken = _offers.value.takenPhonePorts(module)
+            val phone = withContext(Dispatchers.IO) { pickPhonePort(port, o.lan, taken) }
+            if (phone == null) {
+                _offers.update { it.allowFailed(port, "No phone port from $port up is free.") }
+                error("no phone port from $port up is free")
+            }
+            var allowed = false
+            _offers.update { s -> s.allowUnlessTaken(port, phone, module)?.also { allowed = true } ?: s.also { allowed = false } }
+            if (allowed) return
+        }
+        error("guest port $port's phone port kept being taken")
+    }
+
+    /**
+     * Guest [port]'s forward once it listens, allowing its offer first as a
+     * tap on a localhost link does. Throws as [answerOffer] does, when
+     * the forward's phone port couldn't listen, or after [LINK_FORWARD_WAIT_MS].
+     */
+    suspend fun forwardForLink(port: Int): Forward {
+        answerOffer(port, allow = true)
+        return withTimeoutOrNull(LINK_FORWARD_WAIT_MS) {
+            combine(listening, _offers) { l, o -> l.firstOrNull { !it.udp && it.guestPort == port } to o.offers[port] }
+                .map { (f, o) ->
+                    if (f == null && o?.state != ForwardOffers.State.ALLOWED) error(o?.failure ?: "guest port $port is no longer allowed")
+                    f
+                }
+                .first { it != null }
+        } ?: error("guest port $port's forward isn't listening")
+    }
+
+    /** [answerOffer] from a notification: a failure is logged. */
+    fun answerOfferLater(port: Int, allow: Boolean) {
+        scope.launch { runCatching { answerOffer(port, allow) }.onFailure { Log.w(TAG, "offer $port: ${it.message}") } }
     }
 
     /** Shares text as the share sheet does; returns where it landed, or throws. */
@@ -404,16 +550,27 @@ class Vm(private val app: Context) {
         }
     }
 
-    /** A new terminal tab running [profile], or null while the agent can't be reached. */
-    fun openTab(profile: String? = null): Tab? {
+    /** A new terminal tab running [profile], or [command] when set; null while the agent can't be reached. */
+    fun openTab(profile: String? = null, command: String? = null): Tab? {
         val dialer = _engine.value.dialer ?: return null
         val cfg = control.config.value
         val name = profile ?: cfg?.defaultProfile?.takeIf { it.isNotEmpty() } ?: "shell"
-        val backend = PtyBackend(dialer, name, appVersion)
-        return tabs.open(name, backend) { backend.agentTab }
+        val backend = PtyBackend(dialer, name, appVersion, command)
+        return tabs.open(Tab.Kind.Pty(name, command), backend) { backend.agentTab }
+    }
+
+    /** Starts ended tab [id] again in a new session of its profile and command ([Tabs.reopen]); null if it can't. */
+    fun reopenTab(id: Int): Tab? {
+        val dialer = _engine.value.dialer ?: return null
+        val kind = tabs.all().firstOrNull { it.id == id && it.ended }?.kind as? Tab.Kind.Pty ?: return null
+        val backend = PtyBackend(dialer, kind.profile, appVersion, kind.command)
+        return tabs.reopen(id, backend) { backend.agentTab }
     }
 
     val config: StateFlow<GuestConfig?> get() = control.config
+
+    /** Debug builds, over adb: where scripted operations run, outliving the activity that started them. */
+    val debugScope: CoroutineScope get() = scope
 
     /** Debug builds, over adb: opens a tab once the agent is up and types [input] into it; returns its id. */
     suspend fun debugOpenTab(profile: String?, input: String, enter: Boolean): Int = withContext(Dispatchers.Main) {
@@ -431,12 +588,22 @@ class Vm(private val app: Context) {
     }
 
     /**
-     * Debug builds, over adb, on the main thread: the VM's state, the last
-     * [lines] of every tab's transcript (only tab [only]'s if given) and,
-     * for all tabs, the GUI windows.
+     * Debug builds, over adb, on the main thread: the VM's state and [phase], the
+     * terminal background and where it came from, the setup, what the last
+     * launch gave the VM and the guest sound's stream, the updates
+     * (with their log's last [lines]), the last [lines] of every tab's
+     * transcript (only tab [only]'s if given) and, for all tabs, the GUI windows.
      */
     fun debugDump(only: Int?, lines: Int): List<String> = buildList {
-        add("state=${state.value} link=${control.link.value} host=${control.config.value?.hostname}")
+        add("state=${state.value} phase=${phase.value} link=${control.link.value} host=${control.config.value?.hostname}")
+        add("theme background=#%06x source=$themeSource".format(TerminalTheme.background and 0xffffff))
+        add("setup=${managed.setup.value} managed=${control.config.value?.managedFlake}")
+        add("${engineLine(_engine.value.launched)} audio=${audio.status.name.lowercase()}")
+        updates.value?.let { u ->
+            add("updates state=${u.state} op=${u.op} available=${u.available} plan=${u.plan} blocked=${u.blocked} error=${u.error}")
+            add("updates packages=${u.packages} run=${u.run} generations=${u.generations.map { "${it.number}${if (it.current) "*" else ""}" }}")
+            for (line in u.log.takeLast(lines)) add("|log| $line")
+        }
         val shown = tabs.all().filter { only == null || it.id == only }
         if (shown.isEmpty()) error("no tab $only")
         for (tab in shown) {
@@ -447,10 +614,17 @@ class Vm(private val app: Context) {
         if (only == null) for (line in gui.dump()) add("gui $line")
     }
 
-    /** Debug builds, over adb: the GUI link's [GuiSession.stats] as JSON. */
-    fun debugStats(): String = gui.stats().toString()
+    /**
+     * Debug builds, over adb: the GUI link's [GuiSession.stats] as JSON, with
+     * the last launch's `guestRam` and `gpu` ([Launched]) once there is one.
+     */
+    fun debugStats(): String {
+        val launched = _engine.value.launched
+        return gui.stats().put("guestRam", launched?.guestRam).put("gpu", launched?.gpu).toString()
+    }
 
-    private fun applyColors(colors: Map<String, String>) {
+    private fun applyColors(colors: Map<String, String>, source: String) {
+        themeSource = source
         TerminalTheme.apply(colors)
         for (tab in tabs.all()) tab.session.emulator?.mColors?.reset()
         _themeRevision.value++
@@ -474,6 +648,12 @@ class Vm(private val app: Context) {
         const val AGENT_LATE_MS = 120_000L
         const val FORWARD_RETRY_MS = 30_000L
         const val FORWARD_RETRY_MAX_MS = 600_000L
+
+        // How long a link tap waits for its new session forward to listen.
+        const val LINK_FORWARD_WAIT_MS = 10_000L
+
+        /** How often an Allow picks a phone port again when another Allow took it meanwhile. */
+        private const val ALLOW_ATTEMPTS = 3
         const val HISTORY_LIMIT = 1000
 
         // org.freedesktop.Notifications' "dismissed by the user".

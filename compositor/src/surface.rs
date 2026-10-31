@@ -41,11 +41,11 @@ pub struct Mirror {
     pub width: u32,
     pub height: u32,
     pub format: u8,
-    /// Tightly packed rows, `width * 4` bytes each, in the client's wl_shm
-    /// byte order; packing converts them to the wire's.
+    /// Tightly packed rows, `width * 4` bytes each, in the wire's byte order:
+    /// a whole buffer's data as it's sent. Reused while the size stays.
     pub pixels: Vec<u8>,
-    /// Row hashes of `pixels`, while known (scroll detection's last result).
-    row_hashes: Option<Vec<u64>>,
+    /// Each row's [row_hash], kept current with `pixels`.
+    row_hashes: Vec<u64>,
 }
 
 /// What the app hasn't been sent yet, relative to the content it holds.
@@ -183,18 +183,21 @@ impl Surf {
             .mirror
             .as_ref()
             .is_some_and(|m| m.width == width && m.height == height && m.format == format);
-        if !same || !app_has {
+        if !same {
             self.mirror = Some(Mirror {
                 width,
                 height,
                 format,
-                pixels: copy_whole(src, width, height, stride),
-                row_hashes: None,
+                pixels: vec![0; width as usize * height as usize * 4],
+                row_hashes: vec![0; height as usize],
             });
+        }
+        let m = self.mirror.as_mut().unwrap();
+        if !same || !app_has {
+            m.take_whole(src, stride);
             self.pending = Pending { full: true, ..Default::default() };
             return;
         }
-        let m = self.mirror.as_mut().unwrap();
         let rects: Vec<Rect> = damage.into_iter().filter_map(|r| clip(r, width, height)).collect();
         if rects.is_empty() {
             return;
@@ -205,31 +208,31 @@ impl Surf {
         }
         let area: u64 = rects.iter().map(Rect::area).sum();
         let whole = width as u64 * height as u64;
-        if area as f64 >= whole as f64 * MAX_PATCH_FRACTION {
+        let rects = if area as f64 >= whole as f64 * MAX_PATCH_FRACTION {
+            let old_hashes = m.row_hashes.clone();
+            m.take_whole(src, stride);
+            // Damage that overstates the change: send the rows that differ.
+            let same: Vec<bool> = old_hashes.iter().zip(&m.row_hashes).map(|(a, b)| a == b).collect();
+            let unchanged = same.iter().filter(|s| **s).count();
+            // A scroll is relative to the app's content, which pending changes have left behind.
             if self.pending.scroll.is_none() && self.pending.rects.is_empty() {
-                let new_hashes = row_hashes(src, stride, width as usize * 4, height as usize);
-                let old_hashes = m
-                    .row_hashes
-                    .take()
-                    .unwrap_or_else(|| row_hashes(&m.pixels, width as usize * 4, width as usize * 4, height as usize));
-                let (dy, matched) = detect_scroll(&old_hashes, &new_hashes, &m.pixels, src, width as usize * 4, stride);
+                let (dy, matched) = detect_scroll(&old_hashes, &m.row_hashes);
                 let n = matched.iter().filter(|m| **m).count();
-                m.pixels = copy_whole(src, width, height, stride);
-                m.row_hashes = Some(new_hashes);
-                if dy != 0 && n * 2 > height as usize {
+                if dy != 0 && n > unchanged && n * 2 > height as usize {
                     self.pending.scroll = Some(dy as i32);
                     self.pending.rects = unmatched_rows(&matched, width);
                     return;
                 }
+            }
+            if unchanged * 2 <= height as usize {
                 self.pending.full = true;
                 return;
             }
-            m.pixels = copy_whole(src, width, height, stride);
-            m.row_hashes = None;
-            self.pending.full = true;
-            return;
-        }
-        m.copy_rects(src, stride, &rects);
+            unmatched_rows(&same, width)
+        } else {
+            m.copy_rects(src, stride, &rects);
+            rects
+        };
         self.pending.rects.extend(rects);
         if self.pending.rects.len() > protocol::MAX_RECTS {
             self.pending.rects = vec![bounding(&self.pending.rects)];
@@ -248,15 +251,33 @@ impl Surf {
 }
 
 impl Mirror {
+    /// Copies the whole client buffer in, converting and hashing each row
+    /// while it's in cache.
+    fn take_whole(&mut self, src: &[u8], stride: usize) {
+        let row = self.width as usize * 4;
+        for (y, (dst, h)) in self.pixels.chunks_exact_mut(row.max(1)).zip(&mut self.row_hashes).enumerate() {
+            to_wire(&src[y * stride..y * stride + row], dst);
+            *h = row_hash(dst);
+        }
+    }
+
     fn copy_rects(&mut self, src: &[u8], stride: usize, rects: &[Rect]) {
         let row = self.width as usize * 4;
         for r in rects {
             let (x, w) = (r.x as usize * 4, r.w as usize * 4);
             for y in r.y as usize..(r.y + r.h) as usize {
-                self.pixels[y * row + x..y * row + x + w].copy_from_slice(&src[y * stride + x..y * stride + x + w]);
+                to_wire(&src[y * stride + x..y * stride + x + w], &mut self.pixels[y * row + x..y * row + x + w]);
             }
         }
-        self.row_hashes = None;
+        let mut rows: Vec<(u32, u32)> = rects.iter().map(|r| (r.y, r.y + r.h)).collect();
+        rows.sort_unstable();
+        let mut done = 0;
+        for (y0, y1) in rows {
+            for y in y0.max(done)..y1 {
+                self.row_hashes[y as usize] = row_hash(&self.pixels[y as usize * row..(y as usize + 1) * row]);
+            }
+            done = done.max(y1);
+        }
     }
 
     /// The wire bytes of `rects`, rows in rect order.
@@ -267,21 +288,15 @@ impl Mirror {
         for r in rects {
             let (x, w) = (r.x as usize * 4, r.w as usize * 4);
             for y in r.y as usize..(r.y + r.h) as usize {
-                to_wire(&self.pixels[y * row + x..y * row + x + w], &mut out);
+                out.extend_from_slice(&self.pixels[y * row + x..y * row + x + w]);
             }
         }
         out
     }
 
     pub fn hash(&self) -> u64 {
-        let row = self.width as usize * 4;
         let mut h = ContentHash::default();
-        let mut buf = Vec::with_capacity(row);
-        for line in self.pixels.chunks(row.max(1)) {
-            buf.clear();
-            to_wire(line, &mut buf);
-            h.update(&buf);
-        }
+        h.update(&self.pixels);
         h.finish()
     }
 }
@@ -297,24 +312,14 @@ pub fn wire_format(format: wl_shm::Format) -> Option<u8> {
 
 /// wl_shm's ARGB8888 and XRGB8888 are little-endian words, bytes B, G, R, A
 /// in memory; the wire wants R, G, B, A.
-fn to_wire(src: &[u8], out: &mut Vec<u8>) {
+fn to_wire(src: &[u8], dst: &mut [u8]) {
     let (px, _) = src.as_chunks::<4>();
-    out.reserve(src.len());
-    for p in px {
-        out.extend_from_slice(&[p[2], p[1], p[0], p[3]]);
+    let (out, _) = dst.as_chunks_mut::<4>();
+    // Whole words with masks, so the loop vectorizes: swap bytes 0 and 2.
+    for (d, p) in out.iter_mut().zip(px) {
+        let v = u32::from_le_bytes(*p);
+        *d = ((v & 0xff00_ff00) | ((v >> 16) & 0xff) | ((v & 0xff) << 16)).to_le_bytes();
     }
-}
-
-fn copy_whole(src: &[u8], width: u32, height: u32, stride: usize) -> Vec<u8> {
-    let row = width as usize * 4;
-    if stride == row {
-        return src[..row * height as usize].to_vec();
-    }
-    let mut out = Vec::with_capacity(row * height as usize);
-    for y in 0..height as usize {
-        out.extend_from_slice(&src[y * stride..y * stride + row]);
-    }
-    out
 }
 
 pub fn clip(r: Rect, width: u32, height: u32) -> Option<Rect> {
@@ -331,26 +336,15 @@ fn bounding(rects: &[Rect]) -> Rect {
     Rect { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
 }
 
+/// Scroll detection's row identity. Equal hashes count as equal rows: at 64
+/// bits a collision is far less likely than a bit flip in RAM.
 fn row_hash(row: &[u8]) -> u64 {
-    let mut h = ContentHash::default();
-    h.update(row);
-    h.finish()
-}
-
-fn row_hashes(pixels: &[u8], stride: usize, row: usize, height: usize) -> Vec<u64> {
-    (0..height).map(|y| row_hash(&pixels[y * stride..y * stride + row])).collect()
+    xxhash_rust::xxh3::xxh3_64(row)
 }
 
 /// The vertical shift `dy` (new row y == old row y + dy) that matches the
 /// most rows, and which rows it matches.
-fn detect_scroll(
-    old_h: &[u64],
-    new_h: &[u64],
-    old: &[u8],
-    new: &[u8],
-    old_stride: usize,
-    new_stride: usize,
-) -> (i64, Vec<bool>) {
+fn detect_scroll(old_h: &[u64], new_h: &[u64]) -> (i64, Vec<bool>) {
     let height = old_h.len();
     let mut by_hash: HashMap<u64, Vec<usize>> = HashMap::new();
     for (y, h) in old_h.iter().enumerate() {
@@ -371,14 +365,10 @@ fn detect_scroll(
         }
     }
     let dy = votes.into_iter().max_by_key(|(d, n)| (*n, -d.abs())).map_or(0, |(d, _)| d);
-    let row = old_stride;
     let matched = (0..height)
         .map(|y| {
             let oy = y as i64 + dy;
-            dy != 0
-                && (0..height as i64).contains(&oy)
-                && new_h[y] == old_h[oy as usize]
-                && new[y * new_stride..y * new_stride + row] == old[oy as usize * old_stride..(oy as usize + 1) * old_stride]
+            dy != 0 && (0..height as i64).contains(&oy) && new_h[y] == old_h[oy as usize]
         })
         .collect();
     (dy, matched)
@@ -407,6 +397,11 @@ mod tests {
 
     fn image(width: u32, height: u32, seed: u32) -> Vec<u8> {
         (0..width * height * 4).map(|i| ((i / 4 / width + seed) * 31 + i % (width * 4)) as u8).collect()
+    }
+
+    /// A client's BGRA pixels in the wire's RGBA order.
+    fn wire(bgra: &[u8]) -> Vec<u8> {
+        bgra.chunks(4).flat_map(|p| [p[2], p[1], p[0], p[3]]).collect()
     }
 
     /// Applies what the app would be sent to its copy, the way the spec's
@@ -455,7 +450,7 @@ mod tests {
         s.apply_buffer(&next, w, h, w as usize * 4, 1, vec![Rect { x: 5, y: 10, w: 4, h: 1 }], true);
         assert!(!s.pending.full);
         assert_eq!(s.pending.rects, vec![Rect { x: 5, y: 10, w: 4, h: 1 }]);
-        assert_eq!(apply_as_app(&app, &s), next);
+        assert_eq!(apply_as_app(&app, &s), wire(&next));
     }
 
     #[test]
@@ -479,7 +474,65 @@ mod tests {
         s.apply_buffer(&padded(scrolled), w, h, stride, 1, vec![Rect { x: 0, y: 0, w, h }], true);
         assert_eq!(s.pending.scroll, Some(7));
         assert_eq!(s.pending.rects, vec![Rect { x: 0, y: h - 7, w, h: 7 }]);
-        assert_eq!(apply_as_app(&app, &s), scrolled);
+        assert_eq!(apply_as_app(&app, &s), wire(scrolled));
+    }
+
+    #[test]
+    fn a_scroll_after_small_damage_scrolls_from_the_damaged_content() {
+        let (w, h) = (32, 100);
+        let stride = w as usize * 4;
+        let base = image(w, h + 7, 5);
+        let mut s = Surf::new(1);
+        s.apply_buffer(&base[..stride * h as usize], w, h, stride, 1, vec![], false);
+        s.pending = Pending::default();
+
+        // Every row changes in a small commit; the next scroll must match against these rows.
+        let mut damaged = base.clone();
+        for b in &mut damaged {
+            *b = b.wrapping_add(1);
+        }
+        let rows: Vec<Rect> = (0..h).map(|y| Rect { x: 0, y, w, h: 1 }).collect();
+        for r in rows.chunks(10) {
+            s.apply_buffer(&damaged[..stride * h as usize], w, h, stride, 1, r.to_vec(), true);
+            s.pending = Pending::default();
+        }
+        let app = s.mirror.as_ref().unwrap().pixels.clone();
+        let scrolled = &damaged[7 * stride..(h as usize + 7) * stride];
+        s.apply_buffer(scrolled, w, h, stride, 1, vec![Rect { x: 0, y: 0, w, h }], true);
+        assert_eq!(s.pending.scroll, Some(7));
+        assert_eq!(apply_as_app(&app, &s), wire(scrolled));
+    }
+
+    #[test]
+    fn whole_damage_sends_only_the_rows_that_changed() {
+        let (w, h) = (16, 40);
+        let stride = w as usize * 4;
+        let first = image(w, h, 0);
+        let mut s = Surf::new(1);
+        s.apply_buffer(&first, w, h, stride, 1, vec![], false);
+        let app = s.mirror.as_ref().unwrap().pixels.clone();
+        s.pending = Pending::default();
+
+        let mut next = first.clone();
+        for b in &mut next[12 * stride + 8..12 * stride + 12] {
+            *b ^= 0xff;
+        }
+        s.apply_buffer(&next, w, h, stride, 1, vec![Rect { x: 0, y: 0, w, h }], true);
+        assert!(!s.pending.full);
+        assert_eq!(s.pending.scroll, None);
+        assert_eq!(s.pending.rects, vec![Rect { x: 0, y: 12, w, h: 1 }]);
+        assert_eq!(apply_as_app(&app, &s), wire(&next));
+    }
+
+    #[test]
+    fn whole_damage_without_a_change_sends_no_pixels() {
+        let (w, h) = (16, 40);
+        let first = image(w, h, 0);
+        let mut s = Surf::new(1);
+        s.apply_buffer(&first, w, h, w as usize * 4, 1, vec![], false);
+        s.pending = Pending::default();
+        s.apply_buffer(&first, w, h, w as usize * 4, 1, vec![Rect { x: 0, y: 0, w, h }], true);
+        assert!(!s.pending.full && s.pending.scroll.is_none() && s.pending.rects.is_empty());
     }
 
     #[test]
@@ -501,7 +554,7 @@ mod tests {
         assert!(s.pending.full || area <= (w * h) as u64, "pending rects cover {area} pixels");
         let mut want = app.clone();
         let row = w as usize * 4;
-        want[..row * (h / 3) as usize].copy_from_slice(&last[..row * (h / 3) as usize]);
+        want[..row * (h / 3) as usize].copy_from_slice(&wire(&last)[..row * (h / 3) as usize]);
         assert_eq!(apply_as_app(&app, &s), want);
     }
 

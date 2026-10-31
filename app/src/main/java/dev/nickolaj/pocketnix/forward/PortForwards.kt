@@ -14,9 +14,10 @@ import java.net.Socket
 import java.util.concurrent.Semaphore
 
 /**
- * The module's port forwards: a listener on the phone per forward, each
- * accepted connection relayed to the guest over its own forward stream, and
- * each UDP client address over its own udp stream.
+ * The port forwards, the module's and those allowed from [ForwardOffers]: a
+ * listener on the phone per forward, each accepted connection relayed to the
+ * guest over its own forward stream, and each UDP client address over its own
+ * udp stream.
  */
 class PortForwards(private val appVersion: String) {
     private val active = mutableMapOf<Forward, Closeable>()
@@ -47,8 +48,16 @@ class PortForwards(private val appVersion: String) {
         return failed.values.toList()
     }
 
+    /** The TCP forwards whose phone port is listening now: a failed one's port belongs to another app. */
+    @Synchronized
+    fun listening(): List<Forward> = active.keys.filter { !it.udp }
+
+    /** Why [f], given to the last [apply], isn't listening; null when it is. */
+    @Synchronized
+    fun failure(f: Forward): String? = failed[f]
+
     private inner class Listener(private val f: Forward, private val dialer: AgentDialer) : Closeable {
-        private val server = ServerSocket(f.hostPort, 16, InetAddress.getByName(if (f.lan) "0.0.0.0" else "127.0.0.1"))
+        private val server = ServerSocket(f.hostPort, 16, bindAddress(f.lan))
 
         // Bounds threads and guest streams under a connection flood.
         private val slots = Semaphore(MAX_CONNECTIONS)
@@ -113,6 +122,26 @@ class PortForwards(private val appVersion: String) {
         const val MAX_CONNECTIONS = 64
     }
 }
+
+/** Where a forward's phone listener binds: 127.0.0.1, or every address with [lan]. */
+fun bindAddress(lan: Boolean): InetAddress = InetAddress.getByName(if (lan) "0.0.0.0" else "127.0.0.1")
+
+/**
+ * The phone port for a forward of [guestPort]: [guestPort] itself when it is
+ * free on [bindAddress], else the next free one above it, never one in
+ * [taken] or below [MIN_PHONE_PORT]. Null when none is free. Another app can
+ * still take the port before the forward binds it.
+ */
+fun pickPhonePort(guestPort: Int, lan: Boolean, taken: Set<Int>): Int? {
+    val address = bindAddress(lan)
+    return (maxOf(guestPort, MIN_PHONE_PORT)..MAX_PORT).firstOrNull { port ->
+        port !in taken && runCatching { ServerSocket(port, 1, address).close() }.isSuccess
+    }
+}
+
+/** Android lets an app listen only from here up. */
+const val MIN_PHONE_PORT = 1024
+private const val MAX_PORT = 65535
 
 /** Copies until EOF, then half-closes the far side with [onEof]; a failure ends both. */
 private fun copy(from: InputStream, to: OutputStream, onEof: () -> Unit) {

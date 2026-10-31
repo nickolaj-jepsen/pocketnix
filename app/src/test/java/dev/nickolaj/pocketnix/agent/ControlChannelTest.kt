@@ -1,5 +1,6 @@
 package dev.nickolaj.pocketnix.agent
 
+import dev.nickolaj.pocketnix.engine.VmState
 import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -13,6 +14,7 @@ import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -103,6 +105,22 @@ class ControlChannelTest {
         assertEquals("phone", cfg!!.hostname)
         assertEquals(1, a.connections.get())
         assertTrue(ch.link.value is ControlChannel.Link.Up)
+    }
+
+    @Test
+    fun aRebootForgetsTheLastBootsListeners() {
+        val a = agent { c ->
+            c.send(JSONObject().put("type", "config").put("hostname", "phone"))
+            c.send("""{"type":"port-listeners","lan":false,"ports":[8080]}""")
+            while (c.readJson() != null) Unit
+        }
+        val ch = ControlChannel(scope, "test")
+        ch.follow(VmState.Running, a.dialer)
+        runBlocking { withTimeout(5_000) { ch.portListeners.first { it != null } } }
+        ch.follow(VmState.Starting, a.dialer)
+        assertNull(ch.portListeners.value)
+        assertNull(ch.config.value)
+        assertEquals(ControlChannel.Link.Down, ch.link.value)
     }
 
     @Test

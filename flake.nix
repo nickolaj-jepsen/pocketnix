@@ -37,10 +37,14 @@
         pocketnix-compositor = pkgs.callPackage ./nix/compositor.nix {};
         # The example guest's disk image, assembled by this system's tools.
         example-image = self.nixosConfigurations.example.config.system.build.pocketnixImage.${pkgs.stdenv.hostPlatform.system};
+        # What the app downloads on first run: a managed guest the app hasn't configured yet.
+        base-image = self.nixosConfigurations.base.config.system.build.pocketnixImage.${pkgs.stdenv.hostPlatform.system};
         options-doc = import ./nix/options-doc.nix {inherit pkgs nixpkgs self;};
       }
       // nixpkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "aarch64-linux") {
         avf-kernel = pkgs.callPackage ./nix/avf-kernel/package.nix {};
+        # gpu.enable's kernel module, for the AVF kernel.
+        vgpu-relinquish = (pkgs.linuxPackagesFor own.avf-kernel).callPackage ./nix/vgpu-relinquish/package.nix {};
       });
 
     apps =
@@ -61,6 +65,24 @@
           type = "app";
           program = nixpkgs.lib.getExe (import ./nix/dev-agent.nix {inherit pkgs self;});
           meta.description = "Run the example guest's agent on this machine for the app on the Android emulator";
+        };
+        # The app's package search: pocketnix's nixpkgs for aarch64-linux, gzipped
+        # lines of attribute, version and description (PackageIndex reads them).
+        package-index = {
+          type = "app";
+          program = nixpkgs.lib.getExe (pkgs.writeShellApplication {
+            name = "package-index";
+            runtimeInputs = [pkgs.nix pkgs.jq pkgs.gzip];
+            text = ''
+              # Only what installs on the guest: unfree, broken and x86-only packages fail
+              # its evaluation, and aliases repeat the attributes they name.
+              nix-env -f ${nixpkgs} -qaP --json --meta --arg config '{ allowAliases = false; }' --argstr system aarch64-linux \
+                | jq -r 'to_entries[] | select(.value.meta.available != false)
+                    | [.key, (.value.version // ""), (.value.meta.description // "")] | @tsv' \
+                | gzip -9 > "$1"
+            '';
+          });
+          meta.description = "Write the app's package index to the file named";
         };
         options-doc = {
           type = "app";
@@ -99,6 +121,32 @@
 
     nixosModules.guest = import ./nix/module.nix {inherit self;};
     nixosModules.default = self.nixosModules.guest;
+    # A guest the phone manages (`pocketnix.guest.managed`).
+    nixosModules.managed = {
+      imports = [self.nixosModules.guest];
+      pocketnix.guest = {
+        enable = true;
+        managed.enable = true;
+      };
+    };
+
+    # A managed guest's system, as its own flake (nix/managed/flake.nix) builds it:
+    # `selections` is the app's pocketnix.json.
+    lib.managedSystem = {
+      selections,
+      modules ? [],
+    }:
+      nixpkgs.lib.nixosSystem {
+        modules =
+          [
+            self.nixosModules.managed
+            {
+              nixpkgs.hostPlatform = "aarch64-linux";
+              pocketnix.guest.managed.selections = selections;
+            }
+          ]
+          ++ modules;
+      };
     # For the desktop the guests update from (`pocketnix.guest.updates.buildHost`).
     nixosModules.buildHost = ./nix/build-host.nix;
 
@@ -110,6 +158,11 @@
         the host in `configuration.nix`, then follow docs/getting-started.md
         at https://github.com/nickolaj-jepsen/pocketnix.
       '';
+    };
+
+    nixosConfigurations.base = self.lib.managedSystem {
+      selections = {};
+      modules = [./nix/managed/configuration.nix];
     };
 
     nixosConfigurations.example = nixpkgs.lib.nixosSystem {
@@ -133,6 +186,44 @@
           diff -u ${./docs/options.md} ${own.options-doc} || { echo "docs/options.md is stale: nix run .#options-doc" >&2; exit 1; }
           touch $out
         '';
+        # Evaluates a managed guest's seed flake against this checkout, the way
+        # the app configures one, and checks that its switches reach the system:
+        # its drv path. nix/managed has no pocketnix.json (the seed writes the
+        # module's selections), so its readFile gets these.
+        managed = let
+          selections = {
+            user = "alice";
+            services = {
+              ssh = true;
+              gui = true;
+            };
+          };
+          flake =
+            scopedImport {
+              builtins =
+                builtins
+                // {
+                  readFile = p:
+                    if baseNameOf p == "pocketnix.json"
+                    then builtins.toJSON selections
+                    else builtins.readFile p;
+                };
+            }
+            ./nix/managed/flake.nix;
+          outputs = flake.outputs {pocketnix = self;};
+          system = outputs.nixosConfigurations.pocketnix.config;
+          guest = system.pocketnix.guest;
+          reached = {
+            "the user" = guest.user == selections.user;
+            "ssh's forward" = guest.forwards ? ssh;
+            "Desktop apps" = guest.gui.enable;
+            "Desktop apps' clipboard bridge" = system.systemd.user.services ? pocketnix-clipboard;
+            "Desktop apps' Android sound output" = system.services.pipewire.extraConfig.pipewire ? pocketnix-audio;
+          };
+          missing = builtins.attrNames (nixpkgs.lib.filterAttrs (_: ok: !ok) reached);
+        in
+          assert nixpkgs.lib.assertMsg (missing == []) "a managed guest's selections don't reach the system: ${nixpkgs.lib.concatStringsSep ", " missing}";
+            pkgs.writeText "pocketnix-managed" (builtins.unsafeDiscardStringContext system.system.build.toplevel.drvPath);
         # Evaluates the template against this checkout without building it: its systems' drv paths.
         template = let
           template = (import ./templates/default/flake.nix).outputs {
@@ -145,7 +236,21 @@
           )));
       }))
       {
+        # A managed guest with every switch on: CI's build puts all it needs in
+        # the cache, so a phone's rebuild only downloads.
+        aarch64-linux.managed-all =
+          (self.lib.managedSystem {
+            selections = {
+              user = "user";
+              services = nixpkgs.lib.mapAttrs (_: _: true) self.nixosConfigurations.base.options.pocketnix.guest.managed.selections.services;
+            };
+            modules = [./nix/managed/configuration.nix];
+          }).config.system.build.toplevel;
         x86_64-linux.agent = import ./nix/test.nix {
+          inherit self;
+          pkgs = nixpkgs.legacyPackages.x86_64-linux;
+        };
+        x86_64-linux.managed-boot = import ./nix/managed-test.nix {
           inherit self;
           pkgs = nixpkgs.legacyPackages.x86_64-linux;
         };
@@ -153,6 +258,7 @@
           inherit self;
           pkgs = nixpkgs.legacyPackages.x86_64-linux;
         };
+        aarch64-linux.vgpu-relinquish = self.packages.aarch64-linux.vgpu-relinquish;
       };
 
     # `nix develop`, then `./gradlew assembleDebug`.

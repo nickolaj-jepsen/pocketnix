@@ -1,5 +1,28 @@
 # Getting started
 
+There are two ways in:
+
+- **Without a NixOS flake**: install the app (from the GitHub releases, or
+  through Obtainium), grant it the two AVF permissions once from a computer
+  (see [Permissions](#permissions)), open it, and fill in the setup form. It
+  downloads a NixOS image and configures it from the app; Configure changes
+  it later. The rest of this page is for the other way.
+- **Your own flake**: describe the guest in Nix and provision it from your
+  computer, as below. `pocketnix provision` without `--image` does the first
+  way's setup over adb instead.
+
+## Permissions
+
+Only the adb shell can grant them, so the app can't ask for them itself:
+
+```bash
+adb shell pm grant dev.nickolaj.pocketnix android.permission.MANAGE_VIRTUAL_MACHINE
+adb shell pm grant dev.nickolaj.pocketnix android.permission.USE_CUSTOM_VIRTUAL_MACHINE
+```
+
+They last until the app is uninstalled; USB or wireless debugging can be
+turned off again afterwards.
+
 ## Requirements
 
 - A phone whose AVF runs non-protected custom VMs. Tested on a Pixel 8 Pro with
@@ -107,4 +130,4 @@ or use `pocketnix ssh-proxy --port 2022` as an ssh `ProxyCommand` (see
   your flake.
 - The VM lives in the app's process. If the app crashes, the guest loses power.
 - Only one networked VM can run on a phone at a time, across all apps.
-- Don't build on the phone. Updates arrive pre-built ([Updates](updates.md)).
+- Don't build your own flake on the phone. Updates arrive pre-built ([Updates](updates.md)).

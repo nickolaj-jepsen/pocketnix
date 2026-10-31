@@ -343,8 +343,9 @@ impl State {
         }
         conn.surfaces.insert(window, ids);
 
-        let mut group: Vec<(Commit, Vec<u8>, Option<u64>)> = Vec::new();
+        let mut group: Vec<Built> = Vec::new();
         let mut callbacks: Vec<WlCallback> = Vec::new();
+        let mut frames = conn.guest_ram.then_some(&mut conn.frames);
         for (z, layer) in layers.iter().enumerate() {
             let built = compositor::with_states(&layer.surface, |d| {
                 with_surf(d, |s| {
@@ -361,6 +362,7 @@ impl State {
                         generation,
                         want_hash || log_hashes,
                         !mine.is_empty(),
+                        frames.as_deref_mut(),
                         stats,
                     );
                     callbacks.append(&mut mine);
@@ -368,12 +370,12 @@ impl State {
                 })
                 .flatten()
             });
-            if let Some(mut commit) = built {
+            if let Some(mut built) = built {
                 if !want_hash {
-                    commit.0.flags &= !protocol::FLAG_HASH;
-                    commit.0.hash = 0;
+                    built.commit.flags &= !protocol::FLAG_HASH;
+                    built.commit.hash = 0;
                 }
-                group.push(commit);
+                group.push(built);
             }
         }
         if group.is_empty() {
@@ -383,9 +385,12 @@ impl State {
         let last = group.len() - 1;
         let mut seq = 0;
         let mut sent = 0;
-        for (i, (mut commit, data, hash)) in group.into_iter().enumerate() {
+        for (i, Built { mut commit, data, hash, loan }) in group.into_iter().enumerate() {
             seq = conn.next_seq();
             commit.seq = seq;
+            if let Some(loan) = loan {
+                conn.frames.lend(loan, seq);
+            }
             if i < last {
                 commit.flags |= protocol::FLAG_GROUPED;
             }
@@ -502,9 +507,24 @@ fn push_tree(
     );
 }
 
-/// The COMMIT a surface needs, if any, with its encoded data and, when
-/// asked for, its content hash. `force` (pending frame callbacks) asks for
-/// one even when nothing changed.
+/// Data at least this big goes as PAGES to an app that maps guest RAM:
+/// smaller data costs a frame buffer slot for little gain.
+const PAGES_ABOVE: usize = 256 << 10;
+
+/// A COMMIT ready to send.
+struct Built {
+    commit: Commit,
+    /// Its encoded data.
+    data: Vec<u8>,
+    /// Its content hash, when asked for.
+    hash: Option<u64>,
+    /// The frame buffer slot a PAGES commit lends the app.
+    loan: Option<crate::guestram::Loan>,
+}
+
+/// The COMMIT a surface needs, if any. `force` (pending frame callbacks)
+/// asks for one even when nothing changed; `frames`, an app that maps guest
+/// RAM's frame buffers, carries big data as PAGES.
 #[allow(clippy::too_many_arguments)]
 fn build_commit(
     s: &mut Surf,
@@ -515,8 +535,9 @@ fn build_commit(
     generation: u64,
     hash: bool,
     force: bool,
+    frames: Option<&mut crate::guestram::Frames>,
     stats: &mut crate::stats::Stats,
-) -> Option<(Commit, Vec<u8>, Option<u64>)> {
+) -> Option<Built> {
     let x = to_px(layer.loc.x, scale);
     let y = to_px(layer.loc.y, scale);
     let placement = Placement {
@@ -546,7 +567,7 @@ fn build_commit(
         stats.add("commitsHidden", 1);
         s.sent = Some(Sent { content: None, placement });
         s.sent_gen = generation;
-        return Some((commit, Vec::new(), None));
+        return Some(Built { commit, data: Vec::new(), hash: None, loan: None });
     };
     commit.format = m.format;
     commit.width = m.width;
@@ -558,12 +579,13 @@ fn build_commit(
 
     let content = (m.width, m.height, m.format);
     let app_has = sent.as_ref().is_some_and(|p| p.content == Some(content));
-    let mut data = Vec::new();
+    // A whole buffer's data is the mirror as it is; anything less is packed.
+    let mut data = std::borrow::Cow::Borrowed(&[][..]);
     let pack_start = std::time::Instant::now();
     if !app_has || s.pending.full {
         commit.flags = protocol::FLAG_BUFFER | protocol::FLAG_FULL;
         commit.rects = vec![Rect { x: 0, y: 0, w: m.width, h: m.height }];
-        data = m.pack(&commit.rects);
+        data = std::borrow::Cow::Borrowed(&m.pixels);
     } else if s.pending.scroll.is_some() || !s.pending.rects.is_empty() {
         commit.flags = protocol::FLAG_BUFFER;
         if let Some(dy) = s.pending.scroll {
@@ -571,7 +593,7 @@ fn build_commit(
             commit.scroll = dy;
         }
         commit.rects = std::mem::take(&mut s.pending.rects);
-        data = m.pack(&commit.rects);
+        data = std::borrow::Cow::Owned(m.pack(&commit.rects));
     } else if sent.as_ref().map(|p| p.placement) == Some(placement) && !force {
         return None;
     }
@@ -592,22 +614,37 @@ fn build_commit(
         content_hash = Some(h);
     }
     commit.encoding = protocol::ENCODING_RAW;
-    if !data.is_empty() {
+    let mut loan = None;
+    if let Some(frames) = frames.filter(|_| data.len() >= PAGES_ABOVE) {
+        let start = std::time::Instant::now();
+        if let Some((l, pages)) = frames.put(&data) {
+            stats.add("pixelBytes", data.len() as u64);
+            stats.add("commitsPages", 1);
+            stats.time("pagesNs", start.elapsed());
+            commit.encoding = protocol::ENCODING_PAGES;
+            data = std::borrow::Cow::Owned(pages);
+            loan = Some(l);
+        }
+    }
+    if loan.is_none() && !data.is_empty() {
         stats.add("pixelBytes", data.len() as u64);
         let compress_start = std::time::Instant::now();
-        let packed = protocol::compress(&data);
+        let mut shards = Vec::new();
+        let packed = protocol::compress(&data, &mut shards);
         stats.time("compressNs", compress_start.elapsed());
+        stats.shards(&shards);
         match packed {
             Some(packed) => {
                 commit.encoding = protocol::ENCODING_ZSTD;
-                data = packed;
+                data = std::borrow::Cow::Owned(packed);
             }
             None => stats.add("sentRaw", 1),
         }
     }
+    let data = data.into_owned();
     s.sent = Some(Sent { content: Some(content), placement });
     s.sent_gen = generation;
-    Some((commit, data, content_hash))
+    Some(Built { commit, data, hash: content_hash, loan })
 }
 
 #[cfg(test)]

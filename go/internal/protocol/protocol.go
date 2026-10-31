@@ -6,8 +6,8 @@
 // with its own [Hello] or an [Error] before the stream's own traffic starts:
 //
 //   - control: newline-delimited JSON messages both ways for the app's
-//     lifetime; the agent pushes [Config], [Updates] and [Wake] first, then
-//     each again whenever it changes.
+//     lifetime; the agent pushes [Config], [Updates], [Wake] and, when port
+//     offers are on, [PortListeners] first, then each again whenever it changes.
 //     Requests are answered in order, with a message of the request's own
 //     type or an [Error].
 //   - pty: binary frames ([WriteFrame]) carrying one terminal session.
@@ -16,6 +16,7 @@
 //     loopback, one stream per client address on the phone.
 //   - font: the configured font file's bytes, then EOF.
 //   - gui: the stream itself, handed to the guest compositor ([StreamGUI]).
+//   - audio: the guest's sound as raw PCM ([StreamAudio]).
 package protocol
 
 // Version is bumped on any incompatible change. Additive changes (new
@@ -54,6 +55,11 @@ const (
 	// agent without it refuses rather than splicing datagrams into TCP.
 	StreamUDP  = "udp"
 	StreamFont = "font"
+	// StreamAudio carries the guest's sound to the app after the Hello: raw
+	// PCM, signed 16-bit little-endian, 48 kHz, 2 channels interleaved, as
+	// it plays. Nothing comes while the guest is silent. A newer audio
+	// stream ends the older one.
+	StreamAudio = "audio"
 )
 
 // Message types on the control stream, and the Hello/Error replies.
@@ -81,6 +87,17 @@ const (
 	TypeUpdateCancel = "update-cancel"
 	// TypeHistory asks for the user's shell history, answered with [History].
 	TypeHistory = "history"
+
+	// TypeSelections writes a managed guest's [Selections] for its next
+	// rebuild, and is answered with them.
+	TypeSelections = "selections"
+	// TypePackageAdd and TypePackageRemove change a managed guest's user
+	// profile ([Request.Packages], nixpkgs attributes).
+	TypePackageAdd    = "package-add"
+	TypePackageRemove = "package-remove"
+	// TypeRun fetches [Request.Package] to run it once; its outcome arrives
+	// as [Updates.Run].
+	TypeRun = "run"
 )
 
 // Request is an app request on the control stream; fields past Type belong
@@ -111,6 +128,17 @@ type Request struct {
 
 	// Folders is a host-folders request's.
 	Folders []HostFolder `json:"folders,omitempty"`
+
+	// Path is a resolve-path request's.
+	Path string `json:"path,omitempty"`
+	// Pin is an update-check's or update-apply's pocketnix release ("0.2.0")
+	// for a managed guest's flake; empty keeps the one it has.
+	Pin string `json:"pin,omitempty"`
+	// AllowBuilds lets an update-apply or run build what its [Plan] lists.
+	AllowBuilds bool        `json:"allowBuilds,omitempty"`
+	Selections  *Selections `json:"selections,omitempty"`
+	Packages    []string    `json:"packages,omitempty"`
+	Package     string      `json:"package,omitempty"`
 }
 
 // Envelope is the part of every JSON message a receiver reads first.
@@ -135,6 +163,9 @@ type Hello struct {
 	Profile string `json:"profile,omitempty"`
 	Rows    int    `json:"rows,omitempty"`
 	Cols    int    `json:"cols,omitempty"`
+	// Command is a PTY's to run through the login shell instead of the
+	// profile's; the app's way to start a fetched program in a tab.
+	Command string `json:"command,omitempty"`
 	// Tab is the agent's on a PTY: the session's id, unique across agent
 	// restarts, which it sees as $POCKETNIX_TAB.
 	Tab string `json:"tab,omitempty"`
@@ -176,7 +207,38 @@ type Config struct {
 	Terminal Terminal  `json:"terminal"`
 	// GUI is absent from an agent without GUI support.
 	GUI *GUI `json:"gui,omitempty"`
+	// Managed is present when the phone manages this guest: the app
+	// configures it and it rebuilds itself.
+	Managed *Managed `json:"managed,omitempty"`
+	// GPU asks the app to give the VM the phone's GPU (gfxstream) from its
+	// next start.
+	GPU bool `json:"gpu,omitempty"`
+	// Audio says the agent serves [StreamAudio]: the guest has a sound
+	// pipe. The agent sets it; a reload may turn it on or off.
+	Audio bool `json:"audio,omitempty"`
 }
+
+// Managed is a managed guest's: Flake is its own flake's directory.
+type Managed struct {
+	Flake string `json:"flake"`
+}
+
+// Selections are what the app configures in a managed guest, its flake's
+// pocketnix.json: the user, which [Services] are on, and how many
+// generations to keep besides the running and the booted one.
+type Selections struct {
+	Type            string          `json:"type,omitempty"` // "selections" on the wire
+	User            string          `json:"user"`
+	Services        map[string]bool `json:"services"`
+	KeepGenerations int             `json:"keepGenerations"`
+	// Changed is the agent's answer: the request changed the file, so the
+	// running system may not be what it describes.
+	Changed bool `json:"changed,omitempty"`
+}
+
+// Services are the switches of [Selections], the options of the module's
+// pocketnix.guest.managed.selections.services.
+var Services = []string{"ssh", "tailscale", "podman", "gui"}
 
 // Forward is one port the app exposes on the phone.
 type Forward struct {

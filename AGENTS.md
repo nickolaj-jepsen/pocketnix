@@ -20,7 +20,9 @@ in `docs/development.md`.
 - Run `nix fmt` before committing: it formats Nix, Go and Kotlin (`nix/treefmt.nix`;
   ktlint's rules are in `.editorconfig`). The compositor isn't rustfmt'ed, so
   don't reformat it wholesale.
-- Never build anything inside a guest: an unthrottled build pegs the whole phone.
+- Never run a build of your own inside a guest: an unthrottled build pegs the
+  whole phone. A managed guest's own rebuild is the product's, throttled
+  (`pocketnix.guest.managed.cpuQuota`); start one only through the app.
 - Uninstalling the app, clearing its data or `provision --replace` deletes
   the VM's disk: never do it to a phone's working VM without asking.
 

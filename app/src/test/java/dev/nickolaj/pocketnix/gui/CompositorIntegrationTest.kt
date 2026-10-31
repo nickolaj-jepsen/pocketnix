@@ -150,7 +150,7 @@ class CompositorIntegrationTest {
                 GuiMessage.Ready -> state.ready()
 
                 is GuiMessage.Group -> {
-                    state.apply(m)
+                    state.apply(GuiMessage.Group(m.commits.map { it.unpacked(JavaUnpacker) {} }))
                     partial += m.commits.count { it.buffer && !it.full }
                     for (w in m.commits.map { it.window }.distinct()) c.send(Gui.presented(w, state.windows.getValue(w).lastSeq))
                 }
@@ -177,7 +177,7 @@ class CompositorIntegrationTest {
 
     @Test
     fun mirrorsAClientExactlyAcrossAReconnect() {
-        val state = GuiState(JavaUnpacker)
+        val state = GuiState()
         val mirror = Mirror(state)
         val first = Conn()
         val hello = handshake(first)

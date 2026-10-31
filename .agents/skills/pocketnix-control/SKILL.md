@@ -29,10 +29,19 @@ attached (`adb devices`). `pocketnix control -h` lists the commands.
 
 | command | does |
 |---|---|
-| `dump [--tab <id>] [--lines <n>]` | Prints the VM state (`state=… link=… host=…`), then each tab as `tab <id> <kind> '<title>' running=<bool>` followed by its last lines as `\|<id>\| <line>`, then `gui …` lines for the GUI connection and each window. `--tab` limits it to one tab and leaves out the GUI. |
+| `dump [--tab <id>] [--lines <n>]` | Prints the VM state (`state=… phase=… link=… host=…`), the chrome's colours (`theme background=#rrggbb source=<default\|saved\|module>`: `saved` is the last module theme, applied before the agent answers), the managed guest's setup and updates (`setup=… managed=<flake\|null>`, `updates …` lines once the agent reports updates, and their log's last lines as `\|log\| <line>`; between them, what the last launch gave the VM and the guest sound's stream: `engine gpu=<gfxstream\|2d\|none> gpuAsked=… gpuRefused=… guestRam=… virtioSnd=… audio=<off\|dialing\|streaming\|refused>`, with `engine launched=none` before a launch and on the TCP backend), then each tab as `tab <id> <kind> '<title>' running=<bool>` followed by its last lines as `\|<id>\| <line>`, then `gui …` lines for the GUI connection and each window. `--tab` limits it to one tab and leaves out the GUI. |
 | `tab [--profile <name>] [--timeout <dur>] [<text>]` | Waits for the agent, opens a terminal tab, types `<text>` and Enter, and prints the new tab's id. |
 | `type --tab <id> <text>` | Types `<text>` and Enter into an open tab. |
 | `wait --tab <id> [--timeout <dur>] [--lines <n>] <regexp>` | Polls the tab until one of its transcript lines matches, then prints the tab's dump. Exits 1 with the last dump if nothing matches in time. |
+| `menu --tab <id> [<label>…]` | Lists the tab's context menu (the one More… and a right-click open, with no selection) as `<label><TAB><enabled\|disabled>` lines, or the page a path of labels leads to (`menu --tab 1 "Open link…"`). A path ending at an action runs it: `menu --tab 1 "Open link…" https://example.org`, `menu --tab 1 "Reset terminal"`. Open link…'s entries are labelled as shown, so a long URL's label is shortened in the middle. |
+| `menu --chip <id> [<label>…]` | The same for the tab's long-press menu: `menu --chip 2 "New tab"`. Rename… opens a dialog, so it answers an error here: use `rename`. |
+| `menu --main [<label>…]` | The same for the ⋮ menu: `menu --main "Reopen ended tabs"`. Entries that open a dialog or ask first answer an error. |
+| `links --tab <id>` | Prints the tab's Open link… list, one full URL per line, newest first. |
+| `rename --tab <id> <title>` | Gives a terminal tab its own title, which `dump` and the notifications show; `""` goes back to the shell's title. |
+| `reopen --tab <id>` | Starts an ended terminal tab again in a new session, keeping its id, place and title; the old transcript is gone. |
+| `offers` | Prints the port forward offers of this guest boot, one `port=<guest> state=<offered\|dismissed\|allowed> phone=<port\|->` line per guest port the agent reported (`forwardOffers` must be on). An allowed port stays listed through the grace period after its listener goes, then drops out. |
+| `offer <port> allow\|dismiss` | Answers an offer as its notification's buttons do. `allow` returns once the phone port listens, and fails with the reason when it couldn't. |
+| `stats` | Prints the GUI link's counters and latency histograms, with the last launch's `guestRam` and `gpu`, as one line of JSON (what `pocketnix bench` samples). |
 | `logcat [--follow]` | Prints the log (main, system and crash buffers) of every process running as the app's uid, so it keeps lines from before a crash or restart. `--follow` streams it. Works on release builds too (`--package`). |
 
 `tab` and `type` take `--no-enter` to type without pressing Enter. Tab 0 is
@@ -66,12 +75,30 @@ command it rejected there, and `--no-enter` leaves text behind, so the next
 ## Reading the state
 
 - A tab's `running=false` means its session ended (shell exited, agent gone).
+- On the state line, `phase=` is what the app's status surfaces show
+  (`VmPhase`, from `state=`, `link=` and the app's own flags): wait for
+  `phase=Running` rather than reading `state=` and `link=` apart.
 - On the state line, `link=` is the agent control channel. `tab` waits until
   it is up, so it fails with "the agent wasn't up within …" while the VM is
   still booting or stopped.
 - The `gui connected=… ready=…` line and the `gui window …` lines show what
   the app knows about guest windows: title, app, size, scale and surfaces.
   Use them to check GUI changes without screenshots.
+- The `engine …` line says what the VM got, which may be less than it asked
+  for: `gpu=` is what it runs with, `gpuAsked=` what the guest's config
+  wants, and `gpuRefused=true` means a GPU launch failed, so the process's
+  later starts go without. `pocketnix control logcat | grep -E 'VM running|GPU'`
+  shows each launch and fallback with its `guestRam=`, so a crosvm death
+  under the GPU and guest RAM together shows both.
+
+## A managed guest
+
+Setup and Configure's operations have no provider command: they are
+`ControlActivity` actions over `adb shell am start` (`docs/development.md`,
+"Scripted control"; the extras are `ControlActivity`'s `EXTRA_*` constants).
+Read their outcome from `dump`: `setup=` while a disk is set up, then the
+`updates …` lines and their `|log|` lines for the rebuild or package
+operation, which hold its error.
 
 ## Without the CLI
 
@@ -91,6 +118,23 @@ adb shell "content call --uri content://dev.nickolaj.pocketnix.debug.control --m
 
 A call answers `Result: Bundle[{…}]`, carrying an `error` key when it failed.
 A failed dump reads `error: <message>`.
+
+## Checking port forward offers
+
+An offer is also a notification, readable over adb:
+`adb shell dumpsys notification --noredact | grep -A3 forward-offer`. To
+reach an allowed forward from the desktop, forward to its phone port:
+`adb forward tcp:<local> tcp:<phone port>`. Against the dev agent (`nix run
+.#dev-agent`), the guest is your desktop and its config leaves offers off:
+pass it a second `--config` (the last one wins), a copy of its own with
+`.forwardOffers = {"enable": true, "lan": false}`. Your desktop's listeners
+are then offered.
+
+## Checking what the app opened or shared
+
+An open or a share starts another app's activity, which system_server logs
+as `ActivityTaskManager: START u0 {act=… dat=…}`. That isn't the app's uid,
+so read it with plain `adb logcat -d`, not `pocketnix control logcat`.
 
 ## Reading the app's log
 
