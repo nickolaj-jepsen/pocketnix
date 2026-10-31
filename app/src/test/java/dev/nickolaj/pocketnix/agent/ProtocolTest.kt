@@ -89,6 +89,12 @@ class ProtocolTest {
     }
 
     @Test
+    fun parsesGpu() {
+        assertEquals(true, GuestConfig.parse("""{"type":"config","gpu":true}""").gpu)
+        assertEquals(false, GuestConfig.parse("""{"type":"config"}""").gpu)
+    }
+
+    @Test
     fun ignoresUnknownFields() {
         val c = GuestConfig.parse("""{"type":"config","future":1,"terminal":{"profiles":[{"name":"a","new":true}]}}""")
         assertEquals(listOf(Profile("a", null)), c.profiles)

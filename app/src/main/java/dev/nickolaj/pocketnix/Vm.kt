@@ -251,6 +251,10 @@ class Vm(private val app: Context) {
         }
         scope.launch { control.config.map { it?.gui }.distinctUntilChanged().collect { gui.config(it) } }
         scope.launch {
+            // Kept for the next start: the GPU is fixed while the VM runs.
+            control.config.map { it?.gpu }.distinctUntilChanged().collect { if (it != null) settings.guestGpu = it }
+        }
+        scope.launch {
             // Offers belong to one guest boot; a dropped stream keeps the last snapshot, the next one replaces it.
             combine(state, control.portListeners, control.config) { s, l, cfg -> Triple(s == VmState.Running, l, cfg?.forwards.orEmpty()) }
                 .collect { (running, l, module) ->

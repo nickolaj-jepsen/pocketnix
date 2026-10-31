@@ -27,6 +27,11 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("network", true)
         set(v) = prefs.edit { putBoolean("network", v) }
 
+    /** The guest's last config asked for the phone's GPU (`pocketnix.guest.gpu.enable`); read at each VM start. */
+    var guestGpu: Boolean
+        get() = prefs.getBoolean("guestGpu", false)
+        set(v) = prefs.edit { putBoolean("guestGpu", v) }
+
     /** Debug builds: give the guest a speaker. */
     var audio: Boolean
         get() = BuildConfig.DEBUG && prefs.getBoolean("audio", false)
@@ -82,7 +87,7 @@ class Settings(context: Context) {
         }
         set(v) = prefs.edit { if (v == null) remove("terminalColors") else putString("terminalColors", JSONObject(v).toString()) }
 
-    fun vm() = VmSettings(memoryMb = memoryMb, cpus = cpus, diskGb = diskGb, network = network, audio = audio, guestRam = guestRam)
+    fun vm() = VmSettings(memoryMb = memoryMb, cpus = cpus, diskGb = diskGb, network = network, gpu = guestGpu, audio = audio, guestRam = guestRam)
 
     companion object {
         const val MAX_MEMORY_MB = 65_536

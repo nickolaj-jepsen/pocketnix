@@ -109,7 +109,9 @@ data class GuestConfig(
     /** Null from an agent without GUI support. */
     val gui: GuiConfig? = null,
     /** The flake of a guest the app manages, or null. */
-    val managedFlake: String? = null
+    val managedFlake: String? = null,
+    /** The module asks for the phone's GPU from the VM's next start. */
+    val gpu: Boolean = false
 ) {
     companion object {
         fun parse(json: String): GuestConfig = parse(JSONObject(json))
@@ -144,7 +146,8 @@ data class GuestConfig(
                     Snippet(it.getString("name"), it.getString("command"), it.optBoolean("submit"))
                 },
                 gui = o.optJSONObject("gui")?.let(GuiConfig::parse),
-                managedFlake = o.optJSONObject("managed")?.optStringOrNull("flake")
+                managedFlake = o.optJSONObject("managed")?.optStringOrNull("flake"),
+                gpu = o.optBoolean("gpu")
             )
         }
     }

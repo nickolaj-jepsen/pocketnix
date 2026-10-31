@@ -19,6 +19,8 @@ data class VmSettings(
     val cpus: Int,
     val diskGb: Int,
     val network: Boolean,
+    /** The phone's GPU through gfxstream, where AVF offers it. */
+    val gpu: Boolean = false,
     /** A virtio-snd speaker (no microphone), played through AAudio. */
     val audio: Boolean = false,
     /**

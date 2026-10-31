@@ -104,22 +104,61 @@ object AvfReflect {
         if (!ok) Log.w(TAG, "no useNetwork/setNetworkSupported on this AVF API")
     }
 
+    /** The guest's GPU; null renderer flags leave AVF's defaults. */
+    data class Gpu(
+        val backend: String,
+        val vulkan: Boolean? = null,
+        val egl: Boolean? = null,
+        val gles: Boolean? = null,
+        val glx: Boolean? = null,
+        val surfaceless: Boolean? = null,
+        val contexts: List<String> = emptyList()
+    )
+
+    /** What a networked VM asks for when it wants no GPU (see [setGpuConfig]). */
+    val GPU_2D = Gpu("2d")
+
     /**
-     * Declares a GPU backend for the guest, and returns whether it took effect.
+     * The phone's GPU through gfxstream, as Vulkan only. virtmgr pastes
+     * `backend` into crosvm's `--gpu=` unchecked, which is the only way to
+     * reach the two crosvm options Pixel pKVM needs (app/AGENTS.md).
+     */
+    val GPU_GFXSTREAM = Gpu(
+        backend = "gfxstream,fixed-blob-mapping=true,system-blob=true",
+        vulkan = true,
+        // Off, though virtmgr defaults them on: they serve guest GLES, which Linux Mesa has no driver for.
+        egl = false,
+        gles = false,
+        glx = false,
+        surfaceless = true,
+        contexts = listOf("gfxstream-vulkan", "gfxstream-composer")
+    )
+
+    /**
+     * Declares the guest's GPU, and returns whether it took effect.
      *
      * "2d" is what a networked VM asks for: stock Pixel virtmgr runs GPU-less
      * VMs on crosvm_minimal, which lacks `--net` and aborts a networked VM.
      * Absent GpuConfig classes mean a revision that runs full crosvm anyway.
+     * A renderer setter this revision lacks is logged and skipped.
      */
-    fun setGpuConfig(b: Any, backend: String): Boolean = runCatching {
+    fun setGpuConfig(b: Any, gpu: Gpu): Boolean = runCatching {
         val gpuB = (GPU_B ?: return true).getDeclaredConstructor().apply { isAccessible = true }.newInstance()
-        if (!set(gpuB, "setBackend", backend)) error("GpuConfig.Builder.setBackend($backend) is missing or failed")
+        if (!set(gpuB, "setBackend", gpu.backend)) error("GpuConfig.Builder.setBackend(${gpu.backend}) is missing or failed")
+        val missing = listOf(
+            "setRendererUseVulkan" to gpu.vulkan,
+            "setRendererUseEgl" to gpu.egl,
+            "setRendererUseGles" to gpu.gles,
+            "setRendererUseGlx" to gpu.glx,
+            "setRendererUseSurfaceless" to gpu.surfaceless,
+            "setContextTypes" to gpu.contexts.takeIf { it.isNotEmpty() }?.toTypedArray()
+        ).filter { (name, value) -> value != null && !set(gpuB, name, value) }.map { it.first }
         val cfg = invoke(gpuB, "build") ?: error("GpuConfig.Builder.build() returned null")
         invoke(b, "setGpuConfig", GPU!! to cfg)
-        Log.i(TAG, "gpu config: $backend")
+        Log.i(TAG, "gpu config: $gpu" + if (missing.isEmpty()) "" else "; this AVF lacks $missing")
         true
     }.getOrElse {
-        Log.w(TAG, "setGpuConfig($backend) failed; virtmgr may pick crosvm_minimal (no virtio-net)", it)
+        Log.w(TAG, "setGpuConfig(${gpu.backend}) failed; virtmgr may pick crosvm_minimal (no virtio-net)", it)
         false
     }
 
@@ -250,6 +289,7 @@ object AvfReflect {
         val types = when (value) {
             is Boolean -> listOf(Boolean::class.javaObjectType, Boolean::class.javaPrimitiveType!!)
             is String -> listOf(String::class.java)
+            is Array<*> -> listOf(Array<String>::class.java)
             else -> emptyList()
         }
         for (t in types) {

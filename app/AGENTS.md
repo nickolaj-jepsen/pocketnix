@@ -14,18 +14,24 @@ that cross directories.
   reach them by reflection with in-process HiddenApiBypass. Its
   `GpuConfig.Builder` takes boxed `Boolean`s on GrapheneOS 17, so a
   `boolean.class` lookup throws (`AvfReflect.set` tries both).
-- A third-party VM can have the phone's GPU, but nothing yet composites on it.
-  `GpuConfig(backend=gfxstream, vulkan=true, egl=false, gles=false, glx=false,
-  surfaceless=true, context-types=[gfxstream-vulkan, gfxstream-composer])`
-  (the Terminal app's own config) reaches crosvm as `--gpu=…`, and the guest's Mesa gfxstream ICD then runs
-  `vulkaninfo` against the real GPU ("Virtio-GPU GFXStream (Mali-G715)").
-  Leaving `egl`/`gles` unset is not equivalent: virtmgr defaults them true and
-  the guest's ASG stream then dies on `mmap64: Invalid argument`. Two blockers
-  stop a compositor anyway: the ICD lacks `VK_EXT_physical_device_drm`
-  (wlroots' Vulkan renderer refuses the device) and zink needs robustness2's
-  `nullDescriptor` (also absent). `backend=virglrenderer` answers "No virgl
-  contexts available on host", and adding `venus` panics crosvm's `v_gpu`
-  thread (SIGABRT).
+- A third-party VM gets the phone's GPU through gfxstream (`AvfReflect.GPU_GFXSTREAM`),
+  but the Pixel's android14-6.1 pKVM unmaps nothing from a running VM: deleting
+  a memslot is EPERM, and a guest page stays on the host page it first
+  faulted on. With crosvm's default per-blob memslots the first GPU context
+  after boot works and every later one fails (crosvm: `ResourceUnmapBlob:
+  ErrUnspec`, then `File exists`; the guest: `mmap64 failed with (Invalid
+  argument)`). `fixed-blob-mapping=true` registers the window once,
+  `system-blob=true` gives Vulkan memory the shm fd that needs (pKVM 6.1 also
+  maps only swap-backed pages), and the guest's `vgpu_relinquish` drops the
+  stale pages. GpuConfig has no field for either option; virtmgr pastes
+  `backend` into `--gpu=` unchecked. android15-6.6 and later appear to
+  restrict only protected VMs (read from kernel source, not tried on a device).
+- crosvm and gfxstream log to logcat (tags `crosvm`, `GFXSTREAM`).
+- zink refuses gfxstream: let `VK_EXT_robustness2` through the guest ICD's
+  allowlist (Mesa 26.3 does) and `nullDescriptor` still reads false in the
+  guest, though the Mali driver has it. `backend=virglrenderer` answers "No
+  virgl contexts available on host", and adding `venus` panics crosvm's
+  `v_gpu` thread (SIGABRT).
 - Only the display *surface* handoff is sealed to `vmlauncher_app` (sepolicy),
   which is why the guest gets a render node but no scanout. GrapheneOS's own
   Terminal app is not a better reference: its `GraphicsManager` offers only
