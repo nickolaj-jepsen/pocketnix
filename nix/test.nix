@@ -308,6 +308,15 @@ in
           client.fail(f"printf x | timeout 60 {A} forward 8126")
           phone.succeed("systemctl stop root-v4 user-v6 user-later")
 
+      with subtest("a program a run-in-tab session starts is offered, and forwarded"):
+          # As the launcher's Run opens a tab for a fetched dev server.
+          client.succeed(f"systemd-run --unit=command-tab {A} exec --command '${pkgs.socat}/bin/socat TCP-LISTEN:8128,fork EXEC:${pkgs.coreutils}/bin/cat'")
+          await_ports("/tmp/events", lambda ports: 8128 in ports)
+          assert client.succeed(f"printf tab | timeout 60 {A} forward 8128") == "tab"
+          # Closing the tab hangs up its session.
+          client.succeed("systemctl stop command-tab")
+          await_ports("/tmp/events", lambda ports: 8128 not in ports)
+
       with subtest("the session bus: notify-send's actions come back, gio opens on Android"):
           # Lingering, with no login, starts the user's bus.
           phone.wait_for_unit("dbus.socket", "nixos")
