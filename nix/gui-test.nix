@@ -1,5 +1,6 @@
-# A guest with gui.enable: the compositor, the agent's gui stream and the app
-# list, driven the way the app drives them.
+# A guest with gui.enable: the compositor, the agent's gui and audio streams,
+# the app list, the clipboard bridge and frames read from guest RAM on the
+# host, driven the way the app drives them.
 {
   pkgs,
   self,
