@@ -88,7 +88,8 @@
       };
       guiSocket = guiSocketName;
     }
-    // lib.optionalAttrs (gui.enable && config.services.pipewire.enable) {inherit audioPipe;};
+    // lib.optionalAttrs (gui.enable && config.services.pipewire.enable) {inherit audioPipe;}
+    // lib.optionalAttrs cfg.gpu.enable {gpu = true;};
   upd = cfg.updates;
   mgd = cfg.managed;
   # Relative to the user's home. Apps run without being kept live here; it's
@@ -746,6 +747,16 @@ in {
       };
     };
 
+    gpu.enable = mkEnableOption ''
+      the phone's GPU for the guest's Vulkan apps (experimental): from the
+      VM's next start the app gives it a gfxstream GPU, and starts it without
+      one where the phone's AVF can't. It installs Mesa's drivers, presents
+      Vulkan windows through shared memory (the compositor takes no dmabufs)
+      and, with the AVF kernel, loads `vgpu_relinquish`, without which Pixel
+      hosts that never unmap a guest page (android14-6.1) map GPU memory
+      only once per boot. OpenGL stays software rendered
+    '';
+
     avf.enable = mkOption {
       type = types.bool;
       default = true;
@@ -1255,6 +1266,20 @@ in {
       # enableDefaultPackages adds CJK, unifont and freefont (~145 MiB) to this.
       fonts.packages = [pkgs.dejavu_fonts pkgs.liberation_ttf pkgs.noto-fonts-color-emoji];
     })
+
+    (mkIf cfg.gpu.enable (let
+      kernelPackages = config.boot.kernelPackages;
+      # Only the AVF kernel carries the tree to build against.
+      relinquish = lib.optional (kernelPackages.kernel ? kernelSource) (kernelPackages.callPackage ./vgpu-relinquish/package.nix {});
+    in {
+      hardware.graphics.enable = true;
+      # Mesa's WSI copies each frame into a wl_shm buffer, the only kind the compositor takes.
+      environment.sessionVariables.MESA_VK_WSI_DEBUG = "sw";
+      # As pocketnix-gui's: a switch finds the user manager running.
+      system.userActivationScripts.pocketnix-gpu = "${config.systemd.package}/bin/systemctl --user set-environment MESA_VK_WSI_DEBUG=sw";
+      boot.extraModulePackages = relinquish;
+      boot.kernelModules = lib.optional (relinquish != []) "vgpu_relinquish";
+    }))
 
     (mkIf cfg.integrations.xdgOpen {
       environment.systemPackages = [openDesktop];

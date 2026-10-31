@@ -79,8 +79,11 @@ sway, labwc or Plasma can run nested as an ordinary client, in one window.
 
 ## Limits
 
-- Rendering is software in the guest: the phone's GPU is reachable from a
-  VM, but nothing can composite on it yet.
+- Rendering is software in the guest unless `pocketnix.guest.gpu.enable`
+  (experimental) gives Vulkan apps the phone's GPU. Their frames still
+  reach Android as pixels, like any window's (through guest RAM where the
+  app maps it, else over the stream), so it speeds up drawing, not the
+  window updates; OpenGL stays software.
 - Sound is playback only: PipeWire's "Android" output, which the app plays.
   Debug builds can use AVF's virtio-snd instead, turned on from a scripted
   start (see [Development](development.md)), which costs the guest-RAM frames

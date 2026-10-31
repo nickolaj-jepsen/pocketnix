@@ -161,3 +161,6 @@ ref. With no app connected, a request fails instead of queueing.
   need adb once either way, since only the shell user can grant them.
 - What changes with the system lives in the module and applies live; what
   must exist before boot, or only the phone knows, lives in the app.
+  The exception is `pocketnix.guest.gpu.enable`, by choice: the GPU goes
+  with the system that drives it, so the app keeps the last config's
+  answer and gives the GPU from the VM's next start.

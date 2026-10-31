@@ -415,6 +415,42 @@ one of “tcp”, “udp”
 
 
 
+## pocketnix\.guest\.gpu\.enable
+
+
+
+Whether to enable the phone’s GPU for the guest’s Vulkan apps (experimental): from the
+VM’s next start the app gives it a gfxstream GPU, and starts it without
+one where the phone’s AVF can’t\. It installs Mesa’s drivers, presents
+Vulkan windows through shared memory (the compositor takes no dmabufs)
+and, with the AVF kernel, loads ` vgpu_relinquish `, without which Pixel
+hosts that never unmap a guest page (android14-6\.1) map GPU memory
+only once per boot\. OpenGL stays software rendered
+\.
+
+
+
+*Type:*
+boolean
+
+
+
+*Default:*
+
+```nix
+false
+```
+
+
+
+*Example:*
+
+```nix
+true
+```
+
+
+
 ## pocketnix\.guest\.gui\.enable
 
 

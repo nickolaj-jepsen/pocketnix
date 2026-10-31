@@ -43,6 +43,8 @@ in
       imports = [self.nixosModules.default ../example/configuration.nix];
       pocketnix.guest = {
         avf.enable = false;
+        # Only the config half: QEMU's VM has no gfxstream.
+        gpu.enable = true;
         agent.listen = ["vsock:9100" "tcp:0.0.0.0:9100"];
         # On ssh's host port: TCP and UDP forwards are separate spaces.
         forwards.echo = {
@@ -188,6 +190,7 @@ in
       with subtest("the control stream delivers the module's config"):
           cfg = json.loads(client.succeed(f"{A} config"))
           assert cfg["hostname"] == "${nodes.phone.networking.hostName}", cfg["hostname"]
+          assert cfg.get("gpu") is True, cfg.get("gpu")
           ssh_port = ${toString nodes.phone.pocketnix.guest.forwards.ssh.hostPort}
           forwards = {f["name"]: f for f in cfg["forwards"]}
           fields = ("guestPort", "hostPort", "protocol")

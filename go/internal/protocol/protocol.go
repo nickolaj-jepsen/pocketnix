@@ -210,6 +210,9 @@ type Config struct {
 	// Managed is present when the phone manages this guest: the app
 	// configures it and it rebuilds itself.
 	Managed *Managed `json:"managed,omitempty"`
+	// GPU asks the app to give the VM the phone's GPU (gfxstream) from its
+	// next start.
+	GPU bool `json:"gpu,omitempty"`
 }
 
 // Managed is a managed guest's: Flake is its own flake's directory.
