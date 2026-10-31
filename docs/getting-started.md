@@ -130,4 +130,4 @@ or use `pocketnix ssh-proxy --port 2022` as an ssh `ProxyCommand` (see
   your flake.
 - The VM lives in the app's process. If the app crashes, the guest loses power.
 - Only one networked VM can run on a phone at a time, across all apps.
-- Don't build on the phone. Updates arrive pre-built ([Updates](updates.md)).
+- Don't build your own flake on the phone. Updates arrive pre-built ([Updates](updates.md)).
