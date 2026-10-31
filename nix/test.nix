@@ -589,6 +589,9 @@ in
       with subtest("an agent restart doesn't prune again in the same boot"):
           start = phone.succeed("systemctl show -p ExecStart --value pocketnix-agent.service")
           marker = start.split("--prune-marker ", 1)[1].split()[0]
+          # The boot's prune gives up if an earlier subtest's operation runs
+          # then; a restart starts its delay over, with nothing else running.
+          phone.succeed("systemctl restart pocketnix-agent.service")
           # Written once the boot's prune ran, after its delay.
           phone.wait_until_succeeds(f"test -e {marker}", timeout=300)
           phone.succeed("systemctl restart pocketnix-agent.service")
