@@ -223,6 +223,13 @@ func loadRuns(dir string) ([]*workloadRuns, error) {
 		if b, _ := dig(r, "android", "after", "charging").(bool); b {
 			w.notes["charging: no power figure"] = true
 		}
+		// What the app's VM ran with; runs that differ get a note each.
+		if v, ok := dig(r, "app", "guestRam").(bool); ok {
+			w.notes[fmt.Sprintf("guestRam=%t", v)] = true
+		}
+		if v, ok := dig(r, "app", "gpu").(string); ok {
+			w.notes["gpu="+v] = true
+		}
 	}
 	if len(order) == 0 {
 		return nil, fmt.Errorf("no runs in %s", dir)

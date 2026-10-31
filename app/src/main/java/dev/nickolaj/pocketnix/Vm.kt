@@ -620,8 +620,14 @@ class Vm(private val app: Context) {
         if (only == null) for (line in gui.dump()) add("gui $line")
     }
 
-    /** Debug builds, over adb: the GUI link's [GuiSession.stats] as JSON. */
-    fun debugStats(): String = gui.stats().toString()
+    /**
+     * Debug builds, over adb: the GUI link's [GuiSession.stats] as JSON, with
+     * the last launch's `guestRam` and `gpu` ([Launched]) once there is one.
+     */
+    fun debugStats(): String {
+        val launched = _engine.value.launched
+        return gui.stats().put("guestRam", launched?.guestRam).put("gpu", launched?.gpu).toString()
+    }
 
     private fun applyColors(colors: Map<String, String>, source: String) {
         themeSource = source

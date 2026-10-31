@@ -150,3 +150,21 @@ func TestReportTakesTheMedianRunPerWorkload(t *testing.T) {
 		t.Errorf("report against itself: %v", err)
 	}
 }
+
+func TestReportNotesWhatThePhonesVMRanWith(t *testing.T) {
+	dir := t.TempDir()
+	for i, ram := range []bool{true, false} {
+		r := map[string]any{"workload": "noise", "client": map[string]any{"fps": 30.0, "seconds": 10.0}, "app": map[string]any{"guestRam": ram, "gpu": "2d"}}
+		b, _ := json.Marshal(r)
+		os.WriteFile(filepath.Join(dir, "01-noise-"+string(rune('1'+i))+".json"), b, 0o644)
+	}
+	runs, err := loadRuns(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, note := range []string{"guestRam=true", "guestRam=false", "gpu=2d"} {
+		if !runs[0].notes[note] {
+			t.Errorf("no note %q in %v", note, runs[0].notes)
+		}
+	}
+}
