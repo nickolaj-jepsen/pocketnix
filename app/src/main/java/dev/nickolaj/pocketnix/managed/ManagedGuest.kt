@@ -144,39 +144,30 @@ class ManagedGuest(
     /**
      * Writes [sel] and rebuilds the guest from it, pinned to this app's
      * release: checks, then asks [confirm] about anything it would compile on
-     * the phone, then switches. Returns why it failed, or null.
+     * the phone, then switches. Returns why it failed, or null (also when
+     * [confirm] said no, which leaves the selections pending).
      */
     suspend fun rebuild(sel: Selections, confirm: (suspend (Plan) -> Boolean)?): String? {
         store.selections = sel
-        val err = try {
-            writeSelections(sel)
-            update(confirm)
+        val outcome = try {
+            if (writeSelections(sel).optBoolean("changed")) store.rebuildPending = true
+            checkAndApply(::runOp, confirm)
         } catch (e: IOException) {
-            e.message ?: e.toString()
+            UpdateOutcome.Failed(e.message ?: e.toString())
         }
-        if (err == null && control.updates.value?.blocked == null) {
+        if (outcome == UpdateOutcome.Done && control.updates.value?.blocked == null) {
             store.rebuildPending = false
             _syncError.value = null
         }
-        return err
+        return outcome.error
     }
 
     /**
      * Checks for and applies an update, as [rebuild] does without new
-     * selections. A null [confirm] applies without building on the phone,
-     * so the agent records what it stopped short of. Returns why it failed,
-     * or null (also when [confirm] said no).
+     * selections (see [checkAndApply]). Returns why it failed, or null (also
+     * when [confirm] said no).
      */
-    suspend fun update(confirm: (suspend (Plan) -> Boolean)?): String? {
-        var u = runOp(withPin(JSONObject().put("type", "update-check")))
-        u.error?.let { return it }
-        if (u.available == null) return null
-        val plan = u.plan ?: Plan(0, emptyList())
-        val builds = plan.builds.isNotEmpty()
-        if (builds && confirm != null && !confirm(plan)) return null
-        u = runOp(withPin(JSONObject().put("type", "update-apply").put("allowBuilds", builds && confirm != null)))
-        return u.error
-    }
+    suspend fun update(confirm: (suspend (Plan) -> Boolean)?): String? = checkAndApply(::runOp, confirm).error
 
     /** Installs a package into the user's profile and keeps it. The answer's blocked plan says what it would build. */
     suspend fun addPackage(attr: String, allowBuilds: Boolean): Updates {
@@ -192,8 +183,6 @@ class ManagedGuest(
 
     /** Fetches a package to run once; the answer's run says how to start it, or its blocked plan what it would build. */
     suspend fun run(attr: String, allowBuilds: Boolean): Updates = runOp(JSONObject().put("type", "run").put("package", attr).put("allowBuilds", allowBuilds))
-
-    private fun withPin(req: JSONObject): JSONObject = req.apply { Release.pin?.let { put("pin", it) } }
 
     /**
      * Starts an agent operation and waits for it to end. An agent that
@@ -223,4 +212,36 @@ class ManagedGuest(
     private companion object {
         const val TAG = "ManagedGuest"
     }
+}
+
+/** How a managed guest's [checkAndApply] ended. */
+sealed interface UpdateOutcome {
+    /** It switched, or found nothing newer. */
+    data object Done : UpdateOutcome
+
+    /** The confirm said no to compiling on the phone: nothing was applied. */
+    data object Declined : UpdateOutcome
+
+    data class Failed(val why: String) : UpdateOutcome
+
+    /** Why it failed, or null. */
+    val error: String? get() = (this as? Failed)?.why
+}
+
+/**
+ * Checks for an update pinned to this app's release, then applies it, each
+ * an operation [runOp] runs on the agent. A plan that compiles on the phone
+ * goes ahead only on [confirm]'s yes; a null [confirm] applies without
+ * building, so the agent records what it stopped short of.
+ */
+internal suspend fun checkAndApply(runOp: suspend (JSONObject) -> Updates, confirm: (suspend (Plan) -> Boolean)?): UpdateOutcome {
+    fun withPin(req: JSONObject): JSONObject = req.apply { Release.pin?.let { put("pin", it) } }
+    var u = runOp(withPin(JSONObject().put("type", "update-check")))
+    u.error?.let { return UpdateOutcome.Failed(it) }
+    if (u.available == null) return UpdateOutcome.Done
+    val plan = u.plan ?: Plan(0, emptyList())
+    val builds = plan.builds.isNotEmpty()
+    if (builds && confirm != null && !confirm(plan)) return UpdateOutcome.Declined
+    u = runOp(withPin(JSONObject().put("type", "update-apply").put("allowBuilds", builds && confirm != null)))
+    return u.error?.let { UpdateOutcome.Failed(it) } ?: UpdateOutcome.Done
 }
