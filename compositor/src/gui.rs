@@ -390,7 +390,7 @@ impl State {
                 ready: false,
                 hashes: false,
                 guest_ram: false,
-                frames: crate::guestram::Frames::new(self.gui.guest_socket.clone()),
+                frames: crate::guestram::Frames::new(self.gui.guest_socket.clone(), self.frames_in_flight),
                 seq: 0,
                 toplevels: HashMap::new(),
                 surfaces: HashMap::new(),

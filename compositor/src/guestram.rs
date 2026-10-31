@@ -21,28 +21,13 @@ use crate::gui::read_with_fd;
 
 /// The agent's guest socket: go/internal/protocol's GuestSocket.
 pub const GUEST_SOCKET: &str = "/run/pocketnix/guest.sock";
-/// Slots per buffer set: a visible window's groups in flight, and one more.
-const SLOTS: usize = crate::flush::FRAMES_IN_FLIGHT + 1;
 const PAGE: usize = 4096;
 /// How long the agent may take to pin a buffer set.
 const AGENT_TIMEOUT: Duration = Duration::from_secs(5);
-/// The first wait before asking again after a failure that may pass, such
-/// as the agent restarting; it doubles up to [RETRY_MAX].
+/// The first wait before asking again after a failure, such as the agent
+/// restarting or refusing for now; it doubles up to [RETRY_MAX].
 const RETRY_FIRST: Duration = Duration::from_secs(1);
 const RETRY_MAX: Duration = Duration::from_secs(30);
-
-/// The agent answered with an error: it won't give frame buffers, as an
-/// agent from before them doesn't.
-#[derive(Debug)]
-struct Refused(String);
-
-impl std::fmt::Display for Refused {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "the agent: {}", self.0)
-    }
-}
-
-impl std::error::Error for Refused {}
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Slot {
@@ -69,16 +54,19 @@ struct Buffers {
 unsafe impl Send for Buffers {}
 
 impl Buffers {
-    fn request(socket: &Path, id: u64, slot_len: usize) -> Result<Self> {
+    /// Asks for `slots` slots of at least `slot_len` bytes. Their total must
+    /// stay within the agent's maxFrameBuffers (go/internal/agent), which
+    /// refuses a bigger set.
+    fn request(socket: &Path, id: u64, slot_len: usize, slots: usize) -> Result<Self> {
         let slot_len = slot_len.div_ceil(PAGE) * PAGE;
-        let len = slot_len * SLOTS;
+        let len = slot_len * slots;
         let mut agent = UnixStream::connect(socket).with_context(|| format!("connecting to {}", socket.display()))?;
         agent.set_read_timeout(Some(AGENT_TIMEOUT))?;
         writeln!(agent, "{}", serde_json::json!({"type": "frame-buffers", "bytes": len}))?;
         let (line, fd) = read_reply(&mut agent)?;
         let reply: serde_json::Value = serde_json::from_slice(&line).context("the agent's reply")?;
         if let Some(e) = reply.get("error").and_then(|e| e.as_str()) {
-            return Err(Refused(e.to_owned()).into());
+            bail!("the agent: {e}");
         }
         let fd = fd.context("the agent's reply carries no memfd")?;
         let pages: Vec<u64> = serde_json::from_value(reply.get("pages").cloned().unwrap_or_default()).context("the agent's pages")?;
@@ -92,7 +80,7 @@ impl Buffers {
         }
         agent.set_read_timeout(None)?;
         agent.set_nonblocking(true)?;
-        Ok(Self { id, agent, map: map.cast(), len, pages, slot_len, slots: vec![Slot::Free; SLOTS] })
+        Ok(Self { id, agent, map: map.cast(), len, pages, slot_len, slots: vec![Slot::Free; slots] })
     }
 
     /// Whether the agent still holds the pin: its end of the connection is open.
@@ -144,22 +132,24 @@ pub struct Frames {
     /// The agent's guest socket, or a stand-in's.
     socket: Arc<Path>,
     /// Asks for a set: [Buffers::request], or a local one in tests.
-    request: fn(&Path, u64, usize) -> Result<Buffers>,
+    request: fn(&Path, u64, usize, usize) -> Result<Buffers>,
+    /// Slots per set.
+    slots: usize,
     current: Option<Buffers>,
     /// Sets replaced by bigger ones while the app still had slots of them.
     retired: Vec<Buffers>,
     next_id: u64,
-    /// The agent refused: this connection sends its data as before.
-    refused: bool,
-    /// After a failure that may pass, when to ask again, and the wait after that.
+    /// After a failure, when to ask again, and the wait after that.
     retry_at: Option<Instant>,
     backoff: Duration,
 }
 
 impl Frames {
-    /// Frame buffers asked of the agent on `socket`.
-    pub fn new(socket: Arc<Path>) -> Self {
-        Self { socket, request: Buffers::request, current: None, retired: Vec::new(), next_id: 0, refused: false, retry_at: None, backoff: RETRY_FIRST }
+    /// Frame buffers asked of the agent on `socket`, for a connection that
+    /// keeps up to `frames_in_flight` commits of a visible window unreleased:
+    /// each set has a slot more.
+    pub fn new(socket: Arc<Path>, frames_in_flight: usize) -> Self {
+        Self { socket, request: Buffers::request, slots: frames_in_flight + 1, current: None, retired: Vec::new(), next_id: 0, retry_at: None, backoff: RETRY_FIRST }
     }
 
     /// Copies `data` into a free slot; returns the slot and the commit's data
@@ -167,7 +157,7 @@ impl Frames {
     /// none free, or while asking for them waits out a failure: the data then
     /// goes on the stream.
     pub fn put(&mut self, data: &[u8]) -> Option<(Loan, Vec<u8>)> {
-        if self.refused || self.retry_at.is_some_and(|t| Instant::now() < t) {
+        if self.retry_at.is_some_and(|t| Instant::now() < t) {
             return None;
         }
         if !self.current.as_ref().is_some_and(|b| b.alive() && b.slot_len >= data.len()) {
@@ -175,16 +165,11 @@ impl Frames {
                 self.retired.push(old);
             }
             self.next_id += 1;
-            match (self.request)(&self.socket, self.next_id, data.len()) {
+            match (self.request)(&self.socket, self.next_id, data.len(), self.slots) {
                 Ok(b) => {
                     self.current = Some(b);
                     self.retry_at = None;
                     self.backoff = RETRY_FIRST;
-                }
-                Err(e) if e.is::<Refused>() => {
-                    tracing::warn!("frame buffers: {e:#}; frames go on the stream");
-                    self.refused = true;
-                    return None;
                 }
                 Err(e) => {
                     tracing::warn!("frame buffers: {e:#}; frames go on the stream, asking again in {:?}", self.backoff);
@@ -238,9 +223,9 @@ mod tests {
     use super::*;
 
     /// A set over a local memfd whose page n claims guest address n × PAGE, held by a socketpair.
-    fn local(_: &Path, id: u64, slot_len: usize) -> Result<Buffers> {
+    fn local(_: &Path, id: u64, slot_len: usize, slots: usize) -> Result<Buffers> {
         let slot_len = slot_len.div_ceil(PAGE) * PAGE;
-        let len = slot_len * SLOTS;
+        let len = slot_len * slots;
         let (agent, peer) = UnixStream::pair()?;
         std::mem::forget(peer);
         // SAFETY: a fresh memfd, sized and mapped here; the map lives as long as Buffers.
@@ -252,19 +237,22 @@ mod tests {
             map
         };
         let pages = (0..len / PAGE).map(|n| (n * PAGE) as u64).collect();
-        Ok(Buffers { id, agent, map: map.cast(), len, pages, slot_len, slots: vec![Slot::Free; SLOTS] })
+        Ok(Buffers { id, agent, map: map.cast(), len, pages, slot_len, slots: vec![Slot::Free; slots] })
     }
 
-    fn unreachable(_: &Path, _: u64, _: usize) -> Result<Buffers> {
+    fn unreachable(_: &Path, _: u64, _: usize, _: usize) -> Result<Buffers> {
         Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused).into())
     }
 
-    fn refusing(_: &Path, _: u64, _: usize) -> Result<Buffers> {
-        Err(Refused("unknown request".into()).into())
+    /// An agent that answers with an error, as one does with all its guest connections taken.
+    fn refusing(_: &Path, _: u64, _: usize, _: usize) -> Result<Buffers> {
+        bail!("the agent: too many guest connections")
     }
 
+    const IN_FLIGHT: usize = 3;
+
     fn frames() -> Frames {
-        Frames { request: local, ..Frames::new(Path::new("").into()) }
+        Frames { request: local, ..Frames::new(Path::new("").into(), IN_FLIGHT) }
     }
 
     fn addresses(data: &[u8]) -> Vec<u64> {
@@ -287,7 +275,7 @@ mod tests {
     #[test]
     fn lent_slots_wait_for_their_release() {
         let mut f = frames();
-        for seq in 1..=SLOTS as u32 {
+        for seq in 1..=4 {
             let (loan, _) = f.put(&[0u8; PAGE]).unwrap();
             f.lend(loan, seq);
         }
@@ -295,6 +283,16 @@ mod tests {
         f.release(2);
         let (_, data) = f.put(&[0u8; PAGE]).unwrap();
         assert_eq!(addresses(&data), vec![PAGE as u64]);
+    }
+
+    #[test]
+    fn more_frames_in_flight_get_more_slots() {
+        let mut f = Frames { request: local, ..Frames::new(Path::new("").into(), 5) };
+        for seq in 1..=6 {
+            let (loan, _) = f.put(&[0u8; PAGE]).unwrap();
+            f.lend(loan, seq);
+        }
+        assert!(f.put(&[0u8; PAGE]).is_none());
     }
 
     #[test]
@@ -330,11 +328,12 @@ mod tests {
     }
 
     #[test]
-    fn a_refusing_agent_is_not_asked_again() {
+    fn a_refusing_agent_is_asked_again_after_a_wait() {
         let mut f = Frames { request: refusing, ..frames() };
         assert!(f.put(&[0u8; PAGE]).is_none());
         f.request = local;
-        f.retry_at = None;
         assert!(f.put(&[0u8; PAGE]).is_none());
+        f.retry_at = Some(Instant::now());
+        assert!(f.put(&[0u8; PAGE]).is_some());
     }
 }

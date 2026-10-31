@@ -15,8 +15,9 @@ import (
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/protocol"
 )
 
-// maxFrameBuffers bounds one GuestFrameBuffers request: a few frames of the
-// largest buffer the GUI protocol allows.
+// maxFrameBuffers bounds one GuestFrameBuffers request: the compositor's
+// set at its default frames in flight (a slot more than it lets fly) of the
+// largest buffer the GUI protocol allows (the compositor's MAX_BUFFER_BYTES).
 const maxFrameBuffers = 256 << 20
 
 // frameBuffers serves a GuestFrameBuffers request: pinned memory, answered
