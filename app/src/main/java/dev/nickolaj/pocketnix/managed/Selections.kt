@@ -9,6 +9,7 @@ import org.json.JSONObject
 data class Service(val id: String, val label: String, val detail: String)
 
 val SERVICES = listOf(
+    // Port 2022 is the module's forwards.ssh hostPort for this switch.
     Service("ssh", "SSH", "Log in from your computer: phone port 2022, keys only"),
     Service("tailscale", "Tailscale", "Join your tailnet"),
     Service("podman", "Podman", "Run containers"),
@@ -23,7 +24,7 @@ data class Selections(val user: String, val services: Set<String>, val keepGener
         .put("keepGenerations", keepGenerations)
 
     companion object {
-        /** A Linux user name, as the module's selections.user takes it. */
+        /** A Linux user name, as the module's selections.user takes it (and go/internal/agent's userName). */
         val USER_NAME = Regex("[a-z_][a-z0-9_-]{0,31}")
     }
 }

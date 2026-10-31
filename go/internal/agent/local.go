@@ -34,7 +34,8 @@ const selectionsFile = "pocketnix.json"
 const evalTimeout = 30 * time.Minute
 
 var (
-	semver   = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+	semver = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+	// As the module's managed.selections.user and the app's Selections.USER_NAME.
 	userName = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 	// pinLine is the seeded flake.nix's pocketnix input; a flake.nix without
 	// it isn't pinned by the app. The other side is nix/managed/flake.nix.

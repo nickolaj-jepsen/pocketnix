@@ -589,6 +589,7 @@ in {
       };
       selections = {
         user = mkOption {
+          # As go/internal/agent's userName and the app's Selections.USER_NAME.
           type = types.strMatching "|[a-z_][a-z0-9_-]{0,31}";
           default = "";
           description = "The user the app set up; empty runs tabs as root until it has.";
@@ -598,6 +599,7 @@ in {
           default = 0;
           description = "The app's `updates.keepGenerations`.";
         };
+        # Hand-copied as go/internal/protocol's Services and the app's managed SERVICES.
         services = lib.genAttrs ["ssh" "tailscale" "podman" "gui"] (name:
           mkOption {
             type = types.bool;
@@ -1058,6 +1060,7 @@ in {
       };
       pocketnix.guest.forwards.ssh = mkIf sel.services.ssh {
         guestPort = 22;
+        # The app's managed SERVICES names this port.
         hostPort = 2022;
       };
       services.tailscale = mkIf sel.services.tailscale {
