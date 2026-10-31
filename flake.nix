@@ -43,6 +43,8 @@
       }
       // nixpkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "aarch64-linux") {
         avf-kernel = pkgs.callPackage ./nix/avf-kernel/package.nix {};
+        # gpu.enable's kernel module, for the AVF kernel.
+        vgpu-relinquish = (pkgs.linuxPackagesFor own.avf-kernel).callPackage ./nix/vgpu-relinquish/package.nix {};
       });
 
     apps =
@@ -237,6 +239,7 @@
           inherit self;
           pkgs = nixpkgs.legacyPackages.x86_64-linux;
         };
+        aarch64-linux.vgpu-relinquish = self.packages.aarch64-linux.vgpu-relinquish;
       };
 
     # `nix develop`, then `./gradlew assembleDebug`.

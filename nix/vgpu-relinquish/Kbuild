@@ -1,0 +1,2 @@
+obj-m := vgpu_relinquish.o
+ccflags-y := -I$(srctree)/drivers/gpu/drm/virtio
