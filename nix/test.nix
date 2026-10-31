@@ -5,7 +5,8 @@
   pkgs,
   self,
 }: let
-  inherit (import "${pkgs.path}/nixos/tests/ssh-keys.nix" pkgs) snakeOilPrivateKey snakeOilPublicKey snakeOilEd25519PrivateKey snakeOilEd25519PublicKey;
+  # A path, not "${pkgs.path}/…": CI's Nix fails to realise that string's context under `flake check --no-build`.
+  inherit (import (pkgs.path + "/nixos/tests/ssh-keys.nix") pkgs) snakeOilPrivateKey snakeOilPublicKey snakeOilEd25519PrivateKey snakeOilEd25519PublicKey;
   cli = self.packages.${pkgs.stdenv.hostPlatform.system}.pocketnix-cli;
   # The builder's binary cache; a test-only key.
   cacheSecret = pkgs.writeText "cache.sec" "pocketnix-test-builder:cNCiLJRJKtj/NYr6HKMIB0f0JS0K51uY8Boefn15NtUdEVxl8P73M2yibOJqDDCQxM7dSd+4OSUHzjzwmf6O5A==";
