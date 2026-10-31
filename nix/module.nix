@@ -781,7 +781,9 @@ in {
       Vulkan windows through shared memory (the compositor takes no dmabufs)
       and, with the AVF kernel, loads `vgpu_relinquish`, without which Pixel
       hosts that never unmap a guest page (android14-6.1) map GPU memory
-      only once per boot. OpenGL stays software rendered
+      only once per boot. OpenGL stays software rendered. Every guest user
+      that can open the render node reaches the phone's gfxstream decoder
+      and GPU driver, which parse its command streams outside the VM
     '';
 
     avf.enable = mkOption {

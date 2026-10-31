@@ -151,6 +151,10 @@ ref. With no app connected, a request fails instead of queueing.
   APK signed by anyone else. A signature change would force an uninstall,
   which deletes the disk.
 - The build-host user can only build its guest's pinned installable.
+- `gpu.enable` hands the phone's gfxstream decoder and GPU driver, outside
+  the VM, the command streams of every guest user that can open the render
+  node, which systemd's rules open to all: a larger escape surface than the
+  2D device.
 
 ## Design rules
 
