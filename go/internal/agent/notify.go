@@ -140,7 +140,6 @@ func (s *Server) subscribe(c net.Conn, r *bufio.Reader) {
 // brings until the guest closes it; r is c's reader, which may hold nothing
 // but its EOF.
 func serveSubscription[T any](c net.Conn, r *bufio.Reader, ch <-chan T) {
-	c.SetReadDeadline(time.Time{})
 	if protocol.WriteJSON(c, protocol.GuestReply{}) != nil {
 		return
 	}

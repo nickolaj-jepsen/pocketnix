@@ -8,7 +8,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -25,7 +24,6 @@ const maxFrameBuffers = 256 << 20
 // until the connection closes. Pinning is root's to do, and pagemap shows
 // page frames only to CAP_SYS_ADMIN.
 func (s *Server) frameBuffers(c net.Conn, r *bufio.Reader, req protocol.GuestRequest) {
-	c.SetReadDeadline(time.Time{})
 	fb, err := pinFrames(req.Bytes)
 	if err != nil {
 		protocol.WriteJSON(c, protocol.GuestReply{Error: err.Error()})

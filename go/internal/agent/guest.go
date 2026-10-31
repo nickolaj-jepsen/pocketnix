@@ -54,6 +54,14 @@ const (
 	guestIdle = 30 * time.Second
 )
 
+// guestStreams serve the guest requests that keep their connection until
+// it closes, with no idle deadline; r is the connection's reader.
+var guestStreams = map[string]func(s *Server, c net.Conn, r *bufio.Reader, req protocol.GuestRequest){
+	protocol.GuestSubscribe:          func(s *Server, c net.Conn, r *bufio.Reader, _ protocol.GuestRequest) { s.subscribe(c, r) },
+	protocol.GuestSubscribeClipboard: func(s *Server, c net.Conn, r *bufio.Reader, _ protocol.GuestRequest) { s.subscribeClipboard(c, r) },
+	protocol.GuestFrameBuffers:       (*Server).frameBuffers,
+}
+
 func (s *Server) handleGuest(c net.Conn) {
 	defer c.Close()
 	if err := s.guestAllowed(c); err != nil {
@@ -72,20 +80,15 @@ func (s *Server) handleGuest(c net.Conn) {
 		fds := conn.take()
 		var req protocol.GuestRequest
 		var reply protocol.GuestReply
-		if err := json.Unmarshal(line, &req); err != nil {
+		err = json.Unmarshal(line, &req)
+		if serve := guestStreams[req.Type]; err == nil && serve != nil {
+			closeFiles(fds)
+			c.SetReadDeadline(time.Time{})
+			serve(s, c, r, req)
+			return
+		}
+		if err != nil {
 			reply.Error = "bad request: " + err.Error()
-		} else if req.Type == protocol.GuestSubscribe {
-			closeFiles(fds)
-			s.subscribe(c, r)
-			return
-		} else if req.Type == protocol.GuestSubscribeClipboard {
-			closeFiles(fds)
-			s.subscribeClipboard(c, r)
-			return
-		} else if req.Type == protocol.GuestFrameBuffers {
-			closeFiles(fds)
-			s.frameBuffers(c, r, req)
-			return
 		} else if req.Type == protocol.GuestNotify || req.Type == protocol.GuestNotifyClose {
 			var err error
 			if reply, err = s.guestNotify(req); err != nil {
