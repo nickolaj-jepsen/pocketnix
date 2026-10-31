@@ -182,7 +182,9 @@ class GuiReaderTest {
             encoded = pageList(base + 2 * Gui.GUEST_PAGE, base), encoding = Gui.ENCODING_PAGES
         )
         val c = (read(f).single() as GuiMessage.Group).commits.single()
-        assertArrayEquals(content, c.unpacked(ArrayGuestRam(base, ram)).data.copyOf(content.size))
+        val released = mutableListOf<Int>()
+        assertArrayEquals(content, c.unpacked(ArrayGuestRam(base, ram)) { released += it }.data.copyOf(content.size))
+        assertEquals("its slot goes back once copied", listOf(c.seq), released)
     }
 
     @Test
@@ -200,7 +202,7 @@ class GuiReaderTest {
             encoded = pageList(0x8000_0000L), encoding = Gui.ENCODING_PAGES
         )
         val c = (read(f).single() as GuiMessage.Group).commits.single()
-        assertThrows(GuiProtocolException::class.java) { c.unpacked(JavaUnpacker) }
+        assertThrows(GuiProtocolException::class.java) { c.unpacked(JavaUnpacker) {} }
     }
 
     @Test

@@ -42,7 +42,7 @@ import org.json.JSONObject
 class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listener {
     // Guards the state and the renderers; the link's thread, the render thread and the main thread take it.
     private val lock = Any()
-    private val state = GuiState(GuiNative)
+    private val state = GuiState()
     private val link = GuiLink(appVersion, this)
 
     /** The guest's app list and icons, kept for when the VM is off. */
@@ -214,10 +214,8 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         when (msg) {
             is GuiMessage.Group -> {
                 val start = System.nanoTime()
-                // Decompressing is the slow part, and needs no state: keep it out of the lock.
-                val g = GuiMessage.Group(msg.commits.map { it.unpacked(GuiNative) })
-                // Copied out: the compositor may write those pages again.
-                for (c in msg.commits) if (c.encoding == Gui.ENCODING_PAGES) link.send(Gui.released(c.seq))
+                // Decoding is the slow part, and needs no state: keep it out of the lock.
+                val g = GuiMessage.Group(msg.commits.map { c -> c.unpacked(GuiNative) { link.send(Gui.released(it)) } })
                 val unpacked = System.nanoTime()
                 synchronized(lock) {
                     val locked = System.nanoTime()

@@ -50,7 +50,6 @@ class SurfaceContent {
         private set
     var pixels: ByteArray? = null
         private set
-    private var scratch = ByteArray(0)
 
     fun clear() {
         pixels = null
@@ -60,23 +59,17 @@ class SurfaceContent {
     }
 
     /**
-     * Applies a BUFFER commit; throws [GuiProtocolException] for one that
-     * doesn't fit the content. A raw FULL commit's data becomes the content,
-     * and the content it replaces goes to [SpareArrays].
+     * Applies a BUFFER commit, which must be [unpacked]; throws
+     * [GuiProtocolException] for one that doesn't fit the content. A FULL
+     * commit's data becomes the content, and the content it replaces goes to
+     * [SpareArrays].
      */
-    fun apply(c: Commit, unpacker: Unpacker) {
+    fun apply(c: Commit) {
         require(c.buffer) { "commit without BUFFER" }
-        if (c.encoding == Gui.ENCODING_PAGES) return apply(c.unpacked(unpacker), unpacker)
-        val n = c.pixelBytes.toInt()
+        require(c.encoding == Gui.ENCODING_RAW) { "commit ${c.seq.u} isn't unpacked" }
         if (c.full) {
-            if (c.encoding == Gui.ENCODING_RAW && c.data.size == n) {
-                pixels?.takeIf { it !== c.data }?.let(SpareArrays::give)
-                pixels = c.data
-            } else {
-                val p = pixels?.takeIf { it.size == n } ?: ByteArray(n)
-                decode(c, unpacker, p, 0)
-                pixels = p
-            }
+            pixels?.takeIf { it !== c.data }?.let(SpareArrays::give)
+            pixels = c.data
             width = c.width
             height = c.height
             format = c.format
@@ -86,14 +79,6 @@ class SurfaceContent {
         if (c.width != width || c.height != height || c.format != format) {
             throw GuiProtocolException("partial commit ${c.seq.u} for a ${c.width}x${c.height} format ${c.format} buffer onto ${width}x$height format $format")
         }
-        val src: ByteArray
-        if (c.encoding == Gui.ENCODING_RAW) {
-            src = c.data
-        } else {
-            if (scratch.size < n) scratch = ByteArray(n)
-            src = scratch
-            decode(c, unpacker, src, 0)
-        }
         if (c.scrolled) scroll(p, c.scroll)
         val stride = width * 4
         var off = 0
@@ -102,17 +87,9 @@ class SurfaceContent {
             val ry = c.rects[i * 4 + 1]
             val row = c.rects[i * 4 + 2] * 4
             for (y in ry until ry + c.rects[i * 4 + 3]) {
-                System.arraycopy(src, off, p, y * stride + rx * 4, row)
+                System.arraycopy(c.data, off, p, y * stride + rx * 4, row)
                 off += row
             }
-        }
-    }
-
-    private fun decode(c: Commit, unpacker: Unpacker, dst: ByteArray, off: Int) {
-        if (c.encoding == Gui.ENCODING_RAW) {
-            System.arraycopy(c.data, 0, dst, off, c.pixelBytes.toInt())
-        } else {
-            unpack(c, unpacker, dst, off)
         }
     }
 
@@ -130,32 +107,33 @@ class SurfaceContent {
     fun hash(): Long = pixels?.let { contentHash(it, 0, it.size) } ?: 0L
 }
 
-private fun unpack(c: Commit, unpacker: Unpacker, dst: ByteArray, off: Int) {
-    try {
-        unpacker.unpack(c.data, dst, off, c.pixelBytes.toInt())
-    } catch (e: GuiProtocolException) {
-        throw e
-    } catch (e: Exception) {
-        throw GuiProtocolException("commit ${c.seq.u}: ${e.message}")
-    }
-}
-
 /**
- * The commit with its pixel data decompressed (encoding raw); throws
- * [GuiProtocolException] for data that doesn't decode. It reads no surface
- * state, so the slow part of applying a commit can run outside any lock.
+ * The commit with its pixel data as raw bytes, whatever its encoding: the
+ * one place that knows them. Throws [GuiProtocolException] for data that
+ * doesn't decode. A PAGES commit's slot goes back to the compositor through
+ * [released] once its pages are copied out. It reads no surface state, so
+ * the slow part of applying a commit can run outside any lock.
  */
-fun Commit.unpacked(unpacker: Unpacker): Commit {
+fun Commit.unpacked(unpacker: Unpacker, released: (seq: Int) -> Unit): Commit {
     if (!buffer || encoding == Gui.ENCODING_RAW) return this
     val out = SpareArrays.take(pixelBytes.toInt())
-    if (encoding == Gui.ENCODING_PAGES) {
-        try {
-            unpacker.guestPages(data, out, pixelBytes.toInt())
+    when (encoding) {
+        Gui.ENCODING_PAGES -> {
+            try {
+                unpacker.guestPages(data, out, pixelBytes.toInt())
+            } catch (e: GuiProtocolException) {
+                throw GuiProtocolException("commit ${seq.u}: ${e.message}")
+            }
+            released(seq)
+        }
+
+        else -> try {
+            unpacker.unpack(data, out, 0, pixelBytes.toInt())
         } catch (e: GuiProtocolException) {
+            throw e
+        } catch (e: Exception) {
             throw GuiProtocolException("commit ${seq.u}: ${e.message}")
         }
-    } else {
-        unpack(this, unpacker, out, 0)
     }
     return Commit(
         flags, surface, window, seq, z, format, Gui.ENCODING_RAW, transform, x, y, dstWidth, dstHeight, width, height,
