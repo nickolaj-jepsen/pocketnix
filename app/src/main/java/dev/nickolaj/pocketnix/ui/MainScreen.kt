@@ -11,11 +11,14 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
@@ -495,15 +498,25 @@ private fun TabChip(
     Row(
         Modifier
             .background(if (selected) foreground.copy(alpha = 0.18f) else Color.Transparent, RoundedCornerShape(6.dp))
-            .combinedClickable(onLongClick = onLongPress, onClick = onSelect)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .height(IntrinsicSize.Min)
     ) {
-        if (mark.isNotEmpty()) Text(mark, color = foreground, fontSize = 10.sp)
-        Text(title, color = foreground.copy(alpha = if (selected) 1f else 0.7f), fontSize = 13.sp, maxLines = 1)
+        // Select and close are sibling targets: Compose grows a small clickable to the minimum touch
+        // target over its parent, so a × inside the chip's own clickable took most of a short chip.
+        Row(
+            Modifier
+                .fillMaxHeight()
+                .combinedClickable(onLongClick = onLongPress, onClick = onSelect)
+                .padding(start = 10.dp, end = if (onClose != null) 4.dp else 10.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (mark.isNotEmpty()) Text(mark, color = foreground, fontSize = 10.sp)
+            Text(title, color = foreground.copy(alpha = if (selected) 1f else 0.7f), fontSize = 13.sp, maxLines = 1)
+        }
         if (onClose != null) {
             // A finger-sized target, not a 13sp glyph.
-            Text("×", color = foreground.copy(alpha = 0.7f), fontSize = 18.sp, modifier = Modifier.clickable(onClick = onClose).padding(start = 10.dp, end = 4.dp))
+            Box(Modifier.fillMaxHeight().clickable(onClick = onClose).padding(start = 6.dp, end = 10.dp), contentAlignment = Alignment.Center) {
+                Text("×", color = foreground.copy(alpha = 0.7f), fontSize = 18.sp)
+            }
         }
     }
 }
