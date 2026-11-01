@@ -92,7 +92,7 @@ func (s *Server) portsConfigured() {
 		go s.watchPorts(ctx, p.gen, p.load)
 	case !on && p.stop != nil:
 		p.stop()
-		p.stop, p.socks, p.last = nil, nil, nil
+		p.stop, p.socks = nil, nil
 		p.gen++
 	}
 	p.mu.Unlock()
@@ -203,49 +203,51 @@ func (s *Server) ownPort(port, d int) {
 
 // portsChanged pushes the snapshot if it differs from the last one pushed:
 // after a scan, or a config or listener of the agent's that filters it
-// differently.
+// differently. With offers off it is empty, which withdraws the offers an
+// earlier config, or an earlier run of the agent, made.
 func (s *Server) portsChanged() {
 	p := &s.ports
 	p.mu.Lock()
-	if p.stop == nil || p.socks == nil {
+	on := p.stop != nil
+	if on && p.socks == nil {
 		p.mu.Unlock()
 		return
 	}
 	cfg := s.config()
-	ports := offerable(p.socks, p.uid, cfg.Forwards, p.own)
-	if len(ports) > protocol.MaxPortListeners {
-		log.Printf("port offers: %d ports, offering the lowest %d", len(ports), protocol.MaxPortListeners)
-		ports = ports[:protocol.MaxPortListeners]
+	snap := protocol.PortListeners{LAN: cfg.ForwardOffers.LAN, Ports: []int{}}
+	if on {
+		snap.Ports = offerable(p.socks, p.uid, cfg.Forwards, p.own)
+		if len(snap.Ports) > protocol.MaxPortListeners {
+			log.Printf("port offers: %d ports, offering the lowest %d", len(snap.Ports), protocol.MaxPortListeners)
+			snap.Ports = snap.Ports[:protocol.MaxPortListeners]
+		}
 	}
-	snap := protocol.PortListeners{LAN: cfg.ForwardOffers.LAN, Ports: ports}
-	if p.last != nil && p.last.LAN == snap.LAN && slices.Equal(p.last.Ports, snap.Ports) {
+	prev := p.last
+	if prev != nil && prev.LAN == snap.LAN && slices.Equal(prev.Ports, snap.Ports) {
 		p.mu.Unlock()
 		return
 	}
 	p.last = &snap
 	p.mu.Unlock()
-	log.Printf("port offers: %v", snap.Ports)
-	s.pushLatest(func() any {
-		if snap, ok := s.portSnapshot(); ok {
-			return snap
-		}
-		return nil
-	})
+	switch {
+	case on:
+		log.Printf("port offers: %v", snap.Ports)
+	case prev != nil:
+		log.Printf("port offers: off, withdrawn")
+	}
+	s.pushLatest(func() any { return s.portSnapshot() })
 }
 
-// portSnapshot is the snapshot for a control stream, false while offers
-// are off. Before the first scan its set is empty.
-func (s *Server) portSnapshot() (protocol.PortListeners, bool) {
+// portSnapshot is the snapshot for a control stream: empty before the first
+// scan and while offers are off.
+func (s *Server) portSnapshot() protocol.PortListeners {
 	p := &s.ports
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.stop == nil {
-		return protocol.PortListeners{}, false
-	}
 	if p.last != nil {
-		return *p.last, true
+		return *p.last
 	}
-	return protocol.PortListeners{LAN: s.config().ForwardOffers.LAN}, true
+	return protocol.PortListeners{LAN: s.config().ForwardOffers.LAN}
 }
 
 // socket is a line of /proc/net/tcp or tcp6.

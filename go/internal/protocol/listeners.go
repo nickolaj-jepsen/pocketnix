@@ -3,7 +3,8 @@ package protocol
 import "encoding/json"
 
 // TypePortListeners is the agent's push of [PortListeners], on connect and
-// whenever the set changes, and only while the module's forwardOffers is on.
+// whenever the set changes. While the module's forwardOffers is off the set
+// is empty, so turning it off withdraws the offers.
 const TypePortListeners = "port-listeners"
 
 // MaxPortListeners caps [PortListeners.Ports], whose lowest ports the agent

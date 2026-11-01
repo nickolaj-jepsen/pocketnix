@@ -60,9 +60,9 @@ class ControlChannel(
     private val _portListeners = MutableStateFlow<PortListeners?>(null)
 
     /**
-     * The agent's last listener snapshot, pushed on connect and on change
-     * while forwardOffers is on. A dropped stream, or a reload that turns
-     * offers off, leaves the last one in place.
+     * The agent's last listener snapshot, pushed on connect and on change;
+     * empty while forwardOffers is off. A dropped stream leaves the last one
+     * in place.
      */
     val portListeners: StateFlow<PortListeners?> = _portListeners.asStateFlow()
 

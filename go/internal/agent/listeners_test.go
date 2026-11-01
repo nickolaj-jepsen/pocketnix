@@ -211,9 +211,10 @@ func TestPortOffersOffLoadsNothing(t *testing.T) {
 	listen(t)
 	send, next := rawControl(t, h)
 	send(protocol.Request{Type: protocol.TypePing, ID: 1})
-	for typ, _ := next(); typ != protocol.TypePong; typ, _ = next() {
-		if typ == protocol.TypePortListeners {
-			t.Fatal("a snapshot with offers off")
+	for typ, line := next(); typ != protocol.TypePong; typ, line = next() {
+		var p protocol.PortListeners
+		if typ == protocol.TypePortListeners && json.Unmarshal(line, &p) == nil && len(p.Ports) > 0 {
+			t.Fatalf("offers off offered %v", p.Ports)
 		}
 	}
 	if n := loads.Load(); n != 0 {
@@ -230,6 +231,23 @@ func TestPortOffersOffLoadsNothing(t *testing.T) {
 	}
 	h.write(baseConfig())
 	h.srv.Reload()
+}
+
+func TestOffersOffWithdrawsThem(t *testing.T) {
+	h, ctl := startOffers(t, offersConfig(), unixAddr, "")
+	_, port := listen(t)
+	awaitPorts(t, ctl, fmt.Sprint("with ", port), func(ps []int) bool { return slices.Contains(ps, port) })
+
+	h.write(baseConfig())
+	if err := h.srv.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	awaitPorts(t, ctl, "with no ports after offers turned off", func(ps []int) bool { return len(ps) == 0 })
+
+	// The app keeps a dropped stream's offers: an agent restarted with offers off withdraws them.
+	restarted := start(t, baseConfig(), unixAddr)
+	restarted.srv.WatchPorts(nil)
+	awaitPorts(t, control(t, restarted), "with no ports on connect with offers off", func(ps []int) bool { return len(ps) == 0 })
 }
 
 func TestReloadedForwardLeavesTheSnapshot(t *testing.T) {

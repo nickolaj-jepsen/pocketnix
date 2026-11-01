@@ -279,8 +279,8 @@ func (s *Server) serveControl(c net.Conn) {
 	if err == nil {
 		err = protocol.WriteJSON(unlocked{w}, s.wake())
 	}
-	if p, ok := s.portSnapshot(); ok && err == nil {
-		err = protocol.WriteJSON(unlocked{w}, p)
+	if err == nil {
+		err = protocol.WriteJSON(unlocked{w}, s.portSnapshot())
 	}
 	w.mu.Unlock()
 	if err != nil {

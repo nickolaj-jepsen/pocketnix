@@ -413,6 +413,8 @@ in {
           the phone port: the same one, or the next free one above it. An
           allowed forward lasts until its listener has been gone for a while
           or the guest reboots; put a port wanted for good in `forwards`.
+          Turning this off withdraws the offers, and allowed forwards end as
+          if their listeners had gone.
         '';
       };
       lan = mkOption {
