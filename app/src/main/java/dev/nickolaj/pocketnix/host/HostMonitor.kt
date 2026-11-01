@@ -106,19 +106,19 @@ class HostMonitor(private val context: Context) {
         context.registerReceiver(receiver, filter, null, main, Context.RECEIVER_NOT_EXPORTED)
         // Calls back at once with the current default network, if any.
         connectivity.registerDefaultNetworkCallback(network, main)
-        storageReader = Executors.newSingleThreadScheduledExecutor().also { r -> r.execute { readStorage(r) } }
+        storageReader = Executors.newSingleThreadScheduledExecutor().also {
+            it.scheduleWithFixedDelay(::readStorage, 0, StorageBalloon.READ_MS, TimeUnit.MILLISECONDS)
+        }
         publish()
     }
 
-    /** Reads the phone's free space for [StorageBalloon], then schedules the next read on [reader]. */
-    private fun readStorage(reader: ScheduledExecutorService) {
-        // A read that fails isn't retried in a busy loop.
-        var next = StorageBalloon.nextReadMs(Long.MAX_VALUE)
+    /** Reads the phone's free space for [StorageBalloon]. */
+    private fun readStorage() {
+        // A throw would end the schedule.
         try {
             // Not getAllocatableBytes: it counts other apps' cache, which only an allocateBytes call
             // clears, and the guest's writes into its image make none.
             val free = StatFs(context.filesDir.path).availableBytes
-            next = StorageBalloon.nextReadMs(free)
             main.post {
                 guard {
                     storageAvailable = StorageBalloon.available(free)
@@ -128,7 +128,6 @@ class HostMonitor(private val context: Context) {
         } catch (e: Exception) {
             Log.w(TAG, "storage: ${e.message}")
         }
-        if (!reader.isShutdown) runCatching { reader.schedule({ readStorage(reader) }, next, TimeUnit.MILLISECONDS) }
     }
 
     fun stop() = guard {

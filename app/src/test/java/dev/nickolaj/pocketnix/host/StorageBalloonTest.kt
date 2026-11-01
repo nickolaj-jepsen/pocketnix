@@ -22,11 +22,4 @@ class StorageBalloonTest {
         assertEquals(StorageBalloon.available(gib + 128 * mib), StorageBalloon.available(gib + 150 * mib))
         assertEquals(128 * mib, StorageBalloon.available(gib + 150 * mib))
     }
-
-    @Test
-    fun readsMoreOftenAsThePhoneFills() {
-        val intervals = listOf(20 * gib, 8 * gib, 3 * gib, 512 * mib).map(StorageBalloon::nextReadMs)
-        assertEquals(intervals.sortedDescending(), intervals)
-        assertEquals(4, intervals.toSet().size)
-    }
 }
