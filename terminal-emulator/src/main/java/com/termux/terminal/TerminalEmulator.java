@@ -361,6 +361,9 @@ public final class TerminalEmulator {
     /** The {@link ITermImage} if an iTerm image command is being processed. */
     private ITermImage mITermImage;
 
+    /** The URL of the OSC 8 link being printed, which each cell written joins; null outside one. */
+    private String mHyperlinkUrl;
+
     /**
      * Kitty graphics protocol — multi-chunk base64 PNG accumulator.
      * https://sw.kovidgoyal.net/kitty/graphics-protocol/
@@ -3007,11 +3010,7 @@ public final class TerminalEmulator {
                 // textParameter holds `<params>;<url>` (or empty `;` to close).
                 int sep = textParameter.indexOf(';');
                 String url = sep >= 0 ? textParameter.substring(sep + 1) : "";
-                if (url.isEmpty()) {
-                    mScreen.endHyperlink(mCursorRow, mCursorCol);
-                } else {
-                    mScreen.beginHyperlink(url, mCursorRow, mCursorCol);
-                }
+                mHyperlinkUrl = url.isEmpty() ? null : url;
                 break;
             }
             case 52: // Manipulate Selection Data. Skip the optional first selection parameter(s).
@@ -3602,8 +3601,7 @@ public final class TerminalEmulator {
         if (column < 0) column = 0;
         // Even after a wrap a wide character can't fit a one-column screen or margin; setChar would throw.
         if (displayWidth == 2 && (column >= mColumns - 1 || column >= mRightMargin - 1)) return;
-        int effect = mScreen.isHyperlinkOpen() ? mEffect | TextStyle.CHARACTER_ATTRIBUTE_HYPERLINK : mEffect;
-        mScreen.setChar(column, mCursorRow, codePoint, TextStyle.encode(mForeColor, mBackColor, effect));
+        mScreen.setChar(column, mCursorRow, codePoint, getStyle(), mHyperlinkUrl);
 
         if (autoWrap && displayWidth > 0)
             mAboutToAutoWrap = (mCursorCol == mRightMargin - displayWidth);
@@ -3690,7 +3688,7 @@ public final class TerminalEmulator {
         clearOscTypeVariables();
         mITermImage = null;
         // A program killed mid-link would otherwise leave everything after it linked.
-        mScreen.endHyperlink(mCursorRow, mCursorCol);
+        mHyperlinkUrl = null;
     }
 
     public String getSelectedText(int x1, int y1, int x2, int y2) {

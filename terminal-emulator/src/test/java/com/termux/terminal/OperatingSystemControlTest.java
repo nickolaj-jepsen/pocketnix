@@ -209,11 +209,41 @@ public class OperatingSystemControlTest extends TerminalTestCase {
 		withTerminalSized(10, 3);
 		enterString("\033]8;;https://a.example\033\\a\033]8;;\033\\ ");
 		enterString("\033]8;;https://b.example\033\\b\033]8;;\033\\");
-		// Unclosed: not a link yet.
+		// Still open: its cells are underlined, so they're a link already.
 		enterString("\033]8;;https://open.example\033\\c");
 		List<String> urls = new ArrayList<>();
 		for (TerminalBuffer.Hyperlink h : mTerminal.getScreen().getHyperlinks()) urls.add(h.url);
-		assertEquals(List.of("https://b.example", "https://a.example"), urls);
+		assertEquals(List.of("https://open.example", "https://b.example", "https://a.example"), urls);
+	}
+
+	public void testHyperlinkFollowsItsTextThroughAReflow() {
+		withTerminalSized(10, 3);
+		enterString("abcd\033]8;;https://a.example\033\\link\033]8;;\033\\");
+		resize(5, 3);
+		// "abcdl" / "ink": the link's text now starts the second row.
+		assertEquals("https://a.example", mTerminal.getScreen().getHyperlinkAt(1, 0));
+		assertNull(mTerminal.getScreen().getHyperlinkAt(1, 3));
+		assertNull(mTerminal.getScreen().getHyperlinkAt(0, 0));
+		// Wrapped, it still starts once, at its first cell.
+		List<TerminalBuffer.Hyperlink> links = mTerminal.getScreen().getHyperlinks();
+		assertEquals(1, links.size());
+		assertEquals(0, links.get(0).row);
+		assertEquals(4, links.get(0).col);
+	}
+
+	public void testHyperlinkEndingInTheLastColumnCoversIt() {
+		withTerminalSized(5, 3);
+		enterString("ab\033]8;;https://a.example\033\\cde\033]8;;\033\\");
+		assertEquals("https://a.example", mTerminal.getScreen().getHyperlinkAt(0, 4));
+		assertTrue(isLinked(0, 4));
+	}
+
+	public void testErasedHyperlinkIsGone() {
+		withTerminalSized(10, 3);
+		enterString("\033]8;;https://a.example\033\\link\033]8;;\033\\\033[2J");
+		assertNull(mTerminal.getScreen().getHyperlinkAt(0, 0));
+		assertFalse(isLinked(0, 0));
+		assertTrue(mTerminal.getScreen().getHyperlinks().isEmpty());
 	}
 
 	public void testHyperlinkMarksTheCellsWrittenInsideIt() {

@@ -35,7 +35,7 @@ public final class TextStyle {
     private final static int CHARACTER_ATTRIBUTE_TRUECOLOR_FOREGROUND = 1 << 9;
     /** If true (24-bit) color is used for the cell for foreground. */
     private final static int CHARACTER_ATTRIBUTE_TRUECOLOR_BACKGROUND= 1 << 10;
-    /** The cell was written inside an open OSC 8 hyperlink; SGR doesn't touch it. */
+    /** The cell has an OSC 8 link ({@link TerminalRow#getLink(int)}), which alone sets it; SGR doesn't touch it. */
     public final static int CHARACTER_ATTRIBUTE_HYPERLINK = 1 << 11;
     /** If true, character represents a {@link TerminalBitmap} slice, not text. */
     public final static int TERMINAL_BITMAP = 1 << 15;

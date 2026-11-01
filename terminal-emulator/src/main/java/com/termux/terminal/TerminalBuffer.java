@@ -67,62 +67,14 @@ public final class TerminalBuffer {
     public static final int TERMINAL_BITMAP__NUM_END = Integer.MAX_VALUE;
 
 
-    // ── OSC 8 hyperlinks ─────────────────────────────────────────────────────
-    // Tracks one region per `\e]8;;<url>\e\` … `\e]8;;\e\` pair. Stored as
-    // (startRow, startCol) → (endRow, endCol) using *internal* row indices so
-    // they survive scroll. Capped at HYPERLINK_REGIONS_MAX; FIFO eviction.
-    public static final class HyperlinkRegion {
-        public final int startInternalRow, startCol, endInternalRow, endCol;
-        public final String url;
-        HyperlinkRegion(int sR, int sC, int eR, int eC, String u) {
-            startInternalRow = sR; startCol = sC; endInternalRow = eR; endCol = eC; url = u;
-        }
-    }
-
-    private static final int HYPERLINK_REGIONS_MAX = 1024;
-    private final java.util.ArrayDeque<HyperlinkRegion> mHyperlinks = new java.util.ArrayDeque<>();
-    private String mPendingHyperlinkUrl;
-    private int mPendingHyperlinkStartInternalRow = -1;
-    private int mPendingHyperlinkStartCol = -1;
-
-    /** Called by emulator when `\e]8;;<url>\e\` opens. cursor is in external coords. */
-    public void beginHyperlink(String url, int cursorRow, int cursorCol) {
-        endHyperlink(cursorRow, cursorCol); // close any previous
-        if (url == null || url.isEmpty()) return;
-        mPendingHyperlinkUrl = url;
-        mPendingHyperlinkStartInternalRow = externalToInternalRow(cursorRow);
-        mPendingHyperlinkStartCol = cursorCol;
-    }
-
-    /** Called by emulator when `\e]8;;\e\` closes (or a new hyperlink begins). */
-    public void endHyperlink(int cursorRow, int cursorCol) {
-        if (mPendingHyperlinkUrl == null) return;
-        int endInternal = externalToInternalRow(cursorRow);
-        if (mHyperlinks.size() >= HYPERLINK_REGIONS_MAX) mHyperlinks.removeFirst();
-        mHyperlinks.addLast(new HyperlinkRegion(
-            mPendingHyperlinkStartInternalRow, mPendingHyperlinkStartCol,
-            endInternal, cursorCol, mPendingHyperlinkUrl));
-        mPendingHyperlinkUrl = null;
-    }
-
-    /** Whether a link has begun and not yet ended. */
-    boolean isHyperlinkOpen() {
-        return mPendingHyperlinkUrl != null;
-    }
-
-    /** Lookup URL at an external (visible) cell position, or null. */
+    /** The OSC 8 link at an external (visible or history) cell, or null. */
     public String getHyperlinkAt(int externalRow, int col) {
-        int target = externalToInternalRow(externalRow);
-        // Reverse iterate: most recent matches first.
-        java.util.Iterator<HyperlinkRegion> it = mHyperlinks.descendingIterator();
-        while (it.hasNext()) {
-            HyperlinkRegion r = it.next();
-            if (containsCell(r, target, col)) return r.url;
-        }
-        return null;
+        if (externalRow < -mActiveTranscriptRows || externalRow >= mScreenRows || col < 0 || col >= mColumns) return null;
+        TerminalRow row = mLines[externalToInternalRow(externalRow)];
+        return row == null ? null : row.getLink(col);
     }
 
-    /** A closed OSC 8 link and its start cell. */
+    /** An OSC 8 link and its start cell. */
     public static final class Hyperlink {
         public final String url;
         public final int row, col;
@@ -132,43 +84,28 @@ public final class TerminalBuffer {
     }
 
     /**
-     * The closed OSC 8 links, newest first, each at its start cell in external rows. Regions go stale (a
-     * clear, a column reflow, the ring wrapping) and are kept: their cell may then hold other text, and one
-     * outside the active rows reports the oldest row.
+     * The OSC 8 links in the history and on the screen, last first, each at its start cell in external rows. A
+     * link wrapped onto the next row starts once; links that touch with the same URL read as one.
      */
     public java.util.List<Hyperlink> getHyperlinks() {
-        java.util.List<Hyperlink> out = new java.util.ArrayList<>(mHyperlinks.size());
-        java.util.Iterator<HyperlinkRegion> it = mHyperlinks.descendingIterator();
-        while (it.hasNext()) {
-            HyperlinkRegion r = it.next();
-            // The inverse of externalToInternalRow: rows above the screen are the transcript's, ring-wise.
-            int row = Math.floorMod(r.startInternalRow - mScreenFirstRow, mTotalRows);
-            if (row >= mScreenRows) row -= mTotalRows;
-            if (row < -mActiveTranscriptRows) row = -mActiveTranscriptRows;
-            out.add(new Hyperlink(r.url, row, r.startCol));
+        java.util.List<Hyperlink> out = new java.util.ArrayList<>();
+        String previous = null;
+        for (int r = -mActiveTranscriptRows; r < mScreenRows; r++) {
+            TerminalRow row = mLines[externalToInternalRow(r)];
+            if (row == null) {
+                previous = null;
+                continue;
+            }
+            for (int c = 0; c < mColumns; c++) {
+                String link = row.getLink(c);
+                if (link != null && !link.equals(previous)) out.add(new Hyperlink(link, r, c));
+                previous = link;
+            }
+            if (!row.mLineWrap) previous = null;
         }
+        java.util.Collections.reverse(out);
         return out;
     }
-
-    private boolean containsCell(HyperlinkRegion r, int internalRow, int col) {
-        // Single-line region.
-        if (r.startInternalRow == r.endInternalRow) {
-            return internalRow == r.startInternalRow && col >= r.startCol && col < r.endCol;
-        }
-        // Multi-line region — wrap-aware in the ring buffer.
-        // Walk forward from start to end through the ring; check membership.
-        int row = r.startInternalRow;
-        while (true) {
-            if (row == internalRow) {
-                if (row == r.startInternalRow) return col >= r.startCol;
-                if (row == r.endInternalRow) return col < r.endCol;
-                return true; // middle row — full width
-            }
-            if (row == r.endInternalRow) return false;
-            row = (row + 1) % mTotalRows;
-        }
-    }
-
 
     public TerminalBuffer(int columns, int totalRows, int screenRows) {
         this(null, columns, totalRows, screenRows);
@@ -464,13 +401,17 @@ public final class TerminalBuffer {
 
                 int currentOldCol = 0;
                 long styleAtCol = 0;
+                String linkAtCol = null;
                 for (int i = 0; i < lastNonSpaceIndex; i++) {
                     // Note that looping over java character, not cells.
                     char c = oldLine.mText[i];
                     int codePoint = (Character.isHighSurrogate(c)) ? Character.toCodePoint(c, oldLine.mText[++i]) : c;
                     int displayWidth = WcWidth.width(codePoint);
                     // Use the last style if this is a zero-width character:
-                    if (displayWidth > 0) styleAtCol = oldLine.getStyle(currentOldCol);
+                    if (displayWidth > 0) {
+                        styleAtCol = oldLine.getStyle(currentOldCol);
+                        linkAtCol = oldLine.getLink(currentOldCol);
+                    }
 
                     // Line wrap as necessary:
                     if (currentOutputExternalColumn + displayWidth > mColumns) {
@@ -486,7 +427,7 @@ public final class TerminalBuffer {
 
                     int offsetDueToCombiningChar = ((displayWidth <= 0 && currentOutputExternalColumn > 0) ? 1 : 0);
                     int outputColumn = currentOutputExternalColumn - offsetDueToCombiningChar;
-                    setChar(outputColumn, currentOutputExternalRow, codePoint, styleAtCol);
+                    setChar(outputColumn, currentOutputExternalRow, codePoint, styleAtCol, linkAtCol);
 
                     if (displayWidth > 0) {
                         if (oldCursorRow == externalOldRow && oldCursorColumn == currentOldCol) {
@@ -623,10 +564,15 @@ public final class TerminalBuffer {
     }
 
     public void setChar(int column, int row, int codePoint, long style) {
+        setChar(column, row, codePoint, style, null);
+    }
+
+    /** Writes a cell on the screen, as part of link (null for none): see {@link TerminalRow#setChar(int, int, long, String)}. */
+    public void setChar(int column, int row, int codePoint, long style, String link) {
         if (row  < 0 || row >= mScreenRows || column < 0 || column >= mColumns)
             throw new IllegalArgumentException("TerminalBuffer.setChar(): row=" + row + ", column=" + column + ", mScreenRows=" + mScreenRows + ", mColumns=" + mColumns);
         row = externalToInternalRow(row);
-        allocateFullLineIfNecessary(row).setChar(column, codePoint, style);
+        allocateFullLineIfNecessary(row).setChar(column, codePoint, style, link);
     }
 
     public long getStyleAt(int externalRow, int column) {
