@@ -11,7 +11,7 @@ import android.os.BatteryManager
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
-import android.os.storage.StorageManager
+import android.os.StatFs
 import android.util.Log
 import dev.nickolaj.pocketnix.agent.HostState
 import java.util.TimeZone
@@ -37,10 +37,9 @@ class HostMonitor(private val context: Context) {
     private val main = Handler(Looper.getMainLooper())
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
     private val power = context.getSystemService(PowerManager::class.java)
-    private val storage = context.getSystemService(StorageManager::class.java)
     private var started = false
 
-    // getAllocatableBytes may take seconds: it's read off the main thread.
+    // A statfs reads the disk: off the main thread.
     private var storageReader: ScheduledExecutorService? = null
 
     private var timeZone = TimeZone.getDefault().id
@@ -116,11 +115,13 @@ class HostMonitor(private val context: Context) {
         // A read that fails isn't retried in a busy loop.
         var next = StorageBalloon.nextReadMs(Long.MAX_VALUE)
         try {
-            val allocatable = storage.getAllocatableBytes(StorageManager.UUID_DEFAULT)
-            next = StorageBalloon.nextReadMs(allocatable)
+            // Not getAllocatableBytes: it counts other apps' cache, which only an allocateBytes call
+            // clears, and the guest's writes into its image make none.
+            val free = StatFs(context.filesDir.path).availableBytes
+            next = StorageBalloon.nextReadMs(free)
             main.post {
                 guard {
-                    storageAvailable = StorageBalloon.available(allocatable)
+                    storageAvailable = StorageBalloon.available(free)
                     publish()
                 }
             }
