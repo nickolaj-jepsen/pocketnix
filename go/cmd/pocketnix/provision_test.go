@@ -217,7 +217,7 @@ func TestProvision(t *testing.T) {
 	apk := filepath.Join(t.TempDir(), "app-debug.apk")
 	os.WriteFile(apk, []byte("apk"), 0o644)
 
-	err := provisionFor(t, "--image", img, "--apk", apk, "--debug", "--no-network", "--memory", "1024", "--cpus", "one", "--disk", "8")
+	err := provisionFor(t, "--image", img, "--apk", apk, "--debug", "--no-network", "--memory", "1024", "--cpus", "one")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestProvision(t *testing.T) {
 		}
 	}
 	for name, want := range map[string]string{
-		"network": "--ez false", "memoryMb": "--ei 1024", "cpus": "--ei 1", "diskGb": "--ei 8", "minDiskGb": "--ei 1",
+		"network": "--ez false", "memoryMb": "--ei 1024", "cpus": "--ei 1",
 	} {
 		if extras[name] != want {
 			t.Errorf("start extra %s = %q, want %q; events:\n%s", name, extras[name], want, ev)

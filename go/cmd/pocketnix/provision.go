@@ -43,7 +43,6 @@ flags:
   --no-network                start the VM without networking
   --memory <MiB>              the VM's memory (the app's Settings otherwise)
   --cpus <one|all>            one vCPU, or one per host core
-  --disk <GiB>                disk size; the guest's root grows into it (at least the image's size)
   --no-start                  don't start the VM
   --serial <serial>           adb device to use (default: adb's only device)
 `
@@ -66,7 +65,7 @@ type provisionOpts struct {
 	image, apk, serial        string
 	debug, replace, noNetwork bool
 	noStart                   bool
-	memoryMB, diskGB          int
+	memoryMB                  int
 	cpus                      string
 	injects                   []image.Injection
 	stdin                     io.Reader
@@ -89,7 +88,6 @@ func parseProvision(args []string) (*provisionOpts, error) {
 	fs.BoolVar(&o.noNetwork, "no-network", false, "")
 	fs.BoolVar(&o.noStart, "no-start", false, "")
 	fs.IntVar(&o.memoryMB, "memory", 0, "")
-	fs.IntVar(&o.diskGB, "disk", 0, "")
 	fs.StringVar(&o.cpus, "cpus", "", "")
 	fs.Func("inject", "", func(v string) error {
 		guest, src, ok := strings.Cut(v, "=")
@@ -270,28 +268,21 @@ func (o *provisionOpts) run() error {
 	if o.noStart {
 		return nil
 	}
-	_, err = dev.Shell(o.startCommand(img))
+	_, err = dev.Shell(o.startCommand())
 	if err == nil {
 		o.logf("started the VM (network %t)", !o.noNetwork)
 	}
 	return err
 }
 
-// startCommand starts the VM with the hardware flags, and a disk no smaller
-// than the image: a smaller setting would leave the root no room to grow.
-func (o *provisionOpts) startCommand(img string) string {
+// startCommand starts the VM with the hardware flags.
+func (o *provisionOpts) startCommand() string {
 	cmd := fmt.Sprintf("am start -n %s/%s -a %s --ez network %t", o.pkg(), activityClass, actionStart, !o.noNetwork)
 	if o.memoryMB != 0 {
 		cmd += fmt.Sprintf(" --ei memoryMb %d", o.memoryMB)
 	}
 	if o.cpus != "" {
 		cmd += fmt.Sprintf(" --ei cpus %d", map[string]int{"one": 1, "all": 0}[o.cpus])
-	}
-	if o.diskGB != 0 {
-		cmd += fmt.Sprintf(" --ei diskGb %d", o.diskGB)
-	}
-	if fi, err := os.Stat(img); err == nil {
-		cmd += fmt.Sprintf(" --ei minDiskGb %d", (fi.Size()+(1<<30)-1)>>30)
 	}
 	return cmd
 }
