@@ -246,6 +246,22 @@
             };
             modules = [./nix/managed/configuration.nix];
           }).config.system.build.toplevel;
+        # The base image's system is what every managed guest downloads and keeps:
+        # it fails past a budget, so growing it is a choice made here.
+        aarch64-linux.base-closure = let
+          pkgs = nixpkgs.legacyPackages.aarch64-linux;
+          budgetMiB = 1200;
+          info = pkgs.closureInfo {rootPaths = [self.nixosConfigurations.base.config.system.build.toplevel];};
+        in
+          pkgs.runCommand "pocketnix-base-closure" {} ''
+            size=$(cat ${info}/total-nar-size)
+            echo "the base system's closure: $((size >> 20)) MiB of ${toString budgetMiB}"
+            if [ "$size" -gt $((${toString budgetMiB} << 20)) ]; then
+              echo "over budget: shrink the closure, or raise budgetMiB in flake.nix" >&2
+              exit 1
+            fi
+            echo "$size" > $out
+          '';
         x86_64-linux.agent = import ./nix/test.nix {
           inherit self;
           pkgs = nixpkgs.legacyPackages.x86_64-linux;

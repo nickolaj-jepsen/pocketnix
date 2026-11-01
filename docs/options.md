@@ -1070,6 +1070,40 @@ null
 
 
 
+## pocketnix\.guest\.storage\.cacheDays
+
+
+
+Days a file in root’s and ` pocketnix.guest.user `’s ` ~/.cache ` may go
+unused before systemd-tmpfiles deletes it\. Nix’s cache of fetched
+sources (` ~/.cache/nix/tarball-cache `) is a git repository that
+deleting single files would break, and that grows with every nixpkgs
+a flake is evaluated at: it’s deleted whole once it’s this many days
+old, and fetched again when next needed\. Null keeps both\.
+
+
+
+*Type:*
+null or (positive integer, meaning >0)
+
+
+
+*Default:*
+
+```nix
+30
+```
+
+
+
+*Example:*
+
+```nix
+7
+```
+
+
+
 ## pocketnix\.guest\.terminal\.defaultProfile
 
 

@@ -717,6 +717,20 @@ in {
       };
     };
 
+    storage.cacheDays = mkOption {
+      type = types.nullOr types.ints.positive;
+      default = 30;
+      example = 7;
+      description = ''
+        Days a file in root's and `pocketnix.guest.user`'s `~/.cache` may go
+        unused before systemd-tmpfiles deletes it. Nix's cache of fetched
+        sources (`~/.cache/nix/tarball-cache`) is a git repository that
+        deleting single files would break, and that grows with every nixpkgs
+        a flake is evaluated at: it's deleted whole once it's this many days
+        old, and fetched again when next needed. Null keeps both.
+      '';
+    };
+
     host.timeZone = mkOption {
       type = types.bool;
       default = config.time.timeZone == null;
@@ -859,10 +873,10 @@ in {
         # changes reload instead, and reach the app live.
         restartIfChanged = false;
         reloadTriggers = [agentConfigFile];
-        # Updates: ssh to the build host, nix to fetch, systemd-run to switch.
-        path = [config.nix.package config.programs.ssh.package config.systemd.package];
+        # Updates: ssh to the build host, nix to fetch, systemd-run to switch, fstrim after pruning.
+        path = [config.nix.package config.programs.ssh.package config.systemd.package pkgs.util-linux];
         serviceConfig = {
-          ExecStart = lib.escapeShellArgs ([(lib.getExe' cfg.package "pocketnix-agent") "--guest-socket" guestSocket "--state-dir" "/var/lib/pocketnix" "--host-state" "/run/pocketnix/host.json" "--prune-marker" pruneMarker] ++ lib.concatMap (a: ["--listen" a]) cfg.agent.listen);
+          ExecStart = lib.escapeShellArgs ([(lib.getExe' cfg.package "pocketnix-agent") "--guest-socket" guestSocket "--state-dir" "/var/lib/pocketnix" "--host-state" "/run/pocketnix/host.json" "--prune-marker" pruneMarker] ++ lib.optionals cfg.avf.enable ["--storage-balloon" "/"] ++ lib.concatMap (a: ["--listen" a]) cfg.agent.listen);
           RuntimeDirectory = "pocketnix";
           RuntimeDirectoryMode = "0755";
           StateDirectory = "pocketnix";
@@ -875,6 +889,40 @@ in {
         };
       };
     }
+
+    (mkIf (cfg.storage.cacheDays != null) (let
+      days = toString cfg.storage.cacheDays;
+      homes = lib.unique ["/root" config.users.users.${cfg.user}.home];
+    in {
+      systemd.tmpfiles.rules =
+        lib.concatMap (home: [
+          "e ${home}/.cache - - - ${days}d"
+          "x ${home}/.cache/nix/tarball-cache"
+        ])
+        homes;
+      systemd.services.pocketnix-tarball-cache = {
+        description = "Delete Nix's fetched-source caches older than ${days} days";
+        startAt = "daily";
+        serviceConfig = {
+          Type = "oneshot";
+          Nice = 19;
+          IOSchedulingClass = "idle";
+        };
+        path = [pkgs.coreutils];
+        script = ''
+          for c in ${lib.concatMapStringsSep " " (h: lib.escapeShellArg "${h}/.cache/nix/tarball-cache") homes}; do
+            [ -d "$c" ] || continue
+            # Its birth time; ext4 has one, %Y stands in where it doesn't.
+            born=$(stat -c %W "$c"); [ "$born" -gt 0 ] || born=$(stat -c %Y "$c")
+            if [ $(($(date +%s) - born)) -gt $((${days} * 86400)) ]; then
+              echo "deleting $c"
+              rm -rf "$c"
+            fi
+          done
+        '';
+      };
+      systemd.timers.pocketnix-tarball-cache.timerConfig.Persistent = true;
+    }))
 
     (mkIf cfg.integrations.portal {
       xdg.portal.extraPortals = [portalPackage];
@@ -1005,6 +1053,10 @@ in {
         SystemMaxUse=256M
         SyncIntervalSec=15m
       '';
+      # coredump's own default is a share of the disk, which is the phone's /data.
+      systemd.coredump.settings.Coredump.MaxUse = mkDefault "128M";
+      # Generations share most files under new store paths: hard-link them.
+      nix.settings.auto-optimise-store = mkDefault true;
       # No display: a login on tty1 is a session nobody sees.
       systemd.services."getty@tty1".enable = false;
       systemd.services."autovt@tty1".enable = false;
@@ -1065,6 +1117,8 @@ in {
         # A full-width build in the VM freezes the whole phone.
         max-jobs = mkDefault 1;
         cores = mkDefault 2;
+        # A check instantiates the system's derivations again; keeping them for live outputs only costs disk.
+        keep-derivations = mkDefault false;
       };
       # Builds run in the daemon; the agent runs evaluation under the same quota.
       nix.daemonCPUSchedPolicy = mkDefault "idle";
@@ -1095,7 +1149,14 @@ in {
         # `tailscale up` from a tab, without sudo.
         extraSetFlags = lib.optional (sel.user != "") "--operator=${sel.user}";
       };
-      virtualisation.podman.enable = mkIf sel.services.podman true;
+      virtualisation.podman = mkIf sel.services.podman {
+        enable = true;
+        # Images no container uses come back with a pull; the phone's space doesn't.
+        autoPrune = {
+          enable = mkDefault true;
+          flags = mkDefault ["--all"];
+        };
+      };
       pocketnix.guest.gui = mkIf sel.services.gui {
         enable = true;
         # Desktop layouts; phone density leaves them a column wide.
