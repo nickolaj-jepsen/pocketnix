@@ -20,6 +20,13 @@ func (c *Control) SetClipboardTypes(text string, types []string) error {
 	return err
 }
 
+// SetSensitiveClipboard hands the agent Android's clipboard marked as a
+// secret: its text and MIME types (nil for text alone).
+func (c *Control) SetSensitiveClipboard(text string, types []string) error {
+	_, err := c.request(protocol.Request{Type: protocol.TypeSetClipboard, Text: text, Types: types, Sensitive: true})
+	return err
+}
+
 // ShareFor sends data named name for the transfer ref (a picked file, a
 // paste's data), returning where a picked file landed.
 func (c *Client) ShareFor(ref, name string, data []byte) (string, error) {

@@ -39,6 +39,12 @@ class ClipboardSyncTest {
     }
 
     @Test
+    fun theSameTextMarkedSensitiveIsSentAgain() {
+        val sync = ClipboardSync().sent(text("pw", 1))
+        assertTrue(sync.isNew(ClipSnapshot("pw", listOf("text/plain"), 2, sensitive = true)))
+    }
+
+    @Test
     fun twoImagesOfOneTypeAreBothSent() {
         val sync = ClipboardSync().sent(png(1))
         assertTrue(sync.isNew(png(2)))

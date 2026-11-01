@@ -1,13 +1,18 @@
 package dev.nickolaj.pocketnix
 
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
  * Android's clipboard as the app sends it: its [text] ("" for a clip without
- * text), its MIME [types] and `ClipDescription.getTimestamp()`.
+ * text), its MIME [types], `ClipDescription.getTimestamp()` and whether it's
+ * [sensitive] (`ClipDescription.EXTRA_IS_SENSITIVE`, a password manager's).
  */
-data class ClipSnapshot(val text: String, val types: List<String>, val timestamp: Long) {
+data class ClipSnapshot(val text: String, val types: List<String>, val timestamp: Long, val sensitive: Boolean = false) {
     val isText get() = types.any { it.startsWith("text/") }
+
+    /** The set-clipboard request (go/internal/protocol's Request) that hands this clip to the agent. */
+    fun request(): JSONObject = JSONObject().put("type", "set-clipboard").put("text", text).put("types", JSONArray(types)).put("sensitive", sensitive)
 }
 
 /**
@@ -18,14 +23,14 @@ data class ClipSnapshot(val text: String, val types: List<String>, val timestamp
 data class ClipboardSync(private val sent: ClipSnapshot? = null, private val guestText: String? = null) {
     /**
      * Whether [clip] is news to the guest: neither the clip last sent nor a
-     * guest's text copy coming back. A text clip matches by content and
-     * types, any other by its timestamp too, so a second image of one type is
-     * sent.
+     * guest's text copy coming back. A text clip matches by content, types
+     * and sensitivity, any other by its timestamp too, so a second image of
+     * one type is sent.
      */
     fun isNew(clip: ClipSnapshot): Boolean {
         if (clip.isText && clip.text == guestText) return false
         val last = sent ?: return true
-        if (last.types != clip.types || last.text != clip.text) return true
+        if (last.types != clip.types || last.text != clip.text || last.sensitive != clip.sensitive) return true
         return !clip.isText && last.timestamp != clip.timestamp
     }
 

@@ -1,6 +1,7 @@
 package dev.nickolaj.pocketnix.agent
 
 import com.termux.terminal.TerminalBackend
+import dev.nickolaj.pocketnix.ClipSnapshot
 import dev.nickolaj.pocketnix.GuestCopy
 import dev.nickolaj.pocketnix.forward.PortForwards
 import dev.nickolaj.pocketnix.forward.UdpForwarder
@@ -248,6 +249,18 @@ class AgentIntegrationTest {
     }
 
     @Test
+    fun aSensitiveAndroidClipReachesTheGuestMarked() = runBlocking {
+        val ctl = ControlChannel(scope, "test")
+        ctl.start(dialer)
+        withTimeout(10_000) { ctl.updates.filterNotNull().first() }
+        ctl.call(ClipSnapshot("hunter2", listOf("text/plain"), 1, sensitive = true).request())
+        val (_, ev) = guestLines("""{"type":"subscribe-clipboard"}""", 2).map(::JSONObject)
+        assertEquals("hunter2", ev.getString("text"))
+        assertTrue("$ev", ev.optBoolean("sensitive") && ev.optBoolean("android"))
+        ctl.stop()
+    }
+
+    @Test
     fun aGuestPickGetsTheAppsFiles() = runBlocking {
         val ctl = ControlChannel(scope, "test")
         ctl.start(dialer)
@@ -269,17 +282,20 @@ class AgentIntegrationTest {
     }
 
     /** One request on the agent's guest socket, as pocketnix-guest sends it. */
-    private fun guest(line: String): String {
+    private fun guest(line: String): String = guestLines(line, 1).single()
+
+    /** The first [count] lines the agent sends for a guest request [line]. */
+    private fun guestLines(line: String, count: Int): List<String> {
         SocketChannel.open(UnixDomainSocketAddress.of(File(dir, "guest.sock").path)).use { ch ->
             ch.write(ByteBuffer.wrap("$line\n".toByteArray()))
             val buf = ByteBuffer.allocate(4096)
             val out = StringBuilder()
-            while (!out.endsWith("\n")) {
+            while (out.count { it == '\n' } < count) {
                 buf.clear()
                 if (ch.read(buf) < 0) break
                 out.append(String(buf.array(), 0, buf.position()))
             }
-            return out.toString().trim()
+            return out.lines().filter { it.isNotBlank() }.take(count)
         }
     }
 

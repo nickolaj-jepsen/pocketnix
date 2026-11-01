@@ -35,10 +35,13 @@ func replace(ch chan protocol.ClipboardEvent, ev protocol.ClipboardEvent) {
 func (s *Server) clipboardEvent() (ev protocol.ClipboardEvent, ok bool) {
 	x := &s.transfers
 	x.mu.Lock()
-	types, sensitive := append([]string(nil), x.clipTypes...), x.clipSensitive
+	ev = protocol.ClipboardEvent{
+		Type: protocol.TypeClipboard, Types: append([]string(nil), x.clipTypes...),
+		Sensitive: x.clipSensitive, Android: x.clipAndroid,
+	}
 	x.mu.Unlock()
-	ev = protocol.ClipboardEvent{Type: protocol.TypeClipboard, Text: s.clipboardText(), Types: types, Sensitive: sensitive}
-	return ev, len(types) > 0
+	ev.Text = s.clipboardText()
+	return ev, len(ev.Types) > 0
 }
 
 // publishClipboard hands the clipboard to every subscriber. It reads the

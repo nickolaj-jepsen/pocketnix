@@ -117,8 +117,12 @@ esac
 	return filepath.Join(dir, "stalled")
 }
 
-func (f *fakeWayland) offer(t string, data []byte) error {
-	f.copy(data, t)
+func (f *fakeWayland) offer(t string, data []byte, sensitive bool) error {
+	if sensitive {
+		f.copy(data, t, sensitiveHint)
+	} else {
+		f.copy(data, t)
+	}
 	return nil
 }
 
@@ -314,6 +318,34 @@ func TestBridgeDoesNotOfferASensitiveCopyBack(t *testing.T) {
 	}
 }
 
+// A password manager's copy on Android reaches Wayland marked, the way
+// clipboard managers there expect, and its echo doesn't come back.
+func TestBridgeMarksAndroidsSensitiveCopy(t *testing.T) {
+	sock, _, ctl := startAgent(t)
+	b, wl := newBridge(t, sock)
+	next := clipboardEvents(t, sock)
+	must(t, ctl.SetSensitiveClipboard("hunter2", nil))
+	must(t, b.fromAgent(next()))
+	if types, data := wl.selection(); !slices.Contains(types, sensitiveHint) || string(data) != "hunter2" {
+		t.Fatalf("Wayland offers %q (%q), want hunter2 with %s", types, data, sensitiveHint)
+	}
+	must(t, b.fromWayland("sensitive"))
+	wl.copy([]byte("from-wayland"), "text/plain")
+	must(t, b.fromWayland("data"))
+	if ev := appEvent(t, ctl); ev.Text != "from-wayland" {
+		t.Errorf("app event = %+v, want from-wayland and nothing before it", ev)
+	}
+	must(t, b.fromAgent(next()))
+	// After the same text unmarked, the marked copy is news again.
+	must(t, ctl.SetClipboard("from-wayland"))
+	must(t, b.fromAgent(next()))
+	must(t, ctl.SetSensitiveClipboard("from-wayland", nil))
+	must(t, b.fromAgent(next()))
+	if types, _ := wl.selection(); !slices.Contains(types, sensitiveHint) {
+		t.Errorf("Wayland offers %q, want it marked", types)
+	}
+}
+
 func TestBridgeTypedData(t *testing.T) {
 	sock, c, ctl := startAgent(t)
 	b, wl := newBridge(t, sock)
@@ -408,7 +440,7 @@ func TestBridgeBurstFromAndroidEndsOnTheLast(t *testing.T) {
 		t.Errorf("Wayland holds %q, %v", data, err)
 	}
 	// Neither offer came back: the next app event is a new Wayland copy.
-	must(t, (wlClipboard{}).offer("text/plain", []byte("from-wayland")))
+	must(t, (wlClipboard{}).offer("text/plain", []byte("from-wayland"), false))
 	must(t, b.fromWayland("data"))
 	if ev := appEvent(t, ctl); ev.Text != "from-wayland" {
 		t.Errorf("app event = %+v, want from-wayland and nothing before it", ev)
@@ -514,7 +546,7 @@ func TestBridgeGivesUpOnAStalledSource(t *testing.T) {
 	sock, _, ctl := startAgent(t)
 	wl := wlClipboard{wait: 200 * time.Millisecond}
 	b := &bridge{sock: sock, wl: wl, logf: t.Logf}
-	must(t, wl.offer("text/plain", []byte("stall")))
+	must(t, wl.offer("text/plain", []byte("stall"), false))
 	if err := b.fromWayland("data"); !errors.Is(err, errStalled) {
 		t.Fatalf("a source that never ends its data: %v", err)
 	}
@@ -535,7 +567,7 @@ func TestBridgeGivesUpOnAStalledSource(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	// The next change still crosses.
-	must(t, wl.offer("text/plain", []byte("after")))
+	must(t, wl.offer("text/plain", []byte("after"), false))
 	must(t, b.fromWayland("data"))
 	if ev := appEvent(t, ctl); ev.Text != "after" {
 		t.Errorf("app event = %+v", ev)

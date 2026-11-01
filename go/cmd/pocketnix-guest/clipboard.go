@@ -176,9 +176,10 @@ type wayland interface {
 	// read returns the selection's data of type t, failing with errTooLarge
 	// past limit bytes.
 	read(t string, limit int64) ([]byte, error)
-	// offer takes the selection with data, of type t only, returning once
-	// the selection holds it: offers land in the order they're made.
-	offer(t string, data []byte) error
+	// offer takes the selection with data, of type t only, and with
+	// sensitiveHint when sensitive; it returns once the selection holds it:
+	// offers land in the order they're made.
+	offer(t string, data []byte, sensitive bool) error
 }
 
 // bridge carries changes between the Wayland selection and the agent's
@@ -251,11 +252,10 @@ func (b *bridge) fromWayland(state string) error {
 	if len(data) == 0 {
 		return nil
 	}
-	key := clipKey(t, data)
 	sensitive := state == "sensitive" || slices.Contains(types, sensitiveHint)
+	key := clipKey(t, data, sensitive)
 	b.selection = key
-	// The bridge's offers are never sensitive: the same data marked so is a new copy.
-	if key == b.offered && !sensitive {
+	if key == b.offered {
 		return nil
 	}
 	b.offered = ""
@@ -281,12 +281,12 @@ func (b *bridge) fromWayland(state string) error {
 }
 
 // fromAgent puts a change of the agent's clipboard on the Wayland selection,
-// except a sensitive guest copy.
+// marked when it's sensitive, except a sensitive guest copy.
 func (b *bridge) fromAgent(ev protocol.ClipboardEvent) error {
 	t := pickType(ev.Types)
-	// A sensitive copy came from Wayland: offering it again, unmarked, would
-	// undo a password manager's clearing it and reach clipboard histories.
-	if t == "" || ev.Sensitive {
+	// A guest's sensitive copy came from Wayland: offering it again would
+	// undo a password manager's clearing it.
+	if t == "" || ev.Sensitive && !ev.Android {
 		return nil
 	}
 	var data []byte
@@ -301,11 +301,11 @@ func (b *bridge) fromAgent(ev protocol.ClipboardEvent) error {
 	if len(data) == 0 {
 		return nil
 	}
-	key := clipKey(t, data)
+	key := clipKey(t, data, ev.Sensitive)
 	if key == b.selection {
 		return nil
 	}
-	if err := b.wl.offer(t, data); err != nil {
+	if err := b.wl.offer(t, data, ev.Sensitive); err != nil {
 		return err
 	}
 	b.selection, b.offered = key, key
@@ -341,14 +341,19 @@ func (b *bridge) paste(t string) ([]byte, error) {
 	return res.data, err
 }
 
-// clipKey identifies data of type t, with every plain-text type as one.
-func clipKey(t string, data []byte) string {
+// clipKey identifies data of type t, with every plain-text type as one, and
+// whether it's marked sensitive: the same data marked otherwise is a new copy.
+func clipKey(t string, data []byte, sensitive bool) string {
 	if isText(t) {
 		t = "text/plain"
 	}
 	h := sha256.New()
 	h.Write([]byte(t))
-	h.Write([]byte{0})
+	mark := byte(0)
+	if sensitive {
+		mark = 1
+	}
+	h.Write([]byte{0, mark})
 	h.Write(data)
 	return string(h.Sum(nil))
 }
@@ -439,11 +444,16 @@ func (c wlClipboard) paste(limit int64, args ...string) ([]byte, error) {
 // leaves a child serving pastes until another copy replaces it. Waiting for
 // that exit keeps two offers from racing for the selection; --foreground
 // gives no such sign.
-func (wlClipboard) offer(t string, data []byte) error {
+func (wlClipboard) offer(t string, data []byte, sensitive bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), offerWait)
 	defer cancel()
 	// --type keeps wl-copy from guessing the type with xdg-mime.
-	cmd := exec.CommandContext(ctx, "wl-copy", "--type", t)
+	args := []string{"--type", t}
+	if sensitive {
+		// Offers sensitiveHint ("secret") besides the data.
+		args = append(args, "--sensitive")
+	}
+	cmd := exec.CommandContext(ctx, "wl-copy", args...)
 	cmd.Stdin = bytes.NewReader(data)
 	// A file, not a pipe: the serving child keeps it, and Wait would wait for it.
 	cmd.Stderr = os.Stderr

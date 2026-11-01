@@ -329,6 +329,13 @@ in
           phone.succeed(wl("wl-copy --sensitive secret"))
           clips_are("from-wayland", "third", "secret")
           assert events("guest-clipboard")[-1].get("sensitive") is True, events("guest-clipboard")
+          # A password manager's copy on Android reaches Wayland marked as wl-copy --sensitive marks it.
+          phone.succeed(f"{A} set-clipboard --sensitive android-secret")
+          phone.wait_until_succeeds(wl("wl-paste -n") + " | grep -qx android-secret", timeout=30)
+          phone.succeed(wl("wl-paste -n --type x-kde-passwordManagerHint") + " | grep -qx secret")
+          # android-secret coming back would show before fourth.
+          phone.succeed(wl("wl-copy fourth"))
+          clips_are("from-wayland", "third", "secret", "fourth")
 
           phone.succeed("head -c 100000 /dev/urandom >/tmp/wayland.png")
           phone.succeed(wl("wl-copy --type image/png </tmp/wayland.png"))

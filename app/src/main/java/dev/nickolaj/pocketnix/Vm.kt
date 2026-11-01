@@ -1,6 +1,7 @@
 package dev.nickolaj.pocketnix
 
 import android.content.ClipData
+import android.content.ClipDescription
 import android.content.Context
 import android.content.Intent
 import android.graphics.Typeface
@@ -68,7 +69,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -434,13 +434,13 @@ class Vm(private val app: Context) {
         val types = (0 until desc.mimeTypeCount).map { desc.getMimeType(it) }.distinct()
         // An image's "text" is its URI.
         val text = if (types.any { it.startsWith("text/") }) clip.getItemAt(0).coerceToText(app)?.toString().orEmpty() else ""
-        val snapshot = ClipSnapshot(text, types, desc.timestamp)
+        val sensitive = desc.extras?.getBoolean(ClipDescription.EXTRA_IS_SENSITIVE) == true
+        val snapshot = ClipSnapshot(text, types, desc.timestamp, sensitive)
         val before = bridge.clipSync
         if (!before.isNew(snapshot)) return
         if (control.link.value !is ControlChannel.Link.Up) return
         scope.launch {
-            val req = JSONObject().put("type", "set-clipboard").put("text", text).put("types", JSONArray(types))
-            if (runCatching { control.call(req) }.isSuccess) bridge.clipSent(before, snapshot)
+            if (runCatching { control.call(snapshot.request()) }.isSuccess) bridge.clipSent(before, snapshot)
         }
     }
 

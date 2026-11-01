@@ -122,8 +122,9 @@ ref. With no app connected, a request fails instead of queueing.
   asks for the bytes. Wayland apps' selection is bridged by
   `pocketnix-guest clipboard`, which copies theirs out like any guest copy and
   takes Android's from a `subscribe-clipboard` connection. A password
-  manager's copy stays marked sensitive on Android, and the bridge never
-  offers it back to Wayland.
+  manager's copy stays marked sensitive on either side (Android's
+  `EXTRA_IS_SENSITIVE`, Wayland's `x-kde-passwordManagerHint`), and the
+  bridge never offers a guest's back to Wayland.
 - File provider: a `DocumentsProvider` over `files.root`. Reads are ranged
   over one stream per open descriptor. Writes go to a temporary file beside
   the target, which the writer's close fsyncs and renames over it, so readers

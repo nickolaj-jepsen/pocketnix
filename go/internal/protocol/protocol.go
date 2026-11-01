@@ -137,6 +137,10 @@ type Request struct {
 	Cancelled bool     `json:"cancelled,omitempty"`
 	Error     string   `json:"error,omitempty"`
 	Types     []string `json:"types,omitempty"`
+	// Sensitive marks a set-clipboard's clip as a secret: Android's
+	// ClipDescription.EXTRA_IS_SENSITIVE, which password managers set
+	// (the app's ClipSnapshot.request).
+	Sensitive bool `json:"sensitive,omitempty"`
 
 	// Host is a host-state request's.
 	Host *HostState `json:"host,omitempty"`

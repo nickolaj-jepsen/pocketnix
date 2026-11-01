@@ -147,6 +147,23 @@ func TestClipboardSubscriptionMarksSensitiveCopies(t *testing.T) {
 	}
 }
 
+// Subscribers tell Android's sensitive clipboard from a guest's sensitive copy.
+func TestSensitiveAndroidClipboard(t *testing.T) {
+	h, _, _, sock := startIntegrations(t, nil)
+	ctl := connectApp(t, h)
+	next := clipboardEvents(t, sock)
+	must(t, ctl.SetSensitiveClipboard("hunter2", []string{"text/plain"}))
+	if ev := next(); ev.Text != "hunter2" || !ev.Sensitive || !ev.Android {
+		t.Errorf("event = %+v, want Android's, marked sensitive", ev)
+	}
+	if _, err := client.Guest(sock, protocol.GuestRequest{Type: protocol.GuestCopy, Text: "guest", Sensitive: true}); err != nil {
+		t.Fatal(err)
+	}
+	if ev := next(); !ev.Sensitive || ev.Android {
+		t.Errorf("after a guest copy = %+v, want a guest's, marked sensitive", ev)
+	}
+}
+
 func TestNotificationSubscriberGetsNoClipboard(t *testing.T) {
 	h, _, _, sock := startIntegrations(t, nil)
 	ctl := connectApp(t, h)

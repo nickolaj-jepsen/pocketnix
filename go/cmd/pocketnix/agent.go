@@ -60,8 +60,9 @@ commands:
   resolve-path <path>    print the file-provider path of an absolute guest path
   events                 print the guest's notify/open/clipboard/transfer pushes and
                          port-listeners snapshots, one JSON per line
-  set-clipboard [--type <mime>]… <text>
-                         hand the agent a clipboard (its text and types), as the app does on focus
+  set-clipboard [--sensitive] [--type <mime>]… <text>
+                         hand the agent a clipboard (its text and types), as the app does on focus;
+                         --sensitive marks it a password manager's
   pick-answer <ref> [file…]   answer a pick event with files; none cancels
   save-answer <ref> [file]    store a save's (or a typed copy's) bytes in file; none cancels
   paste-answer <ref> [file]   answer a clipboard request with file's bytes; none fails it
@@ -181,8 +182,16 @@ func runAgent(args []string) error {
 			return errors.New("control stream closed")
 		case "set-clipboard":
 			var types []string
-			for len(rest) >= 2 && rest[0] == "--type" {
-				types, rest = append(types, rest[1]), rest[2:]
+			sensitive := false
+			for len(rest) >= 1 && rest[0] == "--sensitive" || len(rest) >= 2 && rest[0] == "--type" {
+				if rest[0] == "--sensitive" {
+					sensitive, rest = true, rest[1:]
+				} else {
+					types, rest = append(types, rest[1]), rest[2:]
+				}
+			}
+			if sensitive {
+				return ctl.SetSensitiveClipboard(strings.Join(rest, " "), types)
 			}
 			if types != nil {
 				return ctl.SetClipboardTypes(strings.Join(rest, " "), types)
