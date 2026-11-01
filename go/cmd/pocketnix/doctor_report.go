@@ -1,0 +1,74 @@
+package main
+
+// doctorSchema is doctorReport.Schema; bump it when a field changes meaning.
+const doctorSchema = 1
+
+// doctorReport is what `pocketnix doctor --json` prints. A nil pointer is a
+// fact doctor couldn't read: it is never guessed. It holds named props only,
+// never the adb serial, account names or the phone number.
+type doctorReport struct {
+	Schema  int           `json:"schema"`
+	Device  doctorDevice  `json:"device"`
+	AVF     doctorAVF     `json:"avf"`
+	App     doctorApp     `json:"app"`
+	Verdict doctorVerdict `json:"verdict"`
+	// Smoke is absent unless --smoke ran.
+	Smoke []smokeStep `json:"smoke,omitempty"`
+}
+
+type doctorDevice struct {
+	Fingerprint  *string `json:"fingerprint"`
+	Model        *string `json:"model"`
+	Manufacturer *string `json:"manufacturer"`
+	SoC          *string `json:"soc"`
+	SDK          *string `json:"sdk"`
+	Release      *string `json:"release"`
+	// OS is one of the os* constants.
+	OS     string  `json:"os"`
+	Kernel *string `json:"kernel"`
+}
+
+const (
+	osGrapheneOS = "grapheneos"
+	osStock      = "stock"
+	osUnknown    = "unknown"
+)
+
+type doctorAVF struct {
+	Feature              *bool   `json:"feature"`
+	VMSupported          *bool   `json:"vmSupported"`
+	ProtectedVMSupported *bool   `json:"protectedVmSupported"`
+	HypervisorVersion    *string `json:"hypervisorVersion"`
+	ApexVersion          *string `json:"apexVersion"`
+	UBoot                bool    `json:"uboot"`
+	// VMInfo is `vm info`'s output lines.
+	VMInfo []string `json:"vmInfo"`
+}
+
+type doctorApp struct {
+	Package     string  `json:"package"`
+	Installed   bool    `json:"installed"`
+	VersionName *string `json:"versionName"`
+	// Caps is ProvisionProvider's caps answer, nil when there's none.
+	Caps      map[string]string `json:"caps"`
+	CapsError string            `json:"capsError,omitempty"`
+}
+
+type doctorVerdict struct {
+	// Level is one of the level* constants.
+	Level   string   `json:"level"`
+	Reasons []string `json:"reasons"`
+}
+
+const (
+	levelOK   = "ok"
+	levelWarn = "warn"
+	levelFail = "fail"
+)
+
+type smokeStep struct {
+	Name string `json:"name"`
+	// OK is nil when the step didn't apply; Detail says why.
+	OK     *bool  `json:"ok"`
+	Detail string `json:"detail"`
+}
