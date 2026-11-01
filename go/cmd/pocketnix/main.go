@@ -16,6 +16,9 @@ const usage = `usage: pocketnix <command> [args]
 
 commands:
   provision   install the app, grant AVF permissions, push and boot an image
+  install     swap the app's build without touching the VM's disk
+  doctor      check whether a phone can run pocketnix, for a device report
+  deploy      run a dev build of the agent or compositor in a phone guest
   agent       talk to a guest agent directly (debugging; see pocketnix agent -h)
   ssh-proxy   an ssh ProxyCommand to the guest's sshd over adb
   control     drive a debug build's tabs over adb and read them back
@@ -36,6 +39,12 @@ func main() {
 		fmt.Printf("pocketnix %s (protocol %d)\n", version, protocol.Version)
 	case "provision":
 		err = runProvision(os.Args[2:])
+	case "install":
+		err = runInstall(os.Args[2:])
+	case "doctor":
+		err = runDoctor(os.Args[2:])
+	case "deploy":
+		err = runDeploy(os.Args[2:])
 	case "agent":
 		err = runAgent(os.Args[2:])
 	case "ssh-proxy":
