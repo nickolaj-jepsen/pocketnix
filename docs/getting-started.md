@@ -41,7 +41,8 @@ turned off again afterwards.
   pocketnix's `flake.nix`, to `nix.settings.substituters` and
   `trusted-public-keys`. A flake whose pocketnix input `follows` its own
   nixpkgs builds the agent and compositor itself.
-- Free space on the phone for the disk (`--disk`, or set in the app).
+- Free space on the phone for the guest. The disk takes only what the guest
+  writes ([Storage](configuration.md#storage)).
 
 ## 1. Describe the guest
 
@@ -97,7 +98,7 @@ sequenceDiagram
 - `--inject <guest path>=<file>` puts secrets (ssh host keys for agenix,
   authorized keys) into the image without them entering the Nix store.
   Repeatable; `--mode` applies to the one before it.
-- `--memory`, `--cpus one|all` and `--disk` set the VM's hardware, which the
+- `--memory` and `--cpus one|all` set the VM's hardware, which the
   app's Settings can change later.
 - An existing disk is never replaced without `--replace`, which destroys it.
 - `pocketnix provision -h` lists every flag.

@@ -140,6 +140,22 @@ The app tells the guest about the phone:
   (`host.timeZone`).
 - Without the app connected, the guest counts as offline and on battery.
 
+## Storage
+
+- The disk image is a sparse file as large as the phone's storage: it
+  takes only what the guest has written.
+- The guest's free space is the phone's, less a reserve the app keeps (the
+  storage balloon, `HostState.storageAvailable` in `go/internal/protocol`).
+  A full phone is ENOSPC in the guest, not a failed write under it.
+- What the guest deletes goes back to the phone with a trim: the agent
+  trims after each prune ([Old generations](updates.md#old-generations))
+  and at boot, besides NixOS's weekly `fstrim` timer.
+- The System menu shows what the disk takes of the phone and of the guest.
+  Reclaim prunes, collects garbage, hard-links identical store files and
+  trims.
+- Files in `~/.cache` unused for `storage.cacheDays` are deleted, and Nix's
+  cache of fetched sources once it's that old.
+
 ## Power
 
 - The VM runs until stopped. Android may deep-sleep the phone meanwhile.
@@ -163,6 +179,8 @@ To keep the image small and idle wake-ups rare, the module's AVF settings
 - No NixOS manual, info or doc outputs (man pages stay), no
   `environment.defaultPackages`.
 - zram swap on, systemd-oomd off.
+- The store hard-links identical files (`nix.settings.auto-optimise-store`),
+  and coredumps keep a small `MaxUse`.
 
 ## Other hypervisors
 

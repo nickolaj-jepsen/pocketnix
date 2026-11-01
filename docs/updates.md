@@ -99,7 +99,9 @@ and which packages it would compile because no cache has them. Update asks
 before compiling anything; configuration files build without asking.
 
 Packages added in the app go to the user's Nix profile (`nixpkgs#<attr>`,
-the system's own nixpkgs), with no rebuild. Running one from the launcher
+the system's own nixpkgs), with no rebuild. Each Update moves them to the
+new nixpkgs too; one that would compile on the phone stays where it is, and
+the update log says so. Running one from the launcher
 fetches it into a profile the next boot empties.
 
 ## Old generations
@@ -107,7 +109,9 @@ fetches it into a profile the next boot empties.
 After each boot, and after each switch, the agent deletes the system
 generations besides the running and the booted one that
 `pocketnix.guest.updates.keepGenerations` doesn't keep (null keeps them all),
-and collects the garbage. A managed guest sets it from the app's Configure
+and a managed guest's package profile generations beyond its current one and
+as many others. Then it collects the garbage and trims, which hands the space
+back to the phone. A managed guest sets the number from the app's Configure
 screen.
 
 ## Rollback
