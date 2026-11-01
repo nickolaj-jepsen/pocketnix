@@ -51,9 +51,12 @@ type Server struct {
 	// Systemctl drives the module's pocketnix-*.target units from the
 	// phone's state; empty leaves them alone.
 	Systemctl string
-	host      hostTracker
-	wakes     wakeTracker
-	hostfs    hostFolders
+	// Balloon is a path on the ext4 filesystem whose free space the phone's
+	// [protocol.HostState.StorageAvailable] caps; empty caps none.
+	Balloon string
+	host    hostTracker
+	wakes   wakeTracker
+	hostfs  hostFolders
 
 	// PortPoll is how often the port watcher polls /proc without hints;
 	// zero is PortPollInterval.
@@ -354,6 +357,10 @@ func (s *Server) request(req protocol.Request) (any, error) {
 		return ack, s.Updates.Run(req.Package, req.AllowBuilds)
 	case protocol.TypeUpdateCancel:
 		return ack, s.Updates.Cancel()
+	case protocol.TypeStorage:
+		return rootStorage("/")
+	case protocol.TypeReclaim:
+		return ack, s.Updates.Reclaim()
 	case protocol.TypeSwitchGeneration:
 		return ack, s.Updates.SwitchGeneration(req.Generation)
 	case protocol.TypeHistory:

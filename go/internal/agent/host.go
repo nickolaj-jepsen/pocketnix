@@ -112,6 +112,12 @@ func (s *Server) applyHost() {
 		if s.Systemctl != "" {
 			s.applyTargets(st)
 		}
+		// Without an app the balloon stays as it was: the phone's space isn't known.
+		if s.Balloon != "" && st.StorageAvailable != nil {
+			if err := applyBalloon(s.Balloon, *st.StorageAvailable); err != nil {
+				log.Printf("storage balloon: %v", err)
+			}
+		}
 		if s.config().Host.TimeZone && st.TimeZone != "" && st.TimeZone != s.host.zone {
 			if err := setTimeZone(st.TimeZone); err != nil {
 				log.Printf("timezone %s: %v", st.TimeZone, err)

@@ -77,6 +77,58 @@ func (u *Updater) RemovePackages(attrs []string) error {
 	})
 }
 
+// upgradePackages moves the user's packages to the registry's nixpkgs, the
+// system's: a profile element stays on the revision it was added from until
+// upgraded, keeping that revision's dependencies alive beside the system's.
+// A package that would build on the phone, or fails, stays where it is and
+// is logged.
+func (u *Updater) upgradePackages(c UpdatesConfig) {
+	elems, err := u.profileElements(c, "")
+	if err != nil {
+		u.logf("listing packages: %v", err)
+		return
+	}
+	attrs := make([]string, 0, len(elems))
+	for a := range elems {
+		attrs = append(attrs, a)
+	}
+	slices.Sort(attrs)
+	user := profileUser(c)
+	upgrade := func(attrs []string) error {
+		plan, err := u.plan(c.managed, user, installables(attrs)...)
+		if err != nil {
+			return err
+		}
+		if len(plan.Builds) > 0 {
+			return fmt.Errorf("would build on the phone: %s", strings.Join(plan.Builds, ", "))
+		}
+		names := make([]string, len(attrs))
+		for i, a := range attrs {
+			names[i] = elems[a]
+		}
+		return u.runArgv(fetchTimeout, nil, u.throttled(c.managed, user, u.Nix, nixArgs(append([]string{"profile", "upgrade"}, names...)...)...))
+	}
+	switch {
+	case len(attrs) == 0:
+		return
+	case len(attrs) == 1:
+		if err := upgrade(attrs); err != nil {
+			u.logf("kept %s on its nixpkgs: %v", attrs[0], err)
+		}
+	default:
+		u.logf("upgrading %s", strings.Join(attrs, ", "))
+		// One failing package mustn't hold the others back.
+		if upgrade(attrs) != nil {
+			for _, a := range attrs {
+				if err := upgrade([]string{a}); err != nil {
+					u.logf("kept %s on its nixpkgs: %v", a, err)
+				}
+			}
+		}
+	}
+	u.refreshPackages(c)
+}
+
 // RefreshPackages rereads the user's profile for [protocol.Updates.Packages].
 func (u *Updater) RefreshPackages() {
 	c := u.config()

@@ -37,6 +37,7 @@ func main() {
 	guestSocket := flag.String("guest-socket", "", "unix socket for guest programs (pocketnix-guest), e.g. "+protocol.GuestSocket+"; empty serves none")
 	pruneMarker := flag.String("prune-marker", "", "file that marks this boot's prune done, somewhere the agent's restarts leave alone; empty prunes after every start")
 	hostState := flag.String("host-state", "", "file to keep the phone's state in as JSON, which also drives the NixOS module's pocketnix-*.target units; empty does neither")
+	balloon := flag.String("storage-balloon", "", "a path on the ext4 filesystem whose free space the phone's free space caps (its reserved_clusters); empty caps none")
 	// Hidden from -h: tests force the port watcher's /proc poller with it.
 	pollPorts := flag.Bool("poll-ports", false, "")
 	flag.Usage = func() {
@@ -68,6 +69,7 @@ func main() {
 	if *hostState != "" {
 		srv.HostFile, srv.Systemctl = *hostState, "systemctl"
 	}
+	srv.Balloon = *balloon
 	srv.Updates.Inhibit = agent.LogindInhibit
 
 	hup := make(chan os.Signal, 1)

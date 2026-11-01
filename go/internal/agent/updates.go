@@ -34,6 +34,8 @@ type Updater struct {
 	SystemdRun string
 	// Systemctl stops the units an operation's cancel leaves behind.
 	Systemctl string
+	// Fstrim hands what a garbage collection freed back to the phone.
+	Fstrim string
 	// Profile is the system profile; generations are its "-<n>-link"s.
 	Profile string
 	// Current and Booted resolve to the running and the booted system.
@@ -87,6 +89,7 @@ func NewUpdater() *Updater {
 		NixEnv:     "nix-env",
 		SystemdRun: "systemd-run",
 		Systemctl:  "systemctl",
+		Fstrim:     "fstrim",
 		Profile:    "/nix/var/nix/profiles/system",
 		Current:    "/run/current-system",
 		Booted:     "/run/booted-system",
@@ -249,6 +252,8 @@ func (u *Updater) Apply(o Options) error {
 			if err := u.localSwitched(c); err != nil {
 				u.logf("switched, but the flake's lock wasn't updated: %v", err)
 			}
+			// Before the prune, so what the packages leave behind is collected with the rest.
+			u.upgradePackages(c)
 		}
 		u.pruneAfterSwitch(c)
 		return nil

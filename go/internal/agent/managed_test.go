@@ -61,7 +61,10 @@ eval)
 derivation) cat $dir/show.json ;;
 build)
   case "$*" in
-  *--dry-run*) cat $dir/dryrun >&2 2>/dev/null || true ;;
+  *--dry-run*)
+    # $dir/dryrun-<attr> is the report for a plan that includes nixpkgs#<attr>.
+    for a; do case "$a" in nixpkgs#*) [ -f "$dir/dryrun-${a#nixpkgs#}" ] && { cat "$dir/dryrun-${a#nixpkgs#}" >&2; exit 0; } ;; esac; done
+    cat $dir/dryrun >&2 2>/dev/null || true ;;
   *) cat $dir/built ;;
   esac ;;
 flake) [ "$2" = lock ] && echo locked > %[2]s/flake.lock ;;
@@ -76,6 +79,8 @@ profile)
     for a; do case "$a" in nixpkgs#*) echo "${a#nixpkgs#}" >> $list ;; /*) echo "$a" >> $list ;; esac; done ;;
   remove)
     for a; do grep -vxF "$a" $list > $list.new || true; mv $list.new $list; done ;;
+  upgrade)
+    for a; do echo "$a" >> $dir/upgraded; done ;;
   list)
     printf '{"elements":{'
     sep=
@@ -100,6 +105,7 @@ case "$1" in
   echo gc >> $dir/gc
   echo "deleting '/nix/store/oldgarbage-1'" >&2
   echo "1 store paths deleted, 1.0 MiB freed" ;;
+--optimise) echo optimise >> $dir/gc ;;
 *) exit 2 ;;
 esac
 `, g.dir))
@@ -151,7 +157,7 @@ func startManaged(t *testing.T, g *managedGuest) (*client.Control, *harness) {
 	cfg["managed"] = map[string]any{"flake": g.flake, "attr": "phone", "adhocProfile": adhocProfile}
 	h := start(t, cfg, unixAddr)
 	u := h.srv.Updates
-	u.SSH, u.NixStore, u.Nix, u.NixEnv, u.SystemdRun = g.bin("ssh"), g.bin("nix-store"), g.bin("nix"), g.bin("nix-env"), ""
+	u.SSH, u.NixStore, u.Nix, u.NixEnv, u.Fstrim, u.SystemdRun = g.bin("ssh"), g.bin("nix-store"), g.bin("nix"), g.bin("nix-env"), g.bin("fstrim"), ""
 	u.Profile, u.Current, u.Booted, u.StoreDir = g.profile, g.current, g.booted(), g.store
 	u.Inhibit = g.inhibit
 	u.Home = g.home
@@ -440,6 +446,78 @@ func TestPruneAfterBoot(t *testing.T) {
 	left, _ := os.ReadDir(profiles)
 	if len(left) != 1 || left[0].Name() != "profile" {
 		t.Errorf("profiles left: %v; want only the user's own", left)
+	}
+}
+
+func TestPruneTrimsAndKeepsPackages(t *testing.T) {
+	g := newManagedGuest(t)
+	profiles := filepath.Join(g.home, ".local/state/nix/profiles")
+	must(t, os.MkdirAll(profiles, 0o755))
+	for n := 1; n <= 3; n++ {
+		must(t, os.Symlink(g.systems[0], filepath.Join(profiles, fmt.Sprintf("profile-%d-link", n))))
+	}
+	must(t, os.Symlink("profile-2-link", filepath.Join(profiles, "profile")))
+
+	ctl, h := startManaged(t, g)
+	before, _ := ctl.Updates()
+	h.srv.Updates.PruneAfterBoot(context.Background(), 0, "")
+	u, err := ctl.WaitUpdates(func(u protocol.Updates) bool { return u.Op > before.Op && u.State == protocol.UpdateIdle })
+	if err != nil || u.Error != "" {
+		t.Fatalf("prune: %v %s (log %q)", err, u.Error, u.Log)
+	}
+	var left []string
+	entries, _ := os.ReadDir(profiles)
+	for _, e := range entries {
+		left = append(left, e.Name())
+	}
+	if !slices.Equal(left, []string{"profile", "profile-2-link"}) {
+		t.Errorf("package profile left %q, want only its current generation", left)
+	}
+	if trimmed := strings.TrimSpace(g.read(t, "trimmed")); trimmed != "/" {
+		t.Errorf("trimmed %q after collecting, want /", trimmed)
+	}
+}
+
+// A reclaim collects and optimises even with nothing to delete, then trims.
+func TestReclaim(t *testing.T) {
+	g := newManagedGuest(t)
+	ctl, _ := startManaged(t, g)
+	u, err := ctl.Run(ctl.Reclaim)
+	if err != nil || u.Error != "" {
+		t.Fatalf("reclaim: %v %q (log %q)", err, u.Error, u.Log)
+	}
+	if steps := strings.Fields(g.read(t, "gc")); !slices.Equal(steps, []string{"gc", "optimise"}) {
+		t.Errorf("store steps %q, want gc then optimise", steps)
+	}
+	if g.read(t, "trimmed") == "" {
+		t.Error("no trim after reclaiming")
+	}
+	st, err := ctl.Storage()
+	if err != nil || st.Total <= 0 || st.Used > st.Total || st.Available > st.Total {
+		t.Errorf("storage %+v, %v", st, err)
+	}
+}
+
+// After a switch moves the registry's nixpkgs, the packages follow; one
+// that would compile on the phone stays behind without holding up the rest.
+func TestManagedUpdateUpgradesPackages(t *testing.T) {
+	g := newManagedGuest(t)
+	ctl, _ := startManaged(t, g)
+	g.write(t, "dryrun", "")
+	g.write(t, "profile", "cowsay\nhello")
+	g.dryRun(t, dryRun)
+	must(t, os.Rename(filepath.Join(g.dir, "dryrun"), filepath.Join(g.dir, "dryrun-cowsay")))
+	g.write(t, "dryrun", "")
+
+	u, err := ctl.Run(func() error { return ctl.UpdateApplyWith("", false) })
+	if err != nil || u.Error != "" {
+		t.Fatalf("apply: %v %q (log %q)", err, u.Error, u.Log)
+	}
+	if upgraded := strings.Fields(g.read(t, "upgraded")); !slices.Equal(upgraded, []string{"hello"}) {
+		t.Errorf("upgraded %q, want hello alone: cowsay would build", upgraded)
+	}
+	if !slices.ContainsFunc(u.Log, func(l string) bool { return strings.Contains(l, "cowsay") && strings.Contains(l, "portal-1.0") }) {
+		t.Errorf("log %q doesn't say why cowsay stayed", u.Log)
 	}
 }
 

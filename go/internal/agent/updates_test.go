@@ -85,6 +85,11 @@ case "$3" in
 *) exit 2 ;;
 esac
 `, filepath.Dir(g.profile)))
+	// fstrim records what it trimmed, in $dir/trimmed.
+	g.script(t, g.bin("fstrim"), fmt.Sprintf(`
+echo "$*" >> %[1]s/trimmed
+echo "/: 1 GiB (1073741824 bytes) trimmed"
+`, dir))
 	return g
 }
 
@@ -144,7 +149,7 @@ func startUpdates(t *testing.T, g *fakeGuest, updates map[string]any, tls ...*ht
 	cfg["updates"] = updates
 	h := start(t, cfg, unixAddr)
 	u := h.srv.Updates
-	u.SSH, u.NixStore, u.Nix, u.NixEnv, u.SystemdRun = g.bin("ssh"), g.bin("nix-store"), g.bin("nix"), g.bin("nix-env"), ""
+	u.SSH, u.NixStore, u.Nix, u.NixEnv, u.Fstrim, u.SystemdRun = g.bin("ssh"), g.bin("nix-store"), g.bin("nix"), g.bin("nix-env"), g.bin("fstrim"), ""
 	u.Profile, u.Current, u.Booted, u.StoreDir = g.profile, g.current, g.booted(), g.store
 	u.Inhibit = g.inhibit
 	if len(tls) > 0 {

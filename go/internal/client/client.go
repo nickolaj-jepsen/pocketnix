@@ -326,6 +326,19 @@ func (c *Control) SwitchGeneration(n int) error {
 	return err
 }
 
+// Storage returns the guest's root filesystem's use.
+func (c *Control) Storage() (protocol.Storage, error) {
+	var st protocol.Storage
+	line, err := c.request(protocol.Request{Type: protocol.TypeStorage})
+	if err == nil {
+		err = json.Unmarshal(line, &st)
+	}
+	return st, err
+}
+
+// Reclaim starts pruning, garbage collection, store optimising and a trim.
+func (c *Control) Reclaim() error { return c.simple(protocol.TypeReclaim) }
+
 // History returns up to limit shell history entries (0 for the agent's default).
 func (c *Control) History(limit int) ([]string, error) {
 	line, err := c.request(protocol.Request{Type: protocol.TypeHistory, Limit: limit})

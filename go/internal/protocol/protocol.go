@@ -98,7 +98,22 @@ const (
 	// TypeRun fetches [Request.Package] to run it once; its outcome arrives
 	// as [Updates.Run].
 	TypeRun = "run"
+	// TypeStorage asks for the guest's root filesystem's [Storage].
+	TypeStorage = "storage"
+	// TypeReclaim prunes old generations, collects garbage, hard-links the
+	// store's identical files and trims, as an [UpdateCleaning] operation.
+	TypeReclaim = "reclaim"
 )
+
+// Storage answers a storage request: the root filesystem's size, what's in
+// use, and what the guest may still write, all in bytes. Available is also
+// what the phone has room for: the storage balloon caps it.
+type Storage struct {
+	Type      string `json:"type"` // "storage"
+	Total     int64  `json:"total"`
+	Used      int64  `json:"used"`
+	Available int64  `json:"available"`
+}
 
 // Request is an app request on the control stream; fields past Type belong
 // to particular types. Long operations are acknowledged once started; their

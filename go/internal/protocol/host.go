@@ -36,6 +36,10 @@ type HostState struct {
 	Charging   bool `json:"charging"`
 	BatteryLow bool `json:"batteryLow"`
 	PowerSave  bool `json:"powerSave"`
+	// StorageAvailable is how many more bytes the phone lets the guest's
+	// disk take (its free space less a reserve), or nil when the app doesn't
+	// say. The agent caps the root filesystem's free space at it.
+	StorageAvailable *int64 `json:"storageAvailable,omitempty"`
 	// Connected is the agent's: an app is connected and the rest is
 	// current. Without one, the agent reports offline and not charging.
 	Connected bool `json:"connected"`
