@@ -2,6 +2,7 @@ package dev.nickolaj.pocketnix.forward
 
 import android.util.Log
 import dev.nickolaj.pocketnix.agent.AgentDialer
+import dev.nickolaj.pocketnix.agent.AgentStream
 import dev.nickolaj.pocketnix.agent.Forward
 import dev.nickolaj.pocketnix.agent.Protocol
 import dev.nickolaj.pocketnix.agent.open
@@ -18,6 +19,12 @@ import java.util.concurrent.Semaphore
  * listener on the phone per forward, each accepted connection relayed to the
  * guest over its own forward stream, and each UDP client address over its own
  * udp stream.
+ *
+ * A phone client's half-close never reaches the guest over vsock: sepolicy
+ * denies the app `shutdown` on its vsock fds, so [AgentStream.shutdownOutput]
+ * does nothing there. A client that ends its input and then waits for the
+ * reply (`nc -N`) hangs, its guest server never seeing the end; HTTP and ssh
+ * don't rely on it.
  */
 class PortForwards(private val appVersion: String) {
     private val active = mutableMapOf<Forward, Closeable>()
