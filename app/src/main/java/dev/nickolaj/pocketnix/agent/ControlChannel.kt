@@ -35,7 +35,9 @@ class ControlChannel(
 ) {
     sealed interface Link {
         data object Down : Link
-        data class Up(val agentVersion: String) : Link
+
+        /** [storageBalloon]: the agent caps the guest's free space at the phone's (go/internal/protocol Hello). */
+        data class Up(val agentVersion: String, val storageBalloon: Boolean = false) : Link
 
         /** The agent refused the Hello (e.g. a protocol mismatch); retrying won't help. */
         data class Refused(val reason: String) : Link
@@ -105,7 +107,7 @@ class ControlChannel(
                     if (!isActive) break
                     stream = s
                     unsupported.clear()
-                    _link.value = Link.Up(hello.optString("agent"))
+                    _link.value = Link.Up(hello.optString("agent"), hello.optBoolean("storageBalloon"))
                     Log.i(TAG, "control stream up (agent ${hello.optString("agent")})")
                     backoff = MIN_BACKOFF_MS
                     val keepalive = launch { keepalive(s) }

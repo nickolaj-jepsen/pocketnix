@@ -176,6 +176,10 @@ type Hello struct {
 	// Agent or App is the sender's build version, for display and bug reports only.
 	Agent string `json:"agent,omitempty"`
 	App   string `json:"app,omitempty"`
+	// StorageBalloon is the agent's: it caps its root's free space at
+	// [HostState.StorageAvailable], so the disk may be larger than the phone
+	// has free. An agent without it leaves the disk's size the app's to bound.
+	StorageBalloon bool `json:"storageBalloon,omitempty"`
 
 	Stream string `json:"stream,omitempty"`
 	// PTY: the profile to run (empty for the default one), and the initial size.

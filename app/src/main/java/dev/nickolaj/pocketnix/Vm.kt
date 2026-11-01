@@ -21,6 +21,7 @@ import dev.nickolaj.pocketnix.agent.WakeHolder
 import dev.nickolaj.pocketnix.engine.AvfEngine
 import dev.nickolaj.pocketnix.engine.BootMenu
 import dev.nickolaj.pocketnix.engine.ConsoleLog
+import dev.nickolaj.pocketnix.engine.DiskImage
 import dev.nickolaj.pocketnix.engine.TcpEngine
 import dev.nickolaj.pocketnix.engine.VmEngine
 import dev.nickolaj.pocketnix.engine.VmState
@@ -61,6 +62,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
@@ -213,6 +215,15 @@ class Vm(private val app: Context) {
                 }
         }
         scope.launch { HostStateSync(control, host.state).run() }
+        scope.launch {
+            control.link.filterIsInstance<ControlChannel.Link.Up>().collect { up ->
+                if (_engine.value is AvfEngine) {
+                    withContext(Dispatchers.IO) {
+                        runCatching { DiskImage.setBalloon(app, up.storageBalloon) }.onFailure { Log.w(TAG, "disk balloon mark: ${it.message}") }
+                    }
+                }
+            }
+        }
         scope.launch {
             // Down, not Refused: an agent that answers (a version mismatch) booted fine.
             combine(state, control.link) { s, link -> s == VmState.Running && link is ControlChannel.Link.Down }

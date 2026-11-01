@@ -6,6 +6,7 @@ package dev.nickolaj.pocketnix.engine
 
 import android.content.Context
 import android.os.ParcelFileDescriptor
+import android.os.StatFs
 import android.system.Os
 import android.system.OsConstants
 import android.util.Log
@@ -13,6 +14,7 @@ import dev.nickolaj.pocketnix.agent.AgentDialer
 import dev.nickolaj.pocketnix.agent.AgentStream
 import dev.nickolaj.pocketnix.agent.Protocol
 import dev.nickolaj.pocketnix.gui.GuestRam
+import dev.nickolaj.pocketnix.host.StorageBalloon
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
@@ -106,7 +108,7 @@ class AvfEngine(private val context: Context) : VmEngine {
         try {
             val disk = DiskImage.file(context)
             if (!disk.exists()) throw IllegalStateException("No disk image yet: set it up in the app, or run `pocketnix provision --image …`")
-            DiskImage.grow(context, disk)
+            DiskImage.grow(context, disk, DiskImage.hasBalloon(context))
 
             val mgr = AvfReflect.manager(context)
             val caps = AvfReflect.capabilities(mgr)
@@ -348,7 +350,7 @@ object DiskImage {
      * sparse, and the agent's storage balloon (HostState.storageAvailable)
      * keeps the guest from filling more of it than the phone has free.
      */
-    fun size(context: Context): Long = context.filesDir.totalSpace and ((1L shl 20) - 1).inv()
+    fun size(context: Context): Long = context.filesDir.totalSpace and MIB_MASK
 
     /** What the disk takes of the phone's storage: the sparse file's allocated blocks, in bytes. */
     fun allocated(context: Context): Long = runCatching { Os.stat(file(context).path).st_blocks * 512 }.getOrDefault(0L)
@@ -372,11 +374,44 @@ object DiskImage {
     private const val STALE_PART_MS = 60 * 60_000L
     private const val TAG = "DiskImage"
 
-    /** Grows [file] to [size]; the guest grows its root partition on boot. Never shrinks. */
-    fun grow(context: Context, file: File) {
-        val want = size(context)
+    /**
+     * Grows [file] for its next boot, when the guest grows its root partition into it; never shrinks.
+     * [balloon]: the guest's agent caps its free space at the phone's (see [growTo]).
+     */
+    fun grow(context: Context, file: File, balloon: Boolean) {
+        val allocated = runCatching { Os.stat(file.path).st_blocks * 512 }.getOrDefault(0L)
+        val free = runCatching { StatFs(context.filesDir.path).availableBytes }.getOrDefault(0L)
+        val want = growTo(size(context), allocated, free, balloon)
         if (file.length() < want) RandomAccessFile(file, "rw").use { it.setLength(want) }
     }
+
+    /**
+     * The size to grow a disk of [allocated] bytes to: [size] under a [balloon], else only what leaves
+     * the guest the phone's [free] space less [StorageBalloon.RESERVE], as nothing else caps it.
+     */
+    fun growTo(size: Long, allocated: Long, free: Long, balloon: Boolean): Long = if (balloon) {
+        size
+    } else {
+        minOf(size, (allocated + free - StorageBalloon.RESERVE).coerceAtLeast(0) and MIB_MASK)
+    }
+
+    /** Records whether the agent on the disk caps the guest's free space, for the next launch's [grow]. */
+    fun setBalloon(context: Context, balloon: Boolean) {
+        val mark = balloonMark(context)
+        if (!balloon) {
+            mark.delete()
+            return
+        }
+        val id = Os.stat(file(context).path).st_ino.toString()
+        if (runCatching { mark.readText() }.getOrNull() != id) mark.writeText(id)
+    }
+
+    /** Whether this disk's agent caps the guest's free space: the mark names the disk's inode, which a replaced disk doesn't keep. */
+    fun hasBalloon(context: Context): Boolean = runCatching { balloonMark(context).readText() == Os.stat(file(context).path).st_ino.toString() }.getOrDefault(false)
+
+    private fun balloonMark(context: Context) = File(context.filesDir, "disk.balloon")
+
+    private const val MIB_MASK = ((1L shl 20) - 1).inv()
 }
 
 /** A connected vsock socket; shutdown wakes threads blocked reading it, as close alone may not. */

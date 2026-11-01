@@ -1014,7 +1014,7 @@ in {
       fileSystems."/" = {
         device = "/dev/disk/by-label/nixos";
         fsType = "ext4";
-        # The app grows the image file to the configured disk size.
+        # The app grows the image file (docs/configuration.md, Storage).
         autoResize = true;
       };
       fileSystems."/boot" = {

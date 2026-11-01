@@ -209,7 +209,7 @@ func (s *Server) handle(c net.Conn) {
 }
 
 func (s *Server) hello() protocol.Hello {
-	return protocol.Hello{Type: protocol.TypeHello, Version: protocol.Version, Agent: s.Version}
+	return protocol.Hello{Type: protocol.TypeHello, Version: protocol.Version, Agent: s.Version, StorageBalloon: s.Balloon != ""}
 }
 
 func reject(w io.Writer, msg string) {

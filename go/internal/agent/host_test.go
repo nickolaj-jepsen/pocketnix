@@ -118,3 +118,24 @@ func TestHostStateLostWithItsStream(t *testing.T) {
 	wantTargets(t, active, "pocketnix-power-save.target")
 	eventually(t, "a disconnected host file", func() bool { return !readHostFile(t, hostFile).Connected })
 }
+
+func TestHelloSaysWhetherTheStorageBalloonCaps(t *testing.T) {
+	h := start(t, baseConfig(), tcpAddr)
+	hello := func() protocol.Hello {
+		t.Helper()
+		c, err := h.client.Dial()
+		must(t, err)
+		defer c.Close()
+		must(t, protocol.WriteJSON(c, protocol.Hello{Type: protocol.TypeHello, Version: protocol.Version, Stream: protocol.StreamControl}))
+		got, err := protocol.ReadHello(c)
+		must(t, err)
+		return got
+	}
+	if hello().StorageBalloon {
+		t.Error("an agent without a balloon says it caps")
+	}
+	h.srv.Balloon = "/"
+	if !hello().StorageBalloon {
+		t.Error("an agent with a balloon doesn't say it caps")
+	}
+}

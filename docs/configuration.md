@@ -146,7 +146,10 @@ The app tells the guest about the phone:
 ## Storage
 
 - The disk image is a sparse file as large as the phone's storage: it
-  takes only what the guest has written.
+  takes only what the guest has written. It grows that large at the boot
+  after the guest's agent first says it has the storage balloon (below);
+  a guest whose pocketnix predates the balloon gets only what the phone
+  has free when the VM starts, less the reserve.
 - The guest's free space is the phone's, less a reserve the app keeps (the
   storage balloon, `HostState.storageAvailable` in `go/internal/protocol`).
   A full phone is ENOSPC in the guest, not a failed write under it.

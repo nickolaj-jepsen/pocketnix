@@ -109,7 +109,8 @@ class ManagedGuest(
         Release.verify(Release.url(settings, "$name.sha256"), gz)
         val part = File(disk.path + ".part")
         Release.unpack(gz, part) { done, total -> _setup.value = Setup.Working(done, total, true) }
-        DiskImage.grow(app, part)
+        // The base image is this app's release, whose agent has the storage balloon.
+        DiskImage.grow(app, part, balloon = true)
         if (!part.renameTo(disk)) throw IOException("couldn't move the image into place")
         gz.delete()
     }
