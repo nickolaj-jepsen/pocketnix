@@ -150,6 +150,9 @@ The app tells the guest about the phone:
   after the guest's agent first says it has the storage balloon (below);
   a guest whose pocketnix predates the balloon gets only what the phone
   has free when the VM starts, less the reserve.
+- Growing the root costs the phone its new inode tables once, about 1 %
+  of what it grows by (1.3 GB for 110 GB on a Pixel 8 Pro): ext4 zeroes
+  them, AVF's crosvm allocates written zeroes, and no trim returns them.
 - The guest's free space is the phone's, less a reserve the app keeps (the
   storage balloon, `HostState.storageAvailable` in `go/internal/protocol`).
   A full phone is ENOSPC in the guest, not a failed write under it.
