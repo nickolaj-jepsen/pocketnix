@@ -51,6 +51,6 @@ fun PlanAskDialog(ask: PlanAsk) {
 }
 
 fun megabytes(bytes: Long): String = when {
-    bytes >= 1L shl 30 -> "%.1f GB".format(bytes / (1L shl 30).toDouble())
-    else -> "%.0f MB".format(bytes / (1L shl 20).toDouble())
+    bytes >= 1L shl 30 -> "%.1f GiB".format(bytes / (1L shl 30).toDouble())
+    else -> "%.0f MiB".format(bytes / (1L shl 20).toDouble())
 }

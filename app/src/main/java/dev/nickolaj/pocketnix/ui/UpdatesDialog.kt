@@ -197,7 +197,7 @@ fun updateStatus(u: Updates): String = when {
     u.state == "fetching" -> "Downloading ${u.available?.let(::storeName) ?: "the update"}…"
     u.state == "switching" -> "Switching…"
     u.state == "installing" -> "Installing packages…"
-    u.state == "cleaning" -> "Freeing space: old generations and garbage…"
+    u.state == "cleaning" -> "Freeing space…"
     u.sources.isEmpty() -> "No update source is configured (pocketnix.guest.updates)."
     u.available != null -> "Update available from ${sourceName(u.source)}: ${storeName(u.available)}"
     u.checkedAt > 0 -> "Up to date (checked ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(u.checkedAt * 1000))})."
