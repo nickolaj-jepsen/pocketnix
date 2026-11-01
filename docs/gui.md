@@ -83,7 +83,9 @@ sway, labwc or Plasma can run nested as an ordinary client, in one window.
   (experimental) gives Vulkan apps the phone's GPU. Their frames still
   reach Android as pixels, like any window's (through guest RAM where the
   app maps it, else over the stream), so it speeds up drawing, not the
-  window updates; OpenGL stays software.
+  window updates; OpenGL stays software. On the GPU, a Vulkan app's frames
+  are sometimes torn in one-row spans (seen with vkcube on a Pixel 8 Pro):
+  they're torn as the app commits them, before pocketnix sees them.
 - Sound is playback only: PipeWire's "Android" output, which the app plays.
   Debug builds can use AVF's virtio-snd instead, turned on from a scripted
   start (see [Development](development.md)), which costs the guest-RAM frames
