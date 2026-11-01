@@ -5,7 +5,6 @@ import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import dev.nickolaj.pocketnix.agent.Plan
-import dev.nickolaj.pocketnix.engine.DiskImage
 import dev.nickolaj.pocketnix.gui.GuiWindowActivity
 import dev.nickolaj.pocketnix.gui.validAppId
 import dev.nickolaj.pocketnix.managed.Selections
@@ -40,7 +39,6 @@ class ControlActivity : Activity() {
             // Debug builds: the setup screen's button (`--es user alice --es services ssh,gui`).
             ACTION_SETUP -> if (BuildConfig.DEBUG) {
                 intent.getStringExtra(EXTRA_RELEASE_URL)?.let { vm.settings.releaseUrl = it }
-                intent.getIntExtra(EXTRA_DISK, 0).takeIf { it in Settings.MIN_SETUP_DISK_GB..DiskImage.maxGb(this) }?.let { vm.settings.diskGb = it }
                 vm.managed.install(Selections(intent.getStringExtra(EXTRA_USER).orEmpty(), services(intent))) { vm.start() }
             }
 
@@ -87,10 +85,6 @@ class ControlActivity : Activity() {
         if (intent.hasExtra(EXTRA_NETWORK)) s.network = intent.getBooleanExtra(EXTRA_NETWORK, true)
         // The settings screen's values, for scripted starts (`--ei memoryMb 1024`).
         intent.getIntExtra(EXTRA_MEMORY, 0).takeIf { it in 512..Settings.MAX_MEMORY_MB }?.let { s.memoryMb = it }
-        // The guest grows into the disk: past the phone's free space, /data fills up.
-        intent.getIntExtra(EXTRA_DISK, 0).takeIf { it in Settings.MIN_DISK_GB..DiskImage.maxGb(this) }?.let { s.diskGb = it }
-        // provision's image size: a smaller disk setting would leave the root no room to grow.
-        intent.getIntExtra(EXTRA_MIN_DISK, 0).takeIf { it > s.diskGb && it <= DiskImage.maxGb(this) }?.let { s.diskGb = it }
         if (intent.hasExtra(EXTRA_CPUS)) s.cpus = if (intent.getIntExtra(EXTRA_CPUS, 0) == 1) 1 else 0
         // Debug builds: `--ez audio true` gives the guest a speaker from the next VM start.
         if (BuildConfig.DEBUG && intent.hasExtra(EXTRA_AUDIO)) s.audio = intent.getBooleanExtra(EXTRA_AUDIO, false)
@@ -136,8 +130,6 @@ class ControlActivity : Activity() {
         const val EXTRA_NETWORK = "network"
         const val EXTRA_TCP = "tcp"
         const val EXTRA_MEMORY = "memoryMb"
-        const val EXTRA_DISK = "diskGb"
-        const val EXTRA_MIN_DISK = "minDiskGb"
         const val EXTRA_CPUS = "cpus"
         const val EXTRA_GUI_HASHES = "guiHashes"
         const val EXTRA_AUDIO = "audio"

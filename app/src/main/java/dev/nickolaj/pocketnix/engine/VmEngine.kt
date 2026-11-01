@@ -17,7 +17,6 @@ data class VmSettings(
     val memoryMb: Int,
     /** 1, or 0 for one vCPU per host core. */
     val cpus: Int,
-    val diskGb: Int,
     val network: Boolean,
     /** The phone's GPU through gfxstream, where AVF offers it: what the guest's last config asked for. */
     val gpu: Boolean = false,

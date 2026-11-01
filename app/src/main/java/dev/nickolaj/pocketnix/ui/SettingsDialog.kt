@@ -18,22 +18,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import dev.nickolaj.pocketnix.BuildConfig
 import dev.nickolaj.pocketnix.Settings
 import dev.nickolaj.pocketnix.Vm
-import dev.nickolaj.pocketnix.engine.DiskImage
 import dev.nickolaj.pocketnix.engine.VmState
 
 /** The set-once hardware; changes apply at the next start. */
 @Composable
 fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
     val s = vm.settings
-    val context = LocalContext.current
     var memory by remember { mutableStateOf(s.memoryMb.toString()) }
-    var disk by remember { mutableStateOf(s.diskGb.toString()) }
     var allCpus by remember { mutableStateOf(s.cpus != 1) }
     var network by remember { mutableStateOf(s.network) }
     var onBoot by remember { mutableStateOf(s.startOnBoot) }
@@ -44,16 +40,7 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
     var sharedFolders by remember { mutableStateOf(false) }
     val state by vm.state.collectAsState()
     val stopped = state == VmState.Stopped || state is VmState.Failed
-    val maxDisk = remember { DiskImage.maxGb(context) }
     val memoryError = memory.toIntOrNull().let { if (it == null || it !in MIN_MEMORY_MB..Settings.MAX_MEMORY_MB) "$MIN_MEMORY_MB–${Settings.MAX_MEMORY_MB} MB" else null }
-    // The saved value stays valid even when free space has shrunk below it since.
-    val diskError = disk.toIntOrNull().let {
-        when {
-            it == null || it < Settings.MIN_DISK_GB -> "At least ${Settings.MIN_DISK_GB} GB"
-            it > maxDisk && it != s.diskGb -> "At most $maxDisk GB: that's the free space"
-            else -> null
-        }
-    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -62,7 +49,6 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!stopped) Text("Changes apply when the VM next starts or the guest reboots.")
                 NumberField("Memory (MB)", memory, memoryError) { memory = it }
-                NumberField("Disk (GB, only grows)", disk, diskError) { disk = it }
                 Toggle("One vCPU per host core", allCpus) { allCpus = it }
                 Toggle("Network", network) { network = it }
                 Toggle("Start when the phone boots", onBoot) { onBoot = it }
@@ -78,9 +64,8 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            TextButton(enabled = memoryError == null && diskError == null, onClick = {
+            TextButton(enabled = memoryError == null, onClick = {
                 s.memoryMb = memory.toInt()
-                s.diskGb = disk.toInt()
                 s.cpus = if (allCpus) 0 else 1
                 s.network = network
                 s.startOnBoot = onBoot

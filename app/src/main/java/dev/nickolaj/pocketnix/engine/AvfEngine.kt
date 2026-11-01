@@ -106,7 +106,7 @@ class AvfEngine(private val context: Context) : VmEngine {
         try {
             val disk = DiskImage.file(context)
             if (!disk.exists()) throw IllegalStateException("No disk image yet: set it up in the app, or run `pocketnix provision --image …`")
-            DiskImage.grow(disk, settings.diskGb)
+            DiskImage.grow(context, disk)
 
             val mgr = AvfReflect.manager(context)
             val caps = AvfReflect.capabilities(mgr)
@@ -343,15 +343,38 @@ class AvfEngine(private val context: Context) : VmEngine {
 object DiskImage {
     fun file(context: Context): File = File(context.filesDir, "disk.img")
 
-    /** The largest disk the phone has room for: what the image holds now plus the free space, in whole GiB. */
-    fun maxGb(context: Context): Int {
-        val f = file(context)
-        return (((if (f.exists()) f.length() else 0L) + context.filesDir.usableSpace) shr 30).toInt()
+    /**
+     * The disk's size: all of the storage it's on, in whole MiB. The file is
+     * sparse, and the agent's storage balloon (HostState.storageAvailable)
+     * keeps the guest from filling more of it than the phone has free.
+     */
+    fun size(context: Context): Long = context.filesDir.totalSpace and ((1L shl 20) - 1).inv()
+
+    /** What the disk takes of the phone's storage: the sparse file's allocated blocks, in bytes. */
+    fun allocated(context: Context): Long = runCatching { Os.stat(file(context).path).st_blocks * 512 }.getOrDefault(0L)
+
+    /** The phone's free space for a new disk, in whole GB. */
+    fun freeGb(context: Context): Int = (context.filesDir.usableSpace shr 30).toInt()
+
+    /**
+     * Deletes the `.part` files a provision or a setup left when it stopped
+     * halfway: unwritten for [STALE_PART_MS], as one under way writes all
+     * along. The provider may be mid-provision when this runs.
+     */
+    fun sweepParts(context: Context) {
+        val now = System.currentTimeMillis()
+        context.filesDir.listFiles { f -> f.name.endsWith(".part") && now - f.lastModified() > STALE_PART_MS }?.forEach {
+            Log.i(TAG, "deleting the unfinished ${it.name}")
+            it.delete()
+        }
     }
 
-    /** Grows the image file to [gb] GiB; the guest grows its root partition on boot. Never shrinks. */
-    fun grow(file: File, gb: Int) {
-        val want = gb.toLong() shl 30
+    private const val STALE_PART_MS = 60 * 60_000L
+    private const val TAG = "DiskImage"
+
+    /** Grows [file] to [size]; the guest grows its root partition on boot. Never shrinks. */
+    fun grow(context: Context, file: File) {
+        val want = size(context)
         if (file.length() < want) RandomAccessFile(file, "rw").use { it.setLength(want) }
     }
 }

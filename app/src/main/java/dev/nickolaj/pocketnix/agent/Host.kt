@@ -34,7 +34,9 @@ data class HostState(
     /** On external power. */
     val charging: Boolean,
     val batteryLow: Boolean,
-    val powerSave: Boolean
+    val powerSave: Boolean,
+    /** Bytes the guest's disk may still take on the phone; null until known. */
+    val storageAvailable: Long? = null
 ) {
     fun request(): JSONObject = JSONObject()
         .put("type", "host-state")
@@ -47,5 +49,6 @@ data class HostState(
                 .put("charging", charging)
                 .put("batteryLow", batteryLow)
                 .put("powerSave", powerSave)
+                .apply { storageAvailable?.let { put("storageAvailable", it) } }
         )
 }

@@ -12,6 +12,7 @@ import dev.nickolaj.pocketnix.agent.FontCache
 import dev.nickolaj.pocketnix.agent.Forward
 import dev.nickolaj.pocketnix.agent.GuestConfig
 import dev.nickolaj.pocketnix.agent.GuestFiles
+import dev.nickolaj.pocketnix.agent.GuestStorage
 import dev.nickolaj.pocketnix.agent.HostStateSync
 import dev.nickolaj.pocketnix.agent.PtyBackend
 import dev.nickolaj.pocketnix.agent.Updates
@@ -410,6 +411,9 @@ class Vm(private val app: Context) {
         if (pin != null) req.put("pin", pin)
         return runCatching { control.call(req) }.exceptionOrNull()?.message
     }
+
+    /** The guest's root filesystem's use, or null while the agent can't say. */
+    suspend fun storage(): GuestStorage? = runCatching { GuestStorage.parse(control.call(JSONObject().put("type", "storage"))) }.getOrNull()
 
     /** The guest's files (the file provider and shares), or null while the agent can't be reached. */
     fun files(): GuestFiles? {

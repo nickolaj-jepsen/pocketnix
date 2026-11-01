@@ -25,17 +25,22 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.nickolaj.pocketnix.Vm
 import dev.nickolaj.pocketnix.agent.Generation
+import dev.nickolaj.pocketnix.agent.GuestStorage
 import dev.nickolaj.pocketnix.agent.Updates
+import dev.nickolaj.pocketnix.engine.DiskImage
 import dev.nickolaj.pocketnix.managed.Release
 import java.text.DateFormat
 import java.util.Date
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** The guest's updates and generations (docs/updates.md). */
 @Composable
@@ -51,6 +56,15 @@ fun UpdatesDialog(vm: Vm, onDismiss: () -> Unit) {
     PlanAskDialog(ask)
     // A desktop's `switch` changes generations without telling the agent.
     LaunchedEffect(Unit) { vm.control.refreshUpdates() }
+    val context = LocalContext.current
+    var storage by remember { mutableStateOf<StorageUse?>(null) }
+    // Read again as each operation ends: a reclaim, a prune and an update all change it.
+    val idleOp = updates?.takeIf { !it.busy }?.op
+    LaunchedEffect(idleOp) {
+        if (idleOp == null) return@LaunchedEffect
+        val guest = vm.storage()
+        storage = StorageUse(withContext(Dispatchers.IO) { DiskImage.allocated(context) }, guest)
+    }
 
     fun send(type: String, generation: Int? = null) {
         scope.launch { refused = vm.updateRequest(type, generation) }
@@ -69,7 +83,7 @@ fun UpdatesDialog(vm: Vm, onDismiss: () -> Unit) {
             if (u == null) {
                 Text("The agent isn't connected.")
             } else {
-                UpdatesBody(u, refused, onSwitch = { send("switch-generation", it) }, onReboot = vm::reboot)
+                UpdatesBody(u, refused, storage, onSwitch = { send("switch-generation", it) }, onReclaim = { send("reclaim") }, onReboot = vm::reboot)
             }
         },
         confirmButton = {
@@ -99,7 +113,7 @@ fun UpdatesDialog(vm: Vm, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun UpdatesBody(u: Updates, refused: String?, onSwitch: (Int) -> Unit, onReboot: () -> Unit) {
+private fun UpdatesBody(u: Updates, refused: String?, storage: StorageUse?, onSwitch: (Int) -> Unit, onReclaim: () -> Unit, onReboot: () -> Unit) {
     Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(updateStatus(u), style = MaterialTheme.typography.bodyMedium)
         refused?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -140,6 +154,11 @@ private fun UpdatesBody(u: Updates, refused: String?, onSwitch: (Int) -> Unit, o
                     .padding(6.dp)
             )
         }
+        Text("Storage", style = MaterialTheme.typography.titleSmall)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(storage?.let(::storageText) ?: "…", Modifier.weight(1f), fontSize = 13.sp)
+            OutlinedButton(enabled = !u.busy, onClick = onReclaim) { Text("Reclaim") }
+        }
         Text("Generations", style = MaterialTheme.typography.titleSmall)
         // A switch is a rollback: the first tap only asks.
         var confirming by remember { mutableStateOf<Int?>(null) }
@@ -178,11 +197,20 @@ fun updateStatus(u: Updates): String = when {
     u.state == "fetching" -> "Downloading ${u.available?.let(::storeName) ?: "the update"}…"
     u.state == "switching" -> "Switching…"
     u.state == "installing" -> "Installing packages…"
-    u.state == "cleaning" -> "Deleting old generations…"
+    u.state == "cleaning" -> "Freeing space: old generations and garbage…"
     u.sources.isEmpty() -> "No update source is configured (pocketnix.guest.updates)."
     u.available != null -> "Update available from ${sourceName(u.source)}: ${storeName(u.available)}"
     u.checkedAt > 0 -> "Up to date (checked ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(u.checkedAt * 1000))})."
     else -> "Not checked yet."
+}
+
+/** What the disk takes of the phone ([phone], bytes), and the guest's own view of it when the agent answered. */
+private data class StorageUse(val phone: Long, val guest: GuestStorage?)
+
+private fun storageText(s: StorageUse): String {
+    val phone = "Takes ${megabytes(s.phone)} of the phone."
+    val g = s.guest ?: return phone
+    return "$phone The guest uses ${megabytes(g.used)} and has room for ${megabytes(g.available)} more."
 }
 
 private fun sourceName(s: String?) = when (s) {

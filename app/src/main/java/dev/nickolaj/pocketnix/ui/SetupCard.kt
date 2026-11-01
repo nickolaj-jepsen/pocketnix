@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
@@ -24,7 +23,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.nickolaj.pocketnix.Settings
@@ -45,15 +43,9 @@ fun SetupCard(vm: Vm, modifier: Modifier = Modifier) {
     val setup by vm.managed.setup.collectAsState()
     var user by rememberSaveable { mutableStateOf("") }
     var services by rememberSaveable { mutableStateOf(setOf("ssh")) }
-    var disk by rememberSaveable { mutableStateOf(vm.settings.diskGb.toString()) }
-    val maxDisk = remember { DiskImage.maxGb(context) }
+    val freeGb = remember { DiskImage.freeGb(context) }
     val userError = if (user.isEmpty() || Selections.USER_NAME.matches(user)) null else "Lowercase letters, digits, - and _"
-    val diskSize = checkDiskSize(disk, Settings.MIN_SETUP_DISK_GB, maxDisk)
-    val diskError = when (diskSize) {
-        DiskSize.NoRoom -> "Not enough free space: needs ${Settings.MIN_SETUP_DISK_GB} GB, the phone has $maxDisk GB"
-        DiskSize.OutOfRange -> "${Settings.MIN_SETUP_DISK_GB}–$maxDisk GB"
-        is DiskSize.Ok -> null
-    }
+    val noRoom = freeGb < Settings.SETUP_ROOM_GB
     val working = setup is ManagedGuest.Setup.Working
     Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Set up NixOS", style = MaterialTheme.typography.titleMedium)
@@ -81,16 +73,9 @@ fun SetupCard(vm: Vm, modifier: Modifier = Modifier) {
                 Switch(s.id in services, { on -> services = if (on) services + s.id else services - s.id }, enabled = !working)
             }
         }
-        OutlinedTextField(
-            disk,
-            { v -> disk = v.filter(Char::isDigit).take(5) },
-            label = { Text("Disk (GB)") },
-            singleLine = true,
-            enabled = !working && diskSize != DiskSize.NoRoom,
-            isError = diskError != null,
-            supportingText = diskError?.let { { Text(it) } },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-        )
+        if (noRoom) {
+            Text("Not enough free space: needs ${Settings.SETUP_ROOM_GB} GB, the phone has $freeGb GB", color = MaterialTheme.colorScheme.error)
+        }
         when (val s = setup) {
             is ManagedGuest.Setup.Working -> {
                 val what = if (s.unpacking) "Unpacking" else "Downloading"
@@ -103,9 +88,8 @@ fun SetupCard(vm: Vm, modifier: Modifier = Modifier) {
             ManagedGuest.Setup.Idle -> {}
         }
         Button(
-            enabled = !working && user.isNotEmpty() && userError == null && diskSize is DiskSize.Ok,
+            enabled = !working && user.isNotEmpty() && userError == null && !noRoom,
             onClick = {
-                vm.settings.diskGb = (diskSize as DiskSize.Ok).gb
                 // Asked when the download ends: the permissions may have come meanwhile.
                 vm.managed.install(Selections(user, services)) { if (missingRequirements(context, vm).isEmpty()) vm.start() }
             }

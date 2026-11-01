@@ -11,9 +11,13 @@ import android.os.BatteryManager
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.storage.StorageManager
 import android.util.Log
 import dev.nickolaj.pocketnix.agent.HostState
 import java.util.TimeZone
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -33,7 +37,11 @@ class HostMonitor(private val context: Context) {
     private val main = Handler(Looper.getMainLooper())
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
     private val power = context.getSystemService(PowerManager::class.java)
+    private val storage = context.getSystemService(StorageManager::class.java)
     private var started = false
+
+    // getAllocatableBytes may take seconds: it's read off the main thread.
+    private var storageReader: ScheduledExecutorService? = null
 
     private var timeZone = TimeZone.getDefault().id
     private var online = false
@@ -41,6 +49,7 @@ class HostMonitor(private val context: Context) {
     private var charging = false
     private var batteryLow = false
     private var powerSave = false
+    private var storageAvailable: Long? = null
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, intent: Intent) = guard {
@@ -98,7 +107,27 @@ class HostMonitor(private val context: Context) {
         context.registerReceiver(receiver, filter, null, main, Context.RECEIVER_NOT_EXPORTED)
         // Calls back at once with the current default network, if any.
         connectivity.registerDefaultNetworkCallback(network, main)
+        storageReader = Executors.newSingleThreadScheduledExecutor().also { r -> r.execute { readStorage(r) } }
         publish()
+    }
+
+    /** Reads the phone's free space for [StorageBalloon], then schedules the next read on [reader]. */
+    private fun readStorage(reader: ScheduledExecutorService) {
+        // A read that fails isn't retried in a busy loop.
+        var next = StorageBalloon.nextReadMs(Long.MAX_VALUE)
+        try {
+            val allocatable = storage.getAllocatableBytes(StorageManager.UUID_DEFAULT)
+            next = StorageBalloon.nextReadMs(allocatable)
+            main.post {
+                guard {
+                    storageAvailable = StorageBalloon.available(allocatable)
+                    publish()
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "storage: ${e.message}")
+        }
+        if (!reader.isShutdown) runCatching { reader.schedule({ readStorage(reader) }, next, TimeUnit.MILLISECONDS) }
     }
 
     fun stop() = guard {
@@ -106,11 +135,13 @@ class HostMonitor(private val context: Context) {
         started = false
         runCatching { context.unregisterReceiver(receiver) }
         runCatching { connectivity.unregisterNetworkCallback(network) }
+        storageReader?.shutdownNow()
+        storageReader = null
         _state.value = null
     }
 
     private fun publish() {
-        if (started) _state.value = HostState(timeZone, online, metered, charging, batteryLow, powerSave)
+        if (started) _state.value = HostState(timeZone, online, metered, charging, batteryLow, powerSave, storageAvailable)
     }
 
     private inline fun guard(block: () -> Unit) {

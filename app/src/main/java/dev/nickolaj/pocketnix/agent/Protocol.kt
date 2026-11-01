@@ -228,6 +228,13 @@ data class Updates(
     }
 }
 
+/** The guest's root filesystem, in bytes (go/internal/protocol Storage); [available] is what the storage balloon leaves it. */
+data class GuestStorage(val total: Long, val used: Long, val available: Long) {
+    companion object {
+        fun parse(o: JSONObject) = GuestStorage(o.optLong("total"), o.optLong("used"), o.optLong("available"))
+    }
+}
+
 /** The guest's listeners the app may offer to forward (go/internal/protocol PortListeners). */
 data class PortListeners(
     /** Allowed forwards bind 0.0.0.0, not 127.0.0.1. */

@@ -109,7 +109,7 @@ class ManagedGuest(
         Release.verify(Release.url(settings, "$name.sha256"), gz)
         val part = File(disk.path + ".part")
         Release.unpack(gz, part) { done, total -> _setup.value = Setup.Working(done, total, true) }
-        DiskImage.grow(part, settings.diskGb)
+        DiskImage.grow(app, part)
         if (!part.renameTo(disk)) throw IOException("couldn't move the image into place")
         gz.delete()
     }

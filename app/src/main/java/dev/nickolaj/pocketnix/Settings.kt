@@ -18,10 +18,6 @@ class Settings(context: Context) {
         get() = prefs.getInt("cpus", 0)
         set(v) = prefs.edit { putInt("cpus", v) }
 
-    var diskGb: Int
-        get() = prefs.getInt("diskGb", 16)
-        set(v) = prefs.edit { putInt("diskGb", v) }
-
     /** Only one networked VM can run on a device at a time. */
     var network: Boolean
         get() = prefs.getBoolean("network", true)
@@ -87,15 +83,12 @@ class Settings(context: Context) {
         }
         set(v) = prefs.edit { if (v == null) remove("terminalColors") else putString("terminalColors", JSONObject(v).toString()) }
 
-    fun vm() = VmSettings(memoryMb = memoryMb, cpus = cpus, diskGb = diskGb, network = network, gpu = guestGpu, audio = audio, guestRam = guestRam)
+    fun vm() = VmSettings(memoryMb = memoryMb, cpus = cpus, network = network, gpu = guestGpu, audio = audio, guestRam = guestRam)
 
     companion object {
         const val MAX_MEMORY_MB = 65_536
 
-        /** The smallest disk, in GB. */
-        const val MIN_DISK_GB = 4
-
-        /** The smallest disk a managed guest is set up on, in GB: it builds its own systems, so its store needs room past the base image. */
-        const val MIN_SETUP_DISK_GB = 8
+        /** The free space a managed guest is set up in, in GB: it builds its own systems, so its store needs room past the base image. */
+        const val SETUP_ROOM_GB = 8
     }
 }
