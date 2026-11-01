@@ -1016,6 +1016,8 @@ in {
         fsType = "ext4";
         # The app grows the image file (docs/configuration.md, Storage).
         autoResize = true;
+        # Each delete reaches the phone at once, so the storage balloon's cap holds between trims.
+        options = ["discard"];
       };
       fileSystems."/boot" = {
         device = "/dev/disk/by-label/ESP";

@@ -76,7 +76,7 @@ flowchart TB
   First boot registers the store and grows the root.
 - The app makes the image file as large as the phone's storage. It's
   sparse, the agent caps the root's free space at the phone's (the storage
-  balloon), and trims hand freed blocks back.
+  balloon), and the root's `discard` mount and trims hand freed blocks back.
 - The agent's config is a JSON file the module writes. A switch reloads the
   agent with SIGHUP instead of restarting it: tabs are its children, and a
   switch usually runs in one.

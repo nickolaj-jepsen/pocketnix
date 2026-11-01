@@ -153,9 +153,11 @@ The app tells the guest about the phone:
 - The guest's free space is the phone's, less a reserve the app keeps (the
   storage balloon, `HostState.storageAvailable` in `go/internal/protocol`).
   A full phone is ENOSPC in the guest, not a failed write under it.
-- What the guest deletes goes back to the phone with a trim: the agent
-  trims after each prune ([Old generations](updates.md#old-generations))
-  and at boot, besides NixOS's weekly `fstrim` timer.
+- What the guest deletes goes back to the phone at once: the root mounts
+  with `discard`. The agent also trims after each prune
+  ([Old generations](updates.md#old-generations)) and at boot, besides
+  NixOS's weekly `fstrim` timer, which catches blocks freed while the
+  root was mounted without it.
 - The System menu shows what the disk takes of the phone and of the guest.
   Reclaim prunes, collects garbage, hard-links identical store files and
   trims.
