@@ -3602,7 +3602,8 @@ public final class TerminalEmulator {
         if (column < 0) column = 0;
         // Even after a wrap a wide character can't fit a one-column screen or margin; setChar would throw.
         if (displayWidth == 2 && (column >= mColumns - 1 || column >= mRightMargin - 1)) return;
-        mScreen.setChar(column, mCursorRow, codePoint, getStyle());
+        int effect = mScreen.isHyperlinkOpen() ? mEffect | TextStyle.CHARACTER_ATTRIBUTE_HYPERLINK : mEffect;
+        mScreen.setChar(column, mCursorRow, codePoint, TextStyle.encode(mForeColor, mBackColor, effect));
 
         if (autoWrap && displayWidth > 0)
             mAboutToAutoWrap = (mCursorCol == mRightMargin - displayWidth);
@@ -3688,6 +3689,8 @@ public final class TerminalEmulator {
         clearTerminalControlArgs();
         clearOscTypeVariables();
         mITermImage = null;
+        // A program killed mid-link would otherwise leave everything after it linked.
+        mScreen.endHyperlink(mCursorRow, mCursorCol);
     }
 
     public String getSelectedText(int x1, int y1, int x2, int y2) {

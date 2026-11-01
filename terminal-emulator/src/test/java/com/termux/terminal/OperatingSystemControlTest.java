@@ -216,6 +216,29 @@ public class OperatingSystemControlTest extends TerminalTestCase {
 		assertEquals(List.of("https://b.example", "https://a.example"), urls);
 	}
 
+	public void testHyperlinkMarksTheCellsWrittenInsideIt() {
+		withTerminalSized(10, 3);
+		// SGR 0 inside the link leaves it open.
+		enterString("a\033]8;;https://a.example\033\\b\033[0mc\033]8;;\033\\d");
+		assertFalse(isLinked(0, 0));
+		assertTrue(isLinked(0, 1));
+		assertTrue(isLinked(0, 2));
+		assertFalse(isLinked(0, 3));
+	}
+
+	public void testResetEndsAnOpenHyperlink() {
+		withTerminalSized(10, 3);
+		enterString("\033]8;;https://a.example\033\\a");
+		mTerminal.reset();
+		enterString("b");
+		assertTrue(isLinked(0, 0));
+		assertFalse(isLinked(0, 1));
+	}
+
+	private boolean isLinked(int row, int col) {
+		return (TextStyle.decodeEffect(getStyleAt(row, col)) & TextStyle.CHARACTER_ATTRIBUTE_HYPERLINK) != 0;
+	}
+
 	public void testHyperlinkScrolledIntoHistory() {
 		withTerminalSized(10, 3);
 		enterString("x\r\n\033]8;;https://a.example\033\\link\033]8;;\033\\\r\n\r\n\r\n\r\n");

@@ -8,7 +8,7 @@ package com.termux.terminal;
  * <p>
  * The bit layout is:
  * </p>
- * - 16 flags (11 currently used).
+ * - 16 flags (12 currently used).
  * - 24 for foreground color (only 9 first bits if a color index).
  * - 24 for background color (only 9 first bits if a color index).
  */
@@ -35,6 +35,8 @@ public final class TextStyle {
     private final static int CHARACTER_ATTRIBUTE_TRUECOLOR_FOREGROUND = 1 << 9;
     /** If true (24-bit) color is used for the cell for foreground. */
     private final static int CHARACTER_ATTRIBUTE_TRUECOLOR_BACKGROUND= 1 << 10;
+    /** The cell was written inside an open OSC 8 hyperlink; SGR doesn't touch it. */
+    public final static int CHARACTER_ATTRIBUTE_HYPERLINK = 1 << 11;
     /** If true, character represents a {@link TerminalBitmap} slice, not text. */
     public final static int TERMINAL_BITMAP = 1 << 15;
 
@@ -49,7 +51,7 @@ public final class TextStyle {
     final static long NORMAL = encode(COLOR_INDEX_FOREGROUND, COLOR_INDEX_BACKGROUND, 0);
 
     static long encode(int foreColor, int backColor, int effect) {
-        long result = effect & 0b111111111;
+        long result = effect & (0b111111111 | CHARACTER_ATTRIBUTE_HYPERLINK);
         if ((0xff000000 & foreColor) == 0xff000000) {
             // 24-bit color.
             result |= CHARACTER_ATTRIBUTE_TRUECOLOR_FOREGROUND | ((foreColor & 0x00ffffffL) << 40L);
@@ -86,7 +88,7 @@ public final class TextStyle {
     }
 
     public static int decodeEffect(long style) {
-        return (int) (style & 0b11111111111);
+        return (int) (style & 0b111111111111);
     }
 
 

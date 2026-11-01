@@ -105,6 +105,11 @@ public final class TerminalBuffer {
         mPendingHyperlinkUrl = null;
     }
 
+    /** Whether a link has begun and not yet ended. */
+    boolean isHyperlinkOpen() {
+        return mPendingHyperlinkUrl != null;
+    }
+
     /** Lookup URL at an external (visible) cell position, or null. */
     public String getHyperlinkAt(int externalRow, int col) {
         int target = externalToInternalRow(externalRow);

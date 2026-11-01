@@ -54,8 +54,8 @@ On the phone:
   dictation, as a bracketed paste.
 - A bell, OSC 9 or OSC 777 notification in a background tab badges it and
   posts an Android notification.
-- A tap on a hyperlink a program printed (OSC 8, as `ls --hyperlink`
-  prints) opens it, unless the program reads the mouse;
+- A hyperlink a program printed (OSC 8, as `ls --hyperlink` prints) is
+  underlined, and a tap on it opens it, unless the program reads the mouse;
   other taps bring up the keyboard. Only `http`, `https` and `file` links
   open, and a `file` link only when it's this guest's and under
   `files.root`. A `localhost` link whose port a forward maps elsewhere on
