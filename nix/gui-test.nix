@@ -302,7 +302,8 @@ in
           phone.fail(user("systemctl --user is-active pocketnix-compositor.service"))
           # Gets WAYLAND_DISPLAY from the user manager, like any user service.
           phone.succeed(user("systemd-run --user --unit=foot foot"))
-          phone.wait_for_unit("pocketnix-compositor.service", "nixos")
+          # Not wait_for_unit: until foot connects, the unit is inactive with no job, which it fails on.
+          phone.wait_until_succeeds(user("systemctl --user is-active pocketnix-compositor.service"))
 
       with subtest("Wayland apps share the clipboard with Android"):
           def wl(cmd):
