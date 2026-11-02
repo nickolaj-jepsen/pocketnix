@@ -122,6 +122,7 @@ func fakeADB(args []string) int {
 			return 1
 		}
 	case "logcat":
+		fmt.Print(fakeLogcat(state, args[1:]))
 		for _, a := range args[1:] {
 			if uid, ok := strings.CutPrefix(a, "--uid="); ok {
 				fmt.Printf("I Vm: a line from uid %s\n", uid)
@@ -329,13 +330,42 @@ func fakeShell(state, line string, logEvent func(string, ...any)) (string, int) 
 			}
 		case strings.Contains(line, "-a dev.nickolaj.pocketnix.action.START"):
 			setFakeRunning(state, true)
+		// ControlActivity.ACTION_LAUNCH.
+		case strings.Contains(line, "-a dev.nickolaj.pocketnix.action.DEBUG_LAUNCH"):
+			fakeLaunch(state, w)
 		}
+	// The phone side of a forward: toybox nc to a phone port.
+	case len(w) == 6 && w[0] == "timeout" && w[2] == "nc" && w[3] == "127.0.0.1":
+		return fakePhoneConnect(state, w[4])
 	case len(f) == 3 && f[0] == "rm":
 		os.Remove(devPath(f[2]))
 	default:
 		return "fake adb: unknown shell command " + line, 127
 	}
 	return "", 0
+}
+
+// fakeLogcat is the state's "logcat" lines, each starting with its epoch
+// time as `-v epoch` prints it; with -T <epoch>, only those since then.
+func fakeLogcat(state string, args []string) string {
+	b, _ := os.ReadFile(filepath.Join(state, "logcat"))
+	since := -1.0
+	for i, a := range args {
+		if a == "-T" && i+1 < len(args) {
+			since, _ = strconv.ParseFloat(args[i+1], 64)
+		}
+	}
+	var out strings.Builder
+	for _, l := range strings.SplitAfter(string(b), "\n") {
+		f := strings.Fields(l)
+		if len(f) == 0 {
+			continue
+		}
+		if t, err := strconv.ParseFloat(f[0], 64); err == nil && t >= since {
+			out.WriteString(l)
+		}
+	}
+	return out.String()
 }
 
 // fakePackages lists the packages other than the app that the device has.

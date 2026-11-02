@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -28,9 +30,18 @@ commands:
         Enter into it, and print its id
   type --tab <id> [--no-enter] <text>
         type <text> and Enter into an open tab
-  wait --tab <id> [--timeout <dur>] [--lines <n>] <regexp>
+  wait [--tab <id>] [--timeout <dur>] [--lines <n>] <regexp>
         poll the tab's last lines until <regexp> matches one of them,
-        then print them; exit 1 if it doesn't within the timeout (30s)
+        then print them; exit 1 if it doesn't within the timeout (30s).
+        Without --tab, match the dump's own lines instead (state=…,
+        engine …, gui window …), never a transcript
+  close --tab <id>
+        close a terminal tab, as its × does: what still runs in it gets
+        a hangup
+  launch [--timeout <dur>] <app>
+        open a guest app as the launcher does (<app>: an id from dump's
+        apps=), wait for a new window of it (60s; 0 doesn't wait) and
+        print its gui window line; it opens only on a shown display
   menu (--tab <id> | --chip <id> | --main) [<label>...]
         list a menu, one "<label><TAB><enabled|disabled>" line per entry, or
         the page the labels lead to; labels ending at an action run it (e.g.
@@ -216,12 +227,33 @@ func runControl(args []string) error {
 		if err != nil {
 			return err
 		}
+		var out string
+		if *tab < 0 {
+			_, out, err = c.waitDump(context.Background(), re, *timeout)
+		} else {
+			out, err = c.wait(context.Background(), *tab, *lines, re, *timeout)
+		}
+		fmt.Print(out)
+		return err
+	case "close":
+		tab := sub.Int("tab", -1, "")
+		if err := parseArgs(sub, rest, 0); err != nil {
+			return err
+		}
 		if *tab < 0 {
 			sub.Usage()
 			return errUsage
 		}
-		out, err := c.wait(*tab, *lines, re, *timeout)
-		fmt.Print(out)
+		return c.close(*tab)
+	case "launch":
+		timeout := sub.Duration("timeout", 60*time.Second, "")
+		if err := parseArgs(sub, rest, 1); err != nil {
+			return err
+		}
+		win, err := c.launch(context.Background(), sub.Arg(0), *timeout)
+		if win != "" {
+			fmt.Println(win)
+		}
 		return err
 	case "logcat":
 		follow := sub.Bool("follow", false, "")
@@ -239,26 +271,43 @@ func runControl(args []string) error {
 // logcat writes the main, system and crash logs of pkg's uid to w: what
 // the buffers hold, or with follow, everything until adb exits.
 func logcat(dev adb.Device, pkg string, follow bool, w io.Writer) error {
-	out, err := dev.Shell("pm list packages -U " + adb.ShellQuote(pkg))
+	uid, err := appUID(dev, pkg)
 	if err != nil {
 		return err
-	}
-	// The filter is a substring match: "package:<name> uid:<uid>" for each match.
-	uid := ""
-	for _, l := range strings.Split(out, "\n") {
-		f := strings.Fields(l)
-		if len(f) == 2 && f[0] == "package:"+pkg {
-			uid, _ = strings.CutPrefix(f[1], "uid:")
-		}
-	}
-	if uid == "" {
-		return fmt.Errorf("%s isn't installed", pkg)
 	}
 	args := []string{"logcat", "-b", "main,system,crash", "--uid=" + uid}
 	if !follow {
 		args = append(args, "-d")
 	}
 	return dev.Stream(w, args...)
+}
+
+// logcatSince writes the lines pkg's uid logged since since (the device's
+// `date +%s`) to w, each stamped with its epoch time.
+func logcatSince(dev adb.Device, pkg, since string, w io.Writer) error {
+	uid, err := appUID(dev, pkg)
+	if err != nil {
+		return err
+	}
+	return dev.Stream(w, "logcat", "-b", "main,system,crash", "--uid="+uid, "-d", "-v", "epoch", "-T", since+".000")
+}
+
+// appUID is installed package pkg's uid.
+func appUID(dev adb.Device, pkg string) (string, error) {
+	out, err := dev.Shell("pm list packages -U " + adb.ShellQuote(pkg))
+	if err != nil {
+		return "", err
+	}
+	// The filter is a substring match: "package:<name> uid:<uid>" for each match.
+	for _, l := range strings.Split(out, "\n") {
+		f := strings.Fields(l)
+		if len(f) == 2 && f[0] == "package:"+pkg {
+			if uid, ok := strings.CutPrefix(f[1], "uid:"); ok {
+				return uid, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("%s isn't installed", pkg)
 }
 
 // menuTarget is the provider method and argument for a menu or links
@@ -369,24 +418,144 @@ func (c control) stats() (string, error) {
 	return out, nil
 }
 
-// wait polls tab's dump until a transcript line matches re, and returns the
-// last dump either way.
-func (c control) wait(tab, lines int, re *regexp.Regexp, timeout time.Duration) (string, error) {
+// controlPoll is how often a wait reads the dump again.
+var controlPoll = 500 * time.Millisecond
+
+// errNotYet is a wait's error when its condition didn't hold within the timeout.
+var errNotYet = errors.New("not within the timeout")
+
+// until polls dump(tab, lines) until done holds for it, and returns the last
+// dump either way: an error wrapping errNotYet after timeout, or ctx's error.
+func (c control) until(ctx context.Context, tab, lines int, timeout time.Duration, done func(dump string) bool) (string, error) {
 	deadline := time.Now().Add(timeout)
-	prefix := fmt.Sprintf("|%d| ", tab)
 	for {
 		out, err := c.dump(tab, lines)
 		if err != nil {
 			return "", err
 		}
-		for _, l := range strings.Split(out, "\n") {
-			if t, ok := strings.CutPrefix(l, prefix); ok && re.MatchString(t) {
-				return out, nil
-			}
+		if done(out) {
+			return out, nil
 		}
 		if time.Now().After(deadline) {
-			return out, fmt.Errorf("tab %d: no line matched %q within %s", tab, re, timeout)
+			return out, fmt.Errorf("%w (%s)", errNotYet, timeout)
 		}
-		time.Sleep(500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return out, ctx.Err()
+		case <-time.After(controlPoll):
+		}
 	}
+}
+
+// wait polls tab's dump until a transcript line matches re, and returns the
+// last dump either way.
+func (c control) wait(ctx context.Context, tab, lines int, re *regexp.Regexp, timeout time.Duration) (string, error) {
+	out, err := c.until(ctx, tab, lines, timeout, func(dump string) bool { return tabLine(dump, tab, re) != nil })
+	if errors.Is(err, errNotYet) {
+		err = fmt.Errorf("tab %d: no line matched %q within %s", tab, re, timeout)
+	}
+	return out, err
+}
+
+// tabLine is the submatches of the last line of tab's transcript in dump
+// that re matches, or nil.
+func tabLine(dump string, tab int, re *regexp.Regexp) []string {
+	prefix := fmt.Sprintf("|%d| ", tab)
+	var m []string
+	for _, l := range strings.Split(dump, "\n") {
+		if t, ok := strings.CutPrefix(l, prefix); ok {
+			if sm := re.FindStringSubmatch(t); sm != nil {
+				m = sm
+			}
+		}
+	}
+	return m
+}
+
+// ownLine is the submatches of the first of dump's own lines (the state,
+// engine and gui lines, not a transcript's) that re matches, or nil.
+func ownLine(dump string, re *regexp.Regexp) []string {
+	for _, l := range strings.Split(dump, "\n") {
+		// Transcript lines are "|<tab>| …", and the updates log's "|log| …".
+		if strings.HasPrefix(l, "|") {
+			continue
+		}
+		if m := re.FindStringSubmatch(l); m != nil {
+			return m
+		}
+	}
+	return nil
+}
+
+// waitDump polls the dump until one of its own lines matches re, and
+// returns that line's submatches and the last dump.
+func (c control) waitDump(ctx context.Context, re *regexp.Regexp, timeout time.Duration) ([]string, string, error) {
+	var m []string
+	// One transcript line per tab keeps the dump small; its own lines are all there.
+	out, err := c.until(ctx, -1, 1, timeout, func(dump string) bool {
+		m = ownLine(dump, re)
+		return m != nil
+	})
+	if errors.Is(err, errNotYet) {
+		err = fmt.Errorf("no dump line matched %q within %s", re, timeout)
+	}
+	return m, out, err
+}
+
+// close closes terminal tab id, hanging up what runs in it.
+func (c control) close(tab int) error {
+	_, err := c.call("close", strconv.Itoa(tab))
+	return err
+}
+
+// guiWindow matches a dump's window line: its id and app.
+var guiWindow = regexp.MustCompile(`^gui window (\d+) '.*' app=(\S*) launch=`)
+
+// windows are the ids of dump's GUI windows of app.
+func windows(dump, app string) map[string]bool {
+	ids := map[string]bool{}
+	for _, l := range strings.Split(dump, "\n") {
+		if m := guiWindow.FindStringSubmatch(l); m != nil && m[2] == app {
+			ids[m[1]] = true
+		}
+	}
+	return ids
+}
+
+// launch opens app as the launcher does (ControlActivity's DEBUG_LAUNCH)
+// and, unless timeout is 0, waits for a window of it that wasn't there
+// before and returns its dump line.
+func (c control) launch(ctx context.Context, app string, timeout time.Duration) (string, error) {
+	before, err := c.dump(-1, 1)
+	if err != nil {
+		return "", err
+	}
+	had := windows(before, app)
+	pkg := strings.TrimSuffix(c.authority, ".control")
+	// The action and extra mirror ControlActivity.ACTION_LAUNCH and EXTRA_APP.
+	out, err := c.dev.Shell("am start -n " + pkg + "/dev.nickolaj.pocketnix.ControlActivity -a dev.nickolaj.pocketnix.action.DEBUG_LAUNCH --es app " + adb.ShellQuote(app))
+	if err != nil {
+		return "", err
+	}
+	// am reports a missing activity or package on stdout, exiting 0.
+	if strings.Contains(out, "Error") {
+		return "", fmt.Errorf("launch %s: %s", app, strings.TrimSpace(out))
+	}
+	if timeout == 0 {
+		return "", nil
+	}
+	var line string
+	_, err = c.until(ctx, -1, 1, timeout, func(dump string) bool {
+		for _, l := range strings.Split(dump, "\n") {
+			if m := guiWindow.FindStringSubmatch(l); m != nil && m[2] == app && !had[m[1]] {
+				line = l
+				return true
+			}
+		}
+		return false
+	})
+	if errors.Is(err, errNotYet) {
+		err = fmt.Errorf("launch %s: no new window within %s (is the phone unlocked, with pocketnix in front?)", app, timeout)
+	}
+	return line, err
 }
