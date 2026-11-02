@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -61,7 +62,8 @@ commands:
         returns once the phone port listens
   logcat [--follow]
         the log of every process running as the app's uid, which keeps
-        its lines across the app's crashes and restarts; --follow streams it
+        its lines across the app's crashes and restarts, and the OS's lines
+        that name the app; --follow streams it
   stats
         the GUI link's counters and latency histograms, as JSON (see
         pocketnix bench -h)
@@ -268,18 +270,110 @@ func runControl(args []string) error {
 	return nil
 }
 
-// logcat writes the main, system and crash logs of pkg's uid to w: what
-// the buffers hold, or with follow, everything until adb exits.
+// logcat writes the main, system, crash and events logs of pkg's uid to w,
+// with the other uids' lines that name pkg ([appLog]): what the buffers hold,
+// or with follow, everything until adb exits.
 func logcat(dev adb.Device, pkg string, follow bool, w io.Writer) error {
 	uid, err := appUID(dev, pkg)
 	if err != nil {
 		return err
 	}
-	args := []string{"logcat", "-b", "main,system,crash", "--uid=" + uid}
+	args := []string{"logcat", "-b", "main,system,crash,events", "-v", "threadtime,uid"}
 	if !follow {
 		args = append(args, "-d")
 	}
-	return dev.Stream(w, args...)
+	log := newAppLog(pkg, uid, w)
+	err = dev.Stream(log, args...)
+	if ferr := log.flush(); err == nil {
+		err = ferr
+	}
+	return err
+}
+
+// threadtimeUIDLine splits a `-v threadtime,uid` line into its uid, pid, tag and message.
+var threadtimeUIDLine = regexp.MustCompile(`^\S+ \S+ +(\S+) +(\d+) +\d+ \S (\S*?) *: ?(.*)$`)
+
+// appLog is a filter over a device's whole log that writes only the lines about
+// one app, so other apps' text stays out of what it prints. A line is about the
+// app when its uid logged it, or when another uid's line names its package or
+// uid. MemoryLimiter's kill names only a pid, so that tag also matches the
+// pids seen so far.
+type appLog struct {
+	w       io.Writer
+	uids    map[string]bool
+	names   *regexp.Regexp
+	pids    map[string]bool
+	partial []byte
+}
+
+// newAppLog filters for pkg, with uids as [appUID] gives them, onto w.
+func newAppLog(pkg, uids string, w io.Writer) *appLog {
+	l := &appLog{w: w, uids: map[string]bool{}, pids: map[string]bool{}}
+	var alts []string
+	for _, uid := range strings.Split(uids, ",") {
+		l.uids[uid] = true
+		alts = append(alts, regexp.QuoteMeta(uid))
+	}
+	// The edges keep dev.x from matching dev.x.debug or dev.x.MainActivity.
+	l.names = regexp.MustCompile(`(^|[^\w.])` + regexp.QuoteMeta(pkg) + `($|[^\w.]|\.(\s|$))|(?i:\buid[= ])(` + strings.Join(alts, "|") + `)\b`)
+	return l
+}
+
+var limiterPid = regexp.MustCompile(`\bpid=(\d+)`)
+
+func (l *appLog) keep(line string) bool {
+	m := threadtimeUIDLine.FindStringSubmatch(line)
+	if m == nil {
+		return false
+	}
+	uid, pid, tag, msg := m[1], m[2], m[3], m[4]
+	if l.uids[uid] {
+		l.pids[pid] = true
+		return true
+	}
+	if tag == "adbd" { // It echoes the shell commands sent to the phone, these tools' included.
+		return false
+	}
+	if l.names.MatchString(msg) {
+		if p := limiterPid.FindStringSubmatch(msg); tag == "MemoryLimiter" && p != nil {
+			l.pids[p[1]] = true
+		}
+		return true
+	}
+	if tag == "MemoryLimiter" {
+		for _, word := range strings.Fields(msg) {
+			if l.pids[word] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (l *appLog) Write(b []byte) (int, error) {
+	l.partial = append(l.partial, b...)
+	for {
+		i := bytes.IndexByte(l.partial, '\n')
+		if i < 0 {
+			return len(b), nil
+		}
+		line := l.partial[:i+1]
+		if l.keep(strings.TrimRight(string(line), "\r\n")) {
+			if _, err := l.w.Write(line); err != nil {
+				return 0, err
+			}
+		}
+		l.partial = l.partial[i+1:]
+	}
+}
+
+// flush writes a last line that came without its newline.
+func (l *appLog) flush() error {
+	if len(l.partial) == 0 || !l.keep(string(l.partial)) {
+		return nil
+	}
+	_, err := l.w.Write(append(l.partial, '\n'))
+	return err
 }
 
 // logcatSince writes the lines pkg's uid logged since since (the device's

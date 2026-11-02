@@ -572,19 +572,53 @@ func TestControlDumpErrors(t *testing.T) {
 	}
 }
 
-func TestControlLogcatReadsTheAppsUid(t *testing.T) {
-	newFakeDevice(t)
-	for pkg, uid := range map[string]string{releasePackage: "10100", debugPackage: "10200"} {
-		var out strings.Builder
-		if err := logcat(adb.Device{}, pkg, false, &out); err != nil {
-			t.Fatal(err)
-		}
-		if want := "from uid " + uid + "\n"; !strings.HasSuffix(out.String(), want) {
-			t.Errorf("%s: logcat printed %q, want the lines of uid %s", pkg, out.String(), uid)
+func TestControlLogcatKeepsTheOSLinesAboutTheApp(t *testing.T) {
+	d := newFakeDevice(t)
+	// debugPackage's uid in the fake is 10200, releasePackage's 10100.
+	lines := map[string]bool{
+		"11-02 22:03:45.700 10200  4242  4242 I Vm      : its own line":                                                                  true,
+		"11-02 22:03:45.701 10200  4243  4243 E crosvm  : its crosvm":                                                                    true,
+		"11-02 22:03:45.763  1000  1329  1900 I MemoryLimiter: onLimitExceeded: pid=4242 uid=10200 type=memory.high pkg=" + debugPackage: true,
+		"11-02 22:03:46.000  1000  1329  1900 W MemoryLimiter: killing process 4242":                                                     true,
+		"11-02 22:03:46.001  1000  1329  1900 W MemoryLimiter: killing process 777":                                                      false,
+		"11-02 22:03:46.002  1000  1329  1329 I am_kill : [0,4242," + debugPackage + ",900,MemoryLimiter:AnonSwap]":                      true,
+		"11-02 22:03:46.003  1000  1329  1329 I ActivityManager: blocked for uid 10200":                                                  true,
+		"11-02 22:03:46.004  1000  1329  1329 I ActivityManager: Start proc for uid 102001":                                              false,
+		"11-02 22:03:46.005 10300  5555  5555 I SomeApp : a neighbour's line with 10200 in it":                                           false,
+		"11-02 22:03:46.006  1000  1329  1329 I ActivityManager: Killing 5:" + releasePackage + "/u0a100":                                false,
+		"11-02 22:03:46.007  shell 1170  1170 I adbd    : adbd service requested 'shell:pidof " + debugPackage + "'":                     false,
+		"--------- beginning of main": false,
+	}
+	var log strings.Builder
+	for l := range lines {
+		log.WriteString(l + "\n")
+	}
+	// Map order would put the pid's own line anywhere: the limiter's lines rely on it coming first.
+	d.write("logcat", []byte("11-02 22:03:45.700 10200  4242  4242 I Vm      : its own line\n"+log.String()))
+
+	var out strings.Builder
+	if err := logcat(adb.Device{}, debugPackage, false, &out); err != nil {
+		t.Fatal(err)
+	}
+	for l, keep := range lines {
+		if got := strings.Contains(out.String(), l); got != keep {
+			t.Errorf("printed %v, want %v: %s", got, keep, l)
 		}
 	}
 	if err := logcat(adb.Device{}, "dev.nickolaj.missing", false, io.Discard); err == nil || !strings.Contains(err.Error(), "dev.nickolaj.missing") {
 		t.Errorf("a package that isn't installed: got %v", err)
+	}
+}
+
+func TestControlLogcatTellsThePackagesApart(t *testing.T) {
+	d := newFakeDevice(t)
+	d.write("logcat", []byte("11-02 22:03:46.000  1000  1329  1329 I ActivityManager: Start "+debugPackage+"/"+releasePackage+".MainActivity\n"))
+	var out strings.Builder
+	if err := logcat(adb.Device{}, releasePackage, false, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("the release build's log printed the debug build's line: %s", out.String())
 	}
 }
 

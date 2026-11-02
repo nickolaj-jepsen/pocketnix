@@ -42,7 +42,7 @@ attached (`adb devices`). `pocketnix control -h` lists the commands.
 | `offers` | Prints the port forward offers of this guest boot, one `port=<guest> state=<offered\|dismissed\|allowed> phone=<port\|->` line per guest port the agent reported (`forwardOffers` must be on). An allowed port stays listed through the grace period after its listener goes, then drops out. |
 | `offer <port> allow\|dismiss` | Answers an offer as its notification's buttons do. `allow` returns once the phone port listens, and fails with the reason when it couldn't. |
 | `stats` | Prints the GUI link's counters and latency histograms, with the last launch's `guestRam` and `gpu`, as one line of JSON (what `pocketnix bench` samples). |
-| `logcat [--follow]` | Prints the log (main, system and crash buffers) of every process running as the app's uid, so it keeps lines from before a crash or restart. `--follow` streams it. Works on release builds too (`--package`). |
+| `logcat [--follow]` | Prints the log (main, system, crash and events buffers) of every process running as the app's uid, so it keeps lines from before a crash or restart, with the other uids' lines that name the app. `--follow` streams it. Works on release builds too (`--package`). |
 
 `tab` and `type` take `--no-enter` to type without pressing Enter. Tab 0 is
 the hvc0 console: it always exists and shows boot and login output.
@@ -140,8 +140,12 @@ so read it with plain `adb logcat -d`, not `pocketnix control logcat`.
 
 `pocketnix control logcat` is the app's side: engine and VM state changes,
 the agent link, and the stack trace when the app dies (which also kills the
-VM). Pipe it through `grep` for a tag (`Vm`, `PortForwards`, …) rather than
-reading it all.
+VM). It also has the OS's lines that name the app: Android's limits and kills
+(`MemoryLimiter`, `am_kill`, `am_proc_died`). Pipe it through `grep` for a tag
+(`Vm`, `PortForwards`, …) rather than reading it all.
+
+When something on the phone misbehaves, read this first, then the rest of the
+working rule in `AGENTS.md`, before you run an experiment.
 
 ## When it fails
 

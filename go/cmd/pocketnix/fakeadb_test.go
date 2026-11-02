@@ -535,8 +535,8 @@ func fakeNotifications(state string, w []string) (string, int) {
 	return out.String(), 0
 }
 
-// fakeLogcat is the state's "logcat" lines, each starting with its epoch
-// time as `-v epoch` prints it; with -T <epoch>, only those since then.
+// fakeLogcat is the state's "logcat" lines; with -T <epoch>, only those since
+// then, each starting with its epoch time as `-v epoch` prints it.
 func fakeLogcat(state string, args []string) string {
 	b, _ := os.ReadFile(filepath.Join(state, "logcat"))
 	since := -1.0
@@ -551,7 +551,7 @@ func fakeLogcat(state string, args []string) string {
 		if len(f) == 0 {
 			continue
 		}
-		if t, err := strconv.ParseFloat(f[0], 64); err == nil && t >= since {
+		if t, err := strconv.ParseFloat(f[0], 64); since < 0 || (err == nil && t >= since) {
 			out.WriteString(l)
 		}
 	}
