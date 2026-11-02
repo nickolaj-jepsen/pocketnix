@@ -40,6 +40,7 @@ flags:
   --inject <guest>=<file|->   write a file into the image's root filesystem; repeatable
   --mode <octal>              mode of the preceding --inject (default 0600)
   --replace                   replace the phone's existing disk image, destroying the guest's disk
+  --force                     provision a phone that pocketnix doctor says can't run the VM
   --no-network                start the VM without networking
   --memory <MiB>              the VM's memory (the app's Settings otherwise)
   --cpus <one|all>            one vCPU, or one per host core
@@ -64,7 +65,7 @@ var avfPermissions = []string{
 type provisionOpts struct {
 	image, apk, serial        string
 	debug, replace, noNetwork bool
-	noStart                   bool
+	noStart, force            bool
 	memoryMB                  int
 	cpus                      string
 	injects                   []image.Injection
@@ -87,6 +88,7 @@ func parseProvision(args []string) (*provisionOpts, error) {
 	fs.BoolVar(&o.replace, "replace", false, "")
 	fs.BoolVar(&o.noNetwork, "no-network", false, "")
 	fs.BoolVar(&o.noStart, "no-start", false, "")
+	fs.BoolVar(&o.force, "force", false, "")
 	fs.IntVar(&o.memoryMB, "memory", 0, "")
 	fs.StringVar(&o.cpus, "cpus", "", "")
 	fs.Func("inject", "", func(v string) error {
@@ -184,6 +186,9 @@ func (o *provisionOpts) run() error {
 	if state, err := dev.State(); err != nil || state != "device" {
 		return fmt.Errorf("no usable adb device (state %q): %v", state, err)
 	}
+	if err := o.checkDevice(dev); err != nil {
+		return err
+	}
 
 	o.cleanups = &cleanups{}
 	defer o.cleanups.run()
@@ -274,6 +279,19 @@ func (o *provisionOpts) run() error {
 		o.logf("started the VM (network %t)", !o.noNetwork)
 	}
 	return err
+}
+
+// checkDevice runs doctor's shell probe and logs its reasons. It refuses a
+// fail verdict, which saves pushing an image the phone can't boot, unless --force.
+func (o *provisionOpts) checkDevice(dev adb.Device) error {
+	v := shellVerdict(probeDevice(dev), probeAVF(dev))
+	if v.Level == levelFail && !o.force {
+		return fmt.Errorf("this phone can't run the VM (%s); --force provisions it anyway", strings.Join(v.Reasons, "; "))
+	}
+	for _, reason := range v.Reasons {
+		o.logf("%s", reason)
+	}
+	return nil
 }
 
 // refuse turns a status answer that shows a running VM, or a disk without

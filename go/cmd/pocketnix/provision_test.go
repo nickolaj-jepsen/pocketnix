@@ -165,7 +165,6 @@ func TestProvisionChecksThePhoneFirst(t *testing.T) {
 // A device that definitely can't run a VM stops provision before the
 // install, unless --force.
 func TestProvisionRefusesFailingDevice(t *testing.T) {
-	t.Skip("pending: A3a")
 	d := newFakeDevice(t)
 	d.can("pm has-feature android.software.virtualization_framework", "false\n", 1)
 	img, _ := testImage(t)
