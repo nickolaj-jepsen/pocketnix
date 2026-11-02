@@ -228,6 +228,9 @@ pocketnix deploy --remove compositor
 - Restarting the agent ends the guest's open tabs and the ssh session, which
   rides the agent's port forward. Deploy reconnects and checks that the unit
   runs the deployed binary in a new invocation.
+- If the deployed agent doesn't come up, ssh goes with it, and `--remove` can't
+  reach the guest either. Restart the VM from the app, or reboot from its console
+  tab: the drop-in lives in `/run`, so the guest's own agent comes back.
 - Only `pocketnix-agent` changes. The user units that run `pocketnix-guest`
   keep the system's package.
 - `--ssh-config <file>` hands `-F <file>` to every ssh and `nix copy` call, so

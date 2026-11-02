@@ -766,6 +766,9 @@ echo "invocation $(%[1]s show -P InvocationID %[2]s)"
 	return st, nil
 }
 
+// deployRecovery is the way back when a restart leaves the guest out of ssh's reach.
+const deployRecovery = "If ssh no longer reaches the guest, restart the VM from the app, or reboot from its console tab: the drop-in lives in /run, so the guest's own system comes back."
+
 // awaitRestart waits until the unit runs a new invocation of exe, reconnecting
 // while the restart has cut ssh.
 func (g deployGuest) awaitRestart(c deployComponent, before, exe string) error {
@@ -798,7 +801,7 @@ func (g deployGuest) awaitRestart(c deployComponent, before, exe string) error {
 			err = fmt.Errorf("%s is %s, invocation %s", c.unit, state, invocation)
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%s didn't come back running %s in %s: %w", c.unit, exe, deployReconnect, err)
+			return fmt.Errorf("%s didn't come back running %s in %s: %w\n%s", c.unit, exe, deployReconnect, err, deployRecovery)
 		}
 		time.Sleep(deployRetry)
 	}
