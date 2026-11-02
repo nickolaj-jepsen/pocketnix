@@ -6,8 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -126,6 +128,7 @@ func probe(dev adb.Device, pkg string) doctorReport {
 		App:    probeApp(dev, pkg),
 	}
 	r.Verdict = shellVerdict(r.Device, r.AVF)
+	appVerdict(&r.Verdict, r.App)
 	return r
 }
 
@@ -247,6 +250,7 @@ var versionName = regexp.MustCompile(`(?m)^\s*versionName=(\S+)`)
 func probeApp(dev adb.Device, pkg string) doctorApp {
 	a := doctorApp{Package: pkg}
 	if _, status, err := shellStatus(dev, "pm path "+pkg); err != nil || status != 0 {
+		a.CapsError = "the app isn't installed"
 		return a
 	}
 	a.Installed = true
@@ -255,7 +259,43 @@ func probeApp(dev adb.Device, pkg string) doctorApp {
 			a.VersionName = &m[1]
 		}
 	}
+	caps, err := provider{dev: dev, authority: pkg + ".provision"}.call("caps", "")
+	if err != nil {
+		a.CapsError = strings.Join(strings.Fields(err.Error()), " ")
+		return a
+	}
+	delete(caps, "ok")
+	// ProvisionProvider's capsAnswer URL-encodes these.
+	for _, k := range []string{"engine", "appVersion"} {
+		if v, err := url.QueryUnescape(caps[k]); err == nil && caps[k] != "" {
+			caps[k] = v
+		}
+	}
+	a.Caps = caps
 	return a
+}
+
+// capNonProtectedVM mirrors AvfReflect.CAPABILITY_NON_PROTECTED_VM.
+const capNonProtectedVM = 2
+
+// appVerdict adds the app's caps answer to v: it can only warn, as the
+// app's view is never definite.
+func appVerdict(v *doctorVerdict, a doctorApp) {
+	if !a.Installed {
+		return
+	}
+	if a.Caps == nil {
+		v.warn("the app answered no caps (a build older than doctor?): %s", a.CapsError)
+		return
+	}
+	switch n, err := strconv.Atoi(a.Caps["capabilities"]); {
+	case err != nil:
+		v.warn("the app's caps has no capabilities number: %q", a.Caps["capabilities"])
+	case n == 0:
+		v.warn("the app read capabilities 0: AVF offers no VMs, or the app couldn't ask")
+	case n&capNonProtectedVM == 0:
+		v.warn("the app read capabilities %d, without non-protected VMs: the app refuses to start its VM", n)
+	}
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -266,16 +306,7 @@ var kernelBranch = regexp.MustCompile(`^(\d+\.\d+)[.-]`)
 // the VM", warn on anything uncertain. Each reason starts with its level.
 func shellVerdict(d doctorDevice, a doctorAVF) doctorVerdict {
 	v := doctorVerdict{Level: levelOK, Reasons: []string{}}
-	fail := func(format string, args ...any) {
-		v.Level = levelFail
-		v.Reasons = append(v.Reasons, "fail: "+fmt.Sprintf(format, args...))
-	}
-	warn := func(format string, args ...any) {
-		if v.Level == levelOK {
-			v.Level = levelWarn
-		}
-		v.Reasons = append(v.Reasons, "warn: "+fmt.Sprintf(format, args...))
-	}
+	fail, warn := v.fail, v.warn
 
 	switch {
 	case a.Feature == nil:
@@ -328,6 +359,20 @@ func shellVerdict(d doctorDevice, a doctorAVF) doctorVerdict {
 	return v
 }
 
+// fail makes v a fail, for a reason.
+func (v *doctorVerdict) fail(format string, args ...any) {
+	v.Level = levelFail
+	v.Reasons = append(v.Reasons, "fail: "+fmt.Sprintf(format, args...))
+}
+
+// warn makes an ok v a warn, for a reason.
+func (v *doctorVerdict) warn(format string, args ...any) {
+	if v.Level == levelOK {
+		v.Level = levelWarn
+	}
+	v.Reasons = append(v.Reasons, "warn: "+fmt.Sprintf(format, args...))
+}
+
 func deref(s *string) string {
 	if s == nil {
 		return ""
@@ -370,6 +415,18 @@ func printDoctor(w io.Writer, r doctorReport) {
 		app = "installed, version " + str(r.App.VersionName)
 	}
 	fmt.Fprintf(w, "app          %s: %s\n", r.App.Package, app)
+	if r.App.Installed {
+		caps := r.App.CapsError
+		if r.App.Caps != nil {
+			var pairs []string
+			for k, v := range r.App.Caps {
+				pairs = append(pairs, k+"="+v)
+			}
+			sort.Strings(pairs)
+			caps = strings.Join(pairs, " ")
+		}
+		fmt.Fprintf(w, "caps         %s\n", caps)
+	}
 	fmt.Fprintf(w, "verdict      %s\n", r.Verdict.Level)
 	for _, reason := range r.Verdict.Reasons {
 		fmt.Fprintf(w, "  %s\n", reason)

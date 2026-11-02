@@ -251,29 +251,69 @@ func TestDoctorText(t *testing.T) {
 	}
 }
 
-func TestDoctorCaps(t *testing.T) {
-	t.Skip("pending: A3b")
-	d := newFakeDevice(t)
-	cannedPixel(d)
-	d.installAPK([]byte("apk"))
-	d.setCaps("capabilities=1, manager=true, gpuConfig=boxed")
-	r, _, err := doctorJSON(t)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.App.Caps["gpuConfig"] != "boxed" || r.App.Caps["capabilities"] != "1" {
-		t.Errorf("app.caps = %v", r.App.Caps)
-	}
+// pixelCaps is a caps answer as the app on the maintainer's Pixel should
+// give it in a cold process (GrapheneOS 17's GpuConfig takes boxed Booleans).
+const pixelCaps = "capabilities=3, manager=true, gpuConfig=boxed, rawConfigBinder=true, autoMemoryBalloon=true, engine=engine+launched%3Dnone, appVersion=0.4.0-debug"
 
-	// An app from before caps.
-	d = newFakeDevice(t)
-	cannedPixel(d)
-	d.installAPK([]byte("apk"))
-	r, _, err = doctorJSON(t)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.App.CapsError == "" || r.Verdict.Level != levelWarn {
-		t.Errorf("an app without caps: capsError %q, verdict %+v", r.App.CapsError, r.Verdict)
+func TestDoctorCaps(t *testing.T) {
+	t.Run("answered", func(t *testing.T) {
+		d := newFakeDevice(t)
+		cannedPixel(d)
+		d.installAPK([]byte("apk"))
+		d.setCaps(pixelCaps)
+		r, _, err := doctorJSON(t)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for k, want := range map[string]string{"capabilities": "3", "gpuConfig": "boxed", "rawConfigBinder": "true", "engine": "engine launched=none", "appVersion": "0.4.0-debug"} {
+			if got := r.App.Caps[k]; got != want {
+				t.Errorf("app.caps.%s = %q, want %q", k, got, want)
+			}
+		}
+		if _, ok := r.App.Caps["ok"]; ok || r.App.CapsError != "" {
+			t.Errorf("app.caps = %v, capsError %q", r.App.Caps, r.App.CapsError)
+		}
+		if r.Verdict.Level != levelOK {
+			t.Errorf("verdict = %+v", r.Verdict)
+		}
+		out, err := stdoutOf(t, func() error { return runDoctor(nil) })
+		if err != nil || !strings.Contains(out, "gpuConfig=boxed") {
+			t.Errorf("the text lacks the caps (%v):\n%s", err, out)
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		// caps is the answer; empty for an app from before caps.
+		caps string
+		// token is in some reason.
+		token string
+	}{
+		{name: "before-caps", token: "unknown method caps"},
+		// 0 is also what a failed getCapabilities gives.
+		{name: "capabilities-0", caps: strings.Replace(pixelCaps, "capabilities=3", "capabilities=0", 1), token: "capabilities 0"},
+		{name: "protected-only", caps: strings.Replace(pixelCaps, "capabilities=3", "capabilities=1", 1), token: "non-protected"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newFakeDevice(t)
+			cannedPixel(d)
+			d.installAPK([]byte("apk"))
+			if tc.caps != "" {
+				d.setCaps(tc.caps)
+			}
+			r, _, err := doctorJSON(t)
+			if err != nil {
+				t.Errorf("a warn returned %v, want exit status 0", err)
+			}
+			if r.Verdict.Level != levelWarn {
+				t.Errorf("verdict = %+v, want warn", r.Verdict)
+			}
+			if !strings.Contains(strings.Join(r.Verdict.Reasons, "\n"), tc.token) {
+				t.Errorf("no reason names %q: %q", tc.token, r.Verdict.Reasons)
+			}
+			if tc.caps == "" && (r.App.Caps != nil || !strings.Contains(r.App.CapsError, "unknown method caps")) {
+				t.Errorf("an app without caps: caps %v, capsError %q", r.App.Caps, r.App.CapsError)
+			}
+		})
 	}
 }
