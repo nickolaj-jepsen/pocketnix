@@ -96,6 +96,11 @@ func TestHostStateDrivesTargets(t *testing.T) {
 	if !st.Metered || !st.PowerSave || !st.Connected {
 		t.Errorf("pocketnix-guest host: %s", text)
 	}
+
+	// The agent runs systemctl on the stream's loss: let it finish before the test's directories go.
+	ctl.Close()
+	wantTargets(t, active, "pocketnix-power-save.target")
+	eventually(t, "a disconnected host file", func() bool { return !readHostFile(t, hostFile).Connected })
 }
 
 func TestHostStateLostWithItsStream(t *testing.T) {
