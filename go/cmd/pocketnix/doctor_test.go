@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -847,6 +848,56 @@ func TestSmokeFailedRebootClosesItsTab(t *testing.T) {
 				t.Errorf("smoke left %q", left)
 			}
 		})
+	}
+}
+
+// An interrupt while the inhibitor's script runs waits for its pid, which is all
+// cleanup can end it by.
+func TestSmokeInterruptDuringInhibitEndsIt(t *testing.T) {
+	slow := reactInhibit
+	slow.Output = nil
+	d := smokeDevice(t, append(without(everyTool, reactInhibit), slow)...)
+	smokeTimes.cmd = 30 * time.Second
+	isInhibit := func(line string) bool { return strings.Contains(line, "systemd-inhibit --what=sleep") }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		for ctx.Err() == nil && !typedInto(d, isInhibit) {
+			time.Sleep(time.Millisecond)
+		}
+		cancel()
+		time.Sleep(20 * time.Millisecond)
+		// The script gets to its output after the interrupt.
+		for tab, lines := range d.typed() {
+			if i := slices.IndexFunc(lines, isInhibit); i >= 0 {
+				p := regexp.MustCompile(`smoke-\d+`).FindString(lines[i])
+				appendFile(fakeTabPath(d.state, tab), p+"-pid=4242\n"+p+"-exit=0\n")
+			}
+		}
+	}()
+	steps := runSmoke(ctx, adb.Device{}, debugPackage, nil, io.Discard)
+	if st, _ := stepNamed(steps, "cleanup"); st.OK == nil || !*st.OK {
+		t.Errorf("cleanup: %+v", st)
+	}
+	if left := leftovers(d); len(left) > 0 {
+		t.Errorf("smoke left %q", left)
+	}
+}
+
+// A forward can end up allowed though the answer to the allow never arrived:
+// cleanup still waits for it, and says so when it stays.
+func TestSmokeCleanupWatchesAForwardWhoseAllowFailed(t *testing.T) {
+	allowedAtOnce := reactListen
+	allowedAtOnce.Write = map[string]string{"control/listening/${2}": "${3}", "control/allowed/${2}": "${2}"}
+	d := smokeDevice(t, append(without(everyTool, reactListen), allowedAtOnce)...)
+	smokeTimes.forward = 50 * time.Millisecond
+	d.drop("answer:s:allow", "", "error: closed\n")
+	steps := runSmoke(context.Background(), adb.Device{}, debugPackage, nil, io.Discard)
+	if st, _ := stepNamed(steps, "forward"); st.OK == nil || *st.OK {
+		t.Errorf("forward: %+v, want a failure", st)
+	}
+	if st, _ := stepNamed(steps, "cleanup"); st.OK == nil || *st.OK || !strings.Contains(st.Detail, "forward") {
+		t.Errorf("cleanup: %+v, want a failure naming the forward", st)
 	}
 }
 
