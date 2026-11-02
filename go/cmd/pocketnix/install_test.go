@@ -107,6 +107,9 @@ func TestInstallSwapsRunningVM(t *testing.T) {
 	if b := d.backups(); len(b) != 1 {
 		t.Errorf("backups = %v, want one", b)
 	}
+	if d.runtimePermissionsGranted() {
+		t.Error("the swap granted runtime permissions, whatever the owner chose")
+	}
 }
 
 // The install, the grants and then the restart, which is a bare START: its
@@ -121,7 +124,7 @@ func TestInstallOrdersTheSwap(t *testing.T) {
 	ev := d.events()
 	steps := [][]string{
 		{debugStop},
-		{"install -r -d app-debug.apk"},
+		{"install app-debug.apk"},
 		{
 			"grant dev.nickolaj.pocketnix.debug android.permission.MANAGE_VIRTUAL_MACHINE",
 			"grant dev.nickolaj.pocketnix.debug android.permission.USE_CUSTOM_VIRTUAL_MACHINE",

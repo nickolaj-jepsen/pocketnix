@@ -57,6 +57,9 @@ const (
 	// it, independently of the CLI's manifest parser.
 	fakeVersionCode = "version-code"
 	fakeDebuggable  = "debuggable"
+	// fakeRuntimeGrants is the state file for the app's runtime permissions being
+	// granted, as `adb install -g` does; an install without it leaves them as they were.
+	fakeRuntimeGrants = "runtime-grants"
 )
 
 // fakeSerial is what get-serialno answers when no -s is given.
@@ -92,7 +95,8 @@ func fakeADB(args []string) int {
 		fmt.Println(serial)
 	case "install":
 		local := args[len(args)-1]
-		logEvent("install %s", strings.Join(append(args[1:len(args)-1:len(args)-1], filepath.Base(local)), " "))
+		flags := args[1 : len(args)-1]
+		logEvent("install %s", filepath.Base(local))
 		if b, err := os.ReadFile(filepath.Join(state, "install-fails")); err == nil {
 			fmt.Println("Performing Streamed Install")
 			fmt.Println(strings.TrimSpace(string(b)))
@@ -106,7 +110,12 @@ func fakeADB(args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		if fakeRefusesDowngrade(state, b) {
+		if !slices.Contains(flags, "-r") && fakeHasApp(state) {
+			fmt.Println("Performing Streamed Install")
+			fmt.Println("Failure [INSTALL_FAILED_ALREADY_EXISTS: Attempt to re-install without first uninstalling.]")
+			return 1
+		}
+		if fakeRefusesDowngrade(state, b, slices.Contains(flags, "-d")) {
 			fmt.Println("Performing Streamed Install")
 			fmt.Println("Failure [INSTALL_FAILED_VERSION_DOWNGRADE: Downgrade detected]")
 			return 1
@@ -118,6 +127,9 @@ func fakeADB(args []string) int {
 		os.WriteFile(devPath(apk), b, 0o644)
 		os.WriteFile(filepath.Join(state, "apk-path"), []byte(apk), 0o644)
 		os.WriteFile(filepath.Join(state, "installed"), nil, 0o644)
+		if slices.Contains(flags, "-g") {
+			os.WriteFile(filepath.Join(state, fakeRuntimeGrants), nil, 0o644)
+		}
 		// As on a phone: replacing the app kills its process, and so a running VM.
 		if fakeRunning(state) {
 			logEvent("vm killed")
@@ -131,6 +143,7 @@ func fakeADB(args []string) int {
 	case "uninstall":
 		logEvent("uninstall %s", strings.Join(args[1:], " "))
 		os.Remove(filepath.Join(state, "installed"))
+		os.Remove(filepath.Join(state, fakeRuntimeGrants))
 		os.RemoveAll(filepath.Dir(devPath(fakeAPKPath(state))))
 		if fakeRunning(state) {
 			logEvent("vm killed")
@@ -262,6 +275,12 @@ func fakeInstalled(state, pkg string) bool {
 	return len(b) == 0 || string(b) == pkg
 }
 
+// fakeHasApp reports whether the app is installed, as either package: the model
+// holds one build.
+func fakeHasApp(state string) bool {
+	return exists(filepath.Join(state, "installed")) || fakeRunning(state)
+}
+
 // fakeAPKEntry is a file in the installed app's APK, the way fakeAPK variants
 // mark what a build does on a device; false if the APK has no such file.
 func fakeAPKEntry(state, name string) ([]byte, bool) {
@@ -272,10 +291,10 @@ func fakeAPKEntry(state, name string) ([]byte, bool) {
 	return zipEntry(b, name)
 }
 
-// fakeRefusesDowngrade is Android's rule for installing apk with -d: a lower
-// version code passes only over a debuggable build or on a debuggable OS. APKs
-// without the fakeVersionCode mark aren't compared.
-func fakeRefusesDowngrade(state string, apk []byte) bool {
+// fakeRefusesDowngrade is Android's rule for installing apk: a lower version
+// code needs -d (allow), and then passes only over a debuggable build or on a
+// debuggable OS. APKs without the fakeVersionCode mark aren't compared.
+func fakeRefusesDowngrade(state string, apk []byte, allow bool) bool {
 	newer, ok := zipEntry(apk, fakeVersionCode)
 	if !ok {
 		return false
@@ -286,7 +305,13 @@ func fakeRefusesDowngrade(state string, apk []byte) bool {
 	}
 	n, _ := strconv.ParseInt(string(newer), 10, 64)
 	o, _ := strconv.ParseInt(string(older), 10, 64)
-	if _, debuggable := fakeAPKEntry(state, fakeDebuggable); n >= o || debuggable {
+	if n >= o {
+		return false
+	}
+	if !allow {
+		return true
+	}
+	if _, debuggable := fakeAPKEntry(state, fakeDebuggable); debuggable {
 		return false
 	}
 	osDebuggable, _ := os.ReadFile(filepath.Join(state, "props", "ro.debuggable"))
@@ -651,6 +676,11 @@ func (d *fakeDevice) installedAPK() []byte {
 		}
 	}
 	return b
+}
+
+// runtimePermissionsGranted is whether an install granted the app's runtime permissions.
+func (d *fakeDevice) runtimePermissionsGranted() bool {
+	return exists(filepath.Join(d.state, fakeRuntimeGrants))
 }
 
 // failInstalls makes every adb install fail with msg (pm's "Failure [...]" line).

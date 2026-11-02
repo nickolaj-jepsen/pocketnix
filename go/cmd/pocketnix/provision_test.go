@@ -57,8 +57,10 @@ func TestProvision(t *testing.T) {
 		t.Error("the phone's disk image differs from the pushed one")
 	}
 	ev := d.events()
+	if !d.runtimePermissionsGranted() {
+		t.Error("the install left the app's runtime permissions ungranted")
+	}
 	for _, line := range []string{
-		"install -r -g app-debug.apk",
 		"grant dev.nickolaj.pocketnix.debug android.permission.MANAGE_VIRTUAL_MACHINE",
 		"grant dev.nickolaj.pocketnix.debug android.permission.USE_CUSTOM_VIRTUAL_MACHINE",
 	} {
@@ -120,6 +122,33 @@ func TestProvisionKeepsExistingDisk(t *testing.T) {
 	}
 	if string(d.disk()) != "a different image" {
 		t.Error("--replace didn't replace the disk")
+	}
+}
+
+// The app can be there already, without a disk, and provision installs over it.
+func TestProvisionInstallsOverTheApp(t *testing.T) {
+	d := newFakeDevice(t)
+	d.installAPK([]byte("the owner's build"))
+	img, _ := testImage(t)
+	if err := provisionFor(t, "--image", img, "--apk", fakeAPKFile(t, "app.apk", "a new build"), "--no-start"); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(d.installedAPK()); got != "a new build" {
+		t.Errorf("installed APK = %q", got)
+	}
+}
+
+// Unlike install, provision never takes an older build, even over a debuggable one.
+func TestProvisionWontDowngradeTheApp(t *testing.T) {
+	d := newFakeDevice(t)
+	d.installAPKAs(debugPackage, fakeVersionedAPK(debugPackage, "version 2", 20000, true))
+	img, _ := testImage(t)
+	older := versionedAPKFile(t, debugPackage, "version 1", 10000, true)
+	if err := provisionFor(t, "--image", img, "--apk", older, "--debug", "--no-start"); err == nil || !strings.Contains(err.Error(), "INSTALL_FAILED_VERSION_DOWNGRADE") {
+		t.Errorf("got %v, want Android's refusal", err)
+	}
+	if got := string(d.installedAPK()); got != "version 2" {
+		t.Errorf("installed APK = %q", got)
 	}
 }
 
