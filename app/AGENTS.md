@@ -77,7 +77,11 @@ that cross directories.
 - `cmd activity memory-limiter` works from plain adb. `status` prints the limits.
   `manual <app pid> <MiB>` sets both files, though its help says percent, and
   `manual <pid> none` lifts nothing. `ignore <uid>` holds one uid until reboot
-  and, by source, drops later limits, `manual` included, so raise the limit first.
+  and drops later limits, `manual` included by source, so raise the limit first;
+  a process started after it has none. A 3300 MiB guest fill out of front, 4 GiB
+  VM on crosvm's RAM: with the limit lifted it took 21 s with no stall, and at
+  3072 MiB it stalled ssh after about 70 s at the limit, reclaim yielding 0.2 %,
+  and ssh came back 1 s after raising the limit.
 - The host refuses crosvm's own `sched_setattr` and `sched_setaffinity` for
   its vCPUs ("Failed to boost vcpu util", "Failed to set CPU affinity":
   EPERM), so `--host-cpu-topology`'s pinning and `boostUclamp` do nothing; the
