@@ -18,6 +18,10 @@ type Device struct {
 	// (-1 if it didn't start or a signal ended it), and the stdout Run kept (Stream
 	// keeps none). Start's commands end out of sight, and aren't traced.
 	Trace func(argv []string, start time.Time, status int, stdout string)
+	// QuietErrors keeps a command's stdout out of the errors Run and Shell return,
+	// for errors that go into a report: it can hold other apps' text. adb's own
+	// stderr stays in them.
+	QuietErrors bool
 }
 
 func (d Device) cmd(args ...string) *exec.Cmd {
@@ -43,9 +47,17 @@ func (d Device) Run(args ...string) (string, error) {
 	err := c.Run()
 	d.trace(c, start, out.String())
 	if err != nil {
-		return out.String(), fmt.Errorf("adb %s: %w\n%s%s", strings.Join(args, " "), err, out.String(), errb.String())
+		return out.String(), fmt.Errorf("adb %s: %w\n%s%s", strings.Join(args, " "), err, d.inError(out.String()), errb.String())
 	}
 	return out.String(), nil
+}
+
+// inError is what an error may quote of a command's stdout.
+func (d Device) inError(stdout string) string {
+	if d.QuietErrors {
+		return ""
+	}
+	return stdout
 }
 
 // Stream runs an adb command with its stdout going to w as it comes, until
@@ -81,10 +93,10 @@ func (d Device) Shell(cmdline string) (string, error) {
 	}
 	body, status, ok := cutLast(out, "pocketnix-exit=")
 	if !ok {
-		return out, fmt.Errorf("adb shell %s: no exit status in output:\n%s", cmdline, out)
+		return out, fmt.Errorf("adb shell %s: no exit status in output:\n%s", cmdline, d.inError(out))
 	}
 	if strings.TrimSpace(status) != "0" {
-		return body, fmt.Errorf("adb shell %s: exit %s:\n%s", cmdline, strings.TrimSpace(status), body)
+		return body, fmt.Errorf("adb shell %s: exit %s:\n%s", cmdline, strings.TrimSpace(status), d.inError(body))
 	}
 	return body, nil
 }

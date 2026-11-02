@@ -505,7 +505,11 @@ commands.log  every command the run sent, in order: start time (UTC), exit
               status, command. A shell command's status is its own, not adb's.
               A serial is written as ` + serialPlaceholder + `. scrcpy's own adb calls
               aren't in it.
-doctor.json   the doctor report
+doctor.json   the doctor report: the phone's model, build and AVF facts, the
+              app's answers and each smoke step's result. A step's detail can
+              quote adb's errors, and the last rows of the tab smoke itself
+              opened, which can show the guest's user and host name. It holds
+              no other app's text.
 ` + smokeLine + `logcat.txt    adb logcat -b main,system,crash: the buffers as they were at the
               start, then every line until the run ended
 screen.mp4    scrcpy's video of the screen; if it's absent, commands.log's
