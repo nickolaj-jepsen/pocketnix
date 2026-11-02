@@ -827,7 +827,10 @@ func (s *smoker) start(p, script string, args ...string) (int, error) {
 	return s.open(line)
 }
 
-var markerLine = regexp.MustCompile(`^(smoke-\d+)-(\w+)=(.*?)\s*$`)
+// markerLine is a line a script printed. A wrapped command line can start a row at
+// the same text, but what follows there holds a `$`, a `;`, a `'` or more words,
+// which no value does.
+var markerLine = regexp.MustCompile(`^(smoke-\d+)-(\w+)=([^\s;'$]*)\s*$`)
 
 // await waits until tab shows p's line for key, and returns every value
 // p's lines gave so far.
@@ -840,8 +843,7 @@ func (s *smoker) await(tab int, p, key string, timeout time.Duration) (map[strin
 			if !ok {
 				continue
 			}
-			// A wrapped command line can start a row "@-<key>=$…"; a value the shell printed can't.
-			if m := markerLine.FindStringSubmatch(t); m != nil && m[1] == p && !strings.HasPrefix(m[3], "$") {
+			if m := markerLine.FindStringSubmatch(t); m != nil && m[1] == p {
 				vals[m[2]] = m[3]
 			}
 		}
