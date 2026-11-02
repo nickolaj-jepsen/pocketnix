@@ -22,6 +22,22 @@ func fakeAPKFile(t *testing.T, name, build string) string {
 	return p
 }
 
+// crashingAPKFile writes a debug APK whose process dies at start, and so whose
+// providers never answer.
+func crashingAPKFile(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "app-debug.apk")
+	apk := zipOf(map[string][]byte{
+		"AndroidManifest.xml": axmlManifest(false, "package", debugPackage),
+		"build":               []byte("a crashing build"),
+		fakeCrashes:           nil,
+	})
+	if err := os.WriteFile(p, apk, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 // backups lists install's backup files under the fake device's cache dir.
 func (d *fakeDevice) backups() []string {
 	m, _ := filepath.Glob(filepath.Join(d.cache, "pocketnix", "backup", "*", "*.apk"))
@@ -375,6 +391,121 @@ func TestInstallFailureThatMayHaveReplaced(t *testing.T) {
 			t.Errorf("backups = %v, want one", b)
 		}
 	})
+}
+
+// The way back from a dev build that crashes at start can't depend on that build.
+func TestInstallRestoreRecoversACrashingBuild(t *testing.T) {
+	d := newFakeDevice(t)
+	d.installAPK([]byte("the owner's build"))
+	d.setRunning(true)
+	if err := runInstall([]string{"--debug", "--no-start", crashingAPKFile(t)}); err != nil {
+		t.Fatal(err)
+	}
+	if d.running() {
+		t.Fatal("the VM runs over a build that can't")
+	}
+	installs := strings.Count(d.events(), "install -r -d ")
+
+	// Anything but --restore keeps failing closed: this could be any provider failure.
+	if err := runInstall([]string{"--debug", fakeAPKFile(t, "app-debug.apk", "a dev build")}); err == nil {
+		t.Error("installed over an app that doesn't say whether a VM runs")
+	}
+	if got := strings.Count(d.events(), "install -r -d "); got != installs {
+		t.Errorf("a normal install went ahead; events:\n%s", d.events())
+	}
+
+	if err := runInstall([]string{"--debug", "--restore"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(d.installedAPK()); got != "the owner's build" {
+		t.Errorf("installed APK = %q, want the backup", got)
+	}
+	if b := d.backups(); len(b) != 0 {
+		t.Errorf("backup left after --restore: %v", b)
+	}
+	if !d.running() {
+		t.Error("the VM isn't running after --restore")
+	}
+	if ev := d.events(); strings.Contains(ev, "vm killed\n") || strings.Contains(ev, "uninstall") {
+		t.Errorf("events:\n%s", ev)
+	}
+}
+
+// With no status to go by, --restore looks for the VM's process: replacing the
+// app under a real VM is a hard power-off.
+func TestInstallRestoreOverAnAppThatDoesntAnswer(t *testing.T) {
+	const crash = "Exception occurred while executing 'call':\n"
+	statusCall := "content call --uri content://" + debugPackage + ".provision --method status"
+	for _, tc := range []struct {
+		name     string
+		setup    func(d *fakeDevice)
+		refused  bool
+		// want is the refusal's token.
+		want string
+	}{
+		{name: "a-vm-still-runs", setup: func(d *fakeDevice) {
+			d.setRunning(true)
+		}, refused: true, want: "crosvm"},
+		{name: "a-vm-runs-under-another-android-user", setup: func(d *fakeDevice) {
+			d.can("pm list packages -U "+debugPackage, "package:"+debugPackage+" uid:10200,1010200\n", 0)
+			d.can(vmProcessesCommand, "1010200 crosvm_pocketnix\n", 0)
+		}, refused: true, want: "crosvm"},
+		{name: "a-vm-and-no-uid-to-tell-whose", setup: func(d *fakeDevice) {
+			d.can("pm list packages -U "+debugPackage, "", 0)
+			d.can(vmProcessesCommand, "10300 crosvm_pocketnix\n", 0)
+		}, refused: true, want: "crosvm"},
+		{name: "adb-loses-the-phone", setup: func(d *fakeDevice) {
+			d.drop(vmProcessesCommand, "", "adb: device offline\n")
+		}, refused: true, want: "offline"},
+		{name: "ps-fails", setup: func(d *fakeDevice) {
+			d.can(vmProcessesCommand, "ps: bad -o\n", 1)
+		}, refused: true, want: "can't tell"},
+		{name: "ps-lists-nothing", setup: func(d *fakeDevice) {
+			d.can(vmProcessesCommand, "", 0)
+		}, refused: true, want: "can't tell"},
+		{name: "another-apps-vm", setup: func(d *fakeDevice) {
+			d.can(vmProcessesCommand, "10100 crosvm_pocketnix\n", 0)
+		}},
+		{name: "no-vm"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newFakeDevice(t)
+			d.installAPK([]byte("the owner's build"))
+			if err := runInstall([]string{"--debug", fakeAPKFile(t, "app-debug.apk", "a dev build")}); err != nil {
+				t.Fatal(err)
+			}
+			d.can(statusCall, crash, 1)
+			if tc.setup != nil {
+				tc.setup(d)
+			}
+			wasRunning := d.running()
+			err := runInstall([]string{"--debug", "--no-start", "--restore"})
+			if !tc.refused {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := string(d.installedAPK()); got != "the owner's build" {
+					t.Errorf("installed APK = %q", got)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("got %v, want a refusal naming %q", err, tc.want)
+			}
+			if got := string(d.installedAPK()); got != "a dev build" {
+				t.Errorf("installed APK = %q", got)
+			}
+			if b := d.backups(); len(b) != 1 {
+				t.Errorf("backups = %v, want it left in place", b)
+			}
+			if ev := d.events(); eventIndex(ev, debugStop) >= 0 || strings.Contains(ev, "vm killed\n") {
+				t.Errorf("acted on the VM; events:\n%s", ev)
+			}
+			if d.running() != wasRunning {
+				t.Errorf("the VM's running state became %t", d.running())
+			}
+		})
+	}
 }
 
 // Only pm's own exit 1 means the app isn't there: anything else could hide a running VM.

@@ -48,6 +48,9 @@ func fakeAPKPath(state string) string {
 	return "/data/app/~~preinstalled==/base.apk"
 }
 
+// fakeCrashes is the file that marks an APK as a build whose process dies at start.
+const fakeCrashes = "crashes"
+
 // fakeSerial is what get-serialno answers when no -s is given.
 const fakeSerial = "FAKESERIAL0001"
 
@@ -246,6 +249,35 @@ func fakeInstalled(state, pkg string) bool {
 	return len(b) == 0 || string(b) == pkg
 }
 
+// fakeAPKEntry is a file in the installed app's APK, the way fakeAPK variants
+// mark what a build does on a device; false if the APK has no such file.
+func fakeAPKEntry(state, name string) ([]byte, bool) {
+	b, err := os.ReadFile(filepath.Join(state, "device", fakeAPKPath(state)))
+	if err != nil {
+		return nil, false
+	}
+	z, err := zip.NewReader(bytes.NewReader(b), int64(len(b)))
+	if err != nil {
+		return nil, false
+	}
+	f, err := z.Open(name)
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+	v, err := io.ReadAll(f)
+	return v, err == nil
+}
+
+// fakeAppUID is the app's uid, as `pm list packages -U` answers for it: the
+// release app's when only that is installed.
+func fakeAppUID(state string) string {
+	if b, _ := os.ReadFile(filepath.Join(state, "installed")); string(b) == releasePackage {
+		return "10100"
+	}
+	return "10200"
+}
+
 // fakeProviderPackage is the app package of a content call's provider URI.
 func fakeProviderPackage(line string) string {
 	_, rest, _ := strings.Cut(line, "content://")
@@ -295,6 +327,13 @@ func fakeShell(state, line string, logEvent func(string, ...any)) (string, int) 
 			return "stat: '" + w[3] + "': No such file or directory\n", 1
 		}
 		return strconv.FormatInt(fi.Size(), 10) + "\n", 0
+	// A running VM's crosvm goes by the app's uid, and shows in ps as long as the VM runs.
+	case line == vmProcessesCommand:
+		out := "0 init\n1000 system_server\n2000 adbd\n"
+		if fakeRunning(state) {
+			out += fakeAppUID(state) + " crosvm_pocketnix\n"
+		}
+		return out, 0
 	case len(w) == 2 && w[0] == "ls":
 		if _, err := os.Stat(devPath(w[1])); err != nil {
 			return "ls: " + w[1] + ": No such file or directory\n", 1
@@ -332,6 +371,9 @@ func fakeShell(state, line string, logEvent func(string, ...any)) (string, int) 
 		}
 		if pkg := fakeProviderPackage(line); !fakeInstalled(state, pkg) {
 			return "Error while accessing provider:" + pkg + ".provision\n", 1
+		}
+		if _, broken := fakeAPKEntry(state, fakeCrashes); broken {
+			return "Exception occurred while executing 'call':\njava.lang.RuntimeException: Unable to get provider\n", 1
 		}
 		switch method {
 		case "status":
