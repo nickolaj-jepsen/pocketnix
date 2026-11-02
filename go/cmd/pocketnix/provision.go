@@ -50,12 +50,27 @@ flags:
 
 const (
 	releasePackage = "dev.nickolaj.pocketnix"
-	activityClass  = "dev.nickolaj.pocketnix.ControlActivity"
-	actionStart    = "dev.nickolaj.pocketnix.action.START"
 	// chunkSize bounds one adb push: bulk USB transfers drop the device after ~100–200 MB.
 	chunkSize   = 32 << 20
 	deviceChunk = "/data/local/tmp/pocketnix.chunk"
 )
+
+// These mirror ControlActivity and its ACTION_START, ACTION_STOP and ACTION_LAUNCH.
+const (
+	activityClass = "dev.nickolaj.pocketnix.ControlActivity"
+	actionStart   = "dev.nickolaj.pocketnix.action.START"
+	actionStop    = "dev.nickolaj.pocketnix.action.STOP"
+	actionLaunch  = "dev.nickolaj.pocketnix.action.DEBUG_LAUNCH"
+)
+
+// amStart sends action to pkg's ControlActivity, which keeps no history: a
+// task's base intent gets replayed, so scripted actions never go to the main
+// activity. Each of extras goes into the command line as it is, so a value that
+// isn't this CLI's own goes through adb.ShellQuote first. It returns am's stdout.
+func amStart(dev adb.Device, pkg, action string, extras ...string) (string, error) {
+	cmd := append([]string{"am start -n", pkg + "/" + activityClass, "-a", action}, extras...)
+	return dev.Shell(strings.Join(cmd, " "))
+}
 
 var avfPermissions = []string{
 	"android.permission.MANAGE_VIRTUAL_MACHINE",
@@ -279,7 +294,7 @@ func (o *provisionOpts) run() error {
 	if o.noStart {
 		return nil
 	}
-	_, err = dev.Shell(o.startCommand())
+	_, err = amStart(dev, o.pkg(), actionStart, o.startExtras()...)
 	if err == nil {
 		o.logf("started the VM (network %t)", !o.noNetwork)
 	}
@@ -311,16 +326,16 @@ func (o *provisionOpts) refuse(st map[string]string) error {
 	return nil
 }
 
-// startCommand starts the VM with the hardware flags.
-func (o *provisionOpts) startCommand() string {
-	cmd := fmt.Sprintf("am start -n %s/%s -a %s --ez network %t", o.pkg(), activityClass, actionStart, !o.noNetwork)
+// startExtras are the hardware flags to start the VM with.
+func (o *provisionOpts) startExtras() []string {
+	extras := []string{fmt.Sprintf("--ez network %t", !o.noNetwork)}
 	if o.memoryMB != 0 {
-		cmd += fmt.Sprintf(" --ei memoryMb %d", o.memoryMB)
+		extras = append(extras, fmt.Sprintf("--ei memoryMb %d", o.memoryMB))
 	}
 	if o.cpus != "" {
-		cmd += fmt.Sprintf(" --ei cpus %d", map[string]int{"one": 1, "all": 0}[o.cpus])
+		extras = append(extras, fmt.Sprintf("--ei cpus %d", map[string]int{"one": 1, "all": 0}[o.cpus]))
 	}
-	return cmd
+	return extras
 }
 
 // prepareImage resolves the image and, with injections, makes an edited copy.

@@ -538,8 +538,8 @@ func (c control) launch(ctx context.Context, app string, timeout time.Duration) 
 	}
 	had := windows(before, app)
 	pkg := strings.TrimSuffix(c.authority, ".control")
-	// The action and extra mirror ControlActivity.ACTION_LAUNCH and EXTRA_APP.
-	out, err := c.dev.Shell("am start -n " + pkg + "/dev.nickolaj.pocketnix.ControlActivity -a dev.nickolaj.pocketnix.action.DEBUG_LAUNCH --es app " + adb.ShellQuote(app))
+	// The extra mirrors ControlActivity.EXTRA_APP.
+	out, err := amStart(c.dev, pkg, actionLaunch, "--es app "+adb.ShellQuote(app))
 	if err != nil {
 		return "", err
 	}

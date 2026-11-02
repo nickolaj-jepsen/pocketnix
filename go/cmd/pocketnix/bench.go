@@ -427,7 +427,7 @@ func (p *phone) run(args []string) (map[string]any, error) {
 		return nil, errors.New("the phone locked")
 	}
 	// A window opens as its own task only while a pocketnix window shows.
-	if _, err := p.dev.Shell("am start -n " + p.o.pkg + "/dev.nickolaj.pocketnix.ControlActivity -a dev.nickolaj.pocketnix.action.START"); err != nil {
+	if _, err := amStart(p.dev, p.o.pkg, actionStart); err != nil {
 		return nil, err
 	}
 	time.Sleep(time.Second)

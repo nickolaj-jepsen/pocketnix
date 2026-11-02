@@ -1177,8 +1177,8 @@ func (s *smoker) counters() (map[string]float64, error) {
 // front brings the app's main screen forward: a window opens as its own
 // task only while a pocketnix window shows.
 func (s *smoker) front() error {
-	// The action mirrors ControlActivity.ACTION_START, which leaves a running VM as it is.
-	_, err := s.dev.Shell("am start -n " + s.pkg + "/dev.nickolaj.pocketnix.ControlActivity -a dev.nickolaj.pocketnix.action.START")
+	// START leaves a running VM as it is.
+	_, err := amStart(s.dev, s.pkg, actionStart)
 	return err
 }
 

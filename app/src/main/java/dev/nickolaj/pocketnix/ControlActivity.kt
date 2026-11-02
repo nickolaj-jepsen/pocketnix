@@ -103,6 +103,8 @@ class ControlActivity : Activity() {
 
     companion object {
         private const val TAG = "ControlActivity"
+
+        // The CLI's actionStart, actionStop and actionLaunch mirror these, and its activityClass this class.
         const val ACTION_START = "dev.nickolaj.pocketnix.action.START"
         const val ACTION_STOP = "dev.nickolaj.pocketnix.action.STOP"
         const val ACTION_LAUNCH = "dev.nickolaj.pocketnix.action.DEBUG_LAUNCH"
