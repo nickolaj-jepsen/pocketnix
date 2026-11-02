@@ -1,19 +1,19 @@
-# Boots the example's AVF disk image (avf.enable on, unlike test.nix) under
-# qemu-system-aarch64 in the build sandbox, through the hvc0 autologin: the
-# system must reach `running`, and a real `switch` must install the boot
-# loader, as every update on the phone does. TCG only, so it runs anywhere.
+# Boots an AVF disk image (avf.enable on, unlike test.nix) in the build
+# sandbox, in `qemu-machine.nix`'s machine, through the hvc0 autologin: the
+# system must reach `running` with zram swap on, and a real `switch` must
+# install the boot loader, as every update on the phone does. TCG only, so it
+# runs anywhere. `avf-boot` boots the example's image. `prompt` is a Tcl
+# regex matching the autologin's shell prompt.
 {
+  lib,
   runCommand,
-  qemu,
+  callPackage,
   expect,
+  name,
   image,
+  prompt,
 }:
-runCommand "pocketnix-avf-boot" {nativeBuildInputs = [qemu expect];} ''
-  cp --sparse=always ${image}/*.raw disk.img
-  chmod u+w disk.img
-  # Room for first boot's partition grow.
-  truncate -s 8G disk.img
-  truncate -s 64M vars.fd
+runCommand "pocketnix-${name}" {nativeBuildInputs = [expect];} ''
   cat > boot.exp <<'EOF'
   set timeout 1800
   # The console's lines end in \r, which Nix's log shows as empty: keep it in a file.
@@ -25,16 +25,10 @@ runCommand "pocketnix-avf-boot" {nativeBuildInputs = [qemu expect];} ''
       timeout { send_error "$tag timed out\n"; exit 1 }
     }
   }
-  # acpi=off: Google's kernel has no ACPI, so edk2 must hand it QEMU's device tree.
-  spawn qemu-system-aarch64 -M virt,acpi=off -cpu max -smp 2 -m 2048 \
-    -drive if=pflash,format=raw,readonly=on,file=${qemu}/share/qemu/edk2-aarch64-code.fd \
-    -drive if=pflash,format=raw,file=vars.fd \
-    -drive if=none,id=disk,file=disk.img,format=raw -device virtio-blk-pci,drive=disk \
-    -device virtio-serial-pci -chardev stdio,id=con,signal=off -device virtconsole,chardev=con \
-    -nic user,model=virtio-net-pci -display none -serial null -monitor none
-  # The autologin's prompt.
+  spawn ${lib.getExe (callPackage ./qemu-machine.nix {})} ${image} . \
+    -smp 2 -chardev stdio,id=con,signal=off -monitor none
   expect {
-    -re {@[^ ]+:~\]\$} {}
+    -re {${prompt}} {}
     timeout { send_error "no shell on hvc0\n"; exit 1 }
     eof { send_error "QEMU exited before a shell\n"; exit 1 }
   }
