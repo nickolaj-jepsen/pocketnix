@@ -68,7 +68,7 @@ empty ones so it stays sparse:
 nix build .#example-image
 img=$(echo result/*.raw) size=$(stat -L -c %s result/*.raw)
 d=/data/local/tmp/pn
-mib=32 # provision's chunkSize
+mib=32
 adb shell mkdir -p $d
 adb shell truncate -s "$size" $d/disk.img
 for ((i = 0; i * (mib << 20) < size; i++)); do
@@ -164,52 +164,31 @@ pocketnix install --debug app/build/outputs/apk/debug/app-debug.apk
 pocketnix install --debug --restore    # back to the build the phone had
 ```
 
-`install` never touches the VM's disk. Replacing the app kills its process,
-and the VM dies with it as if the power were cut, so a running VM is stopped
-first: `install` sends `ControlActivity` a STOP and waits until the app's
-status says the guest is down. Then it installs over the old build,
-re-grants the AVF permissions, and starts the VM again if it was running.
-That START carries no extras, so the settings saved in the app stay as they
-were.
+Replacing the app kills its process, and the VM dies with it as if the power
+were cut, which is why `install` stops a running VM first. The START that brings
+it back carries no extras, so the settings saved in the app stay as they were.
 
-Before the first swap, `install` pulls the installed APK into Go's
-`os.UserCacheDir()`, under `pocketnix/backup/<hash of ro.serialno>/<package>.apk`:
-the phone's own serial, because adb's changes with the connection. Later
-installs leave that backup alone, so after any number of dev builds
-`--restore` brings back the one the phone started with, over USB or Wi-Fi.
-`--restore` reinstalls it, deletes it and starts the VM. It works over a build
-too broken to answer: when the app's status call fails, it goes ahead unless
-adb can't reach the phone or a `crosvm` process runs for the app. A normal
-install refuses as soon as that call fails.
+The backup goes in Go's `os.UserCacheDir()`, under `pocketnix/backup`, by the
+phone's own serial (`backupPath`), so `--restore` finds it over USB or Wi-Fi. It
+also works over a build too broken to answer, unless a VM still runs for it. A
+normal install refuses as soon as the app's status call fails.
 
-When the install fails, `install` compares `pm path` before and after, which
-changes with every install. If it didn't change, nothing was replaced: `install`
-starts the VM again if it was running, and removes a backup this run made. If
-the app was replaced, or the phone can't say (or a `pm grant` failed after the
-install), the VM stays stopped, the backup stays, and the error names the
-`--restore` command that undoes the swap. A build signed with another key is
-refused without replacing anything, and getting past that takes an uninstall,
-which deletes the VM's disk image and so everything in the guest: `install`
-leaves that to you.
+When an install fails, its error says what it left behind and, if the app may
+have been replaced, names the `--restore` command that undoes the swap. A build
+signed with another key is refused without replacing anything, and getting past
+that takes an uninstall, which deletes the VM's disk image and so everything in
+the guest: `install` leaves that to you.
 
 Android refuses `install -r -d` to downgrade an app unless the installed build
 or the phone's OS is debuggable. That rules out going back from a newer release
-build on a user build's phone, so `install` compares versionCodes first: an
-install or a `--restore` that would be refused stops before anything changes,
-and an install of a newer release APK says when it closes off `--restore`. What
-it can't read, it leaves to adb.
-
-It also refuses, before stopping anything, an APK of the other package than the
-one it targets (`--debug`, which would replace that build and kill its VM), a
-split install and an APK too big for one pull (`maxPull`, for the USB transfer
-trap in `AGENTS.md`).
+build on a user build's phone, so such an install or `--restore` stops before
+anything changes, and an install of a newer release APK warns when it closes off
+`--restore`.
 
 ## Deploying a dev build to a phone guest
 
 `pocketnix deploy` runs this checkout's agent or compositor in a phone guest
-without a new system (`pocketnix deploy -h`). It builds on the desktop, copies
-the result into the guest's store over ssh, and points the unit at it with a
-runtime drop-in, so the guest's own system comes back when it reboots:
+without a new system, until the guest reboots (`pocketnix deploy -h`):
 
 ```bash
 pocketnix deploy agent                 # over ssh to phone-usb (pocketnix ssh-proxy -h)
@@ -218,71 +197,52 @@ pocketnix deploy compositor
 pocketnix deploy --remove compositor
 ```
 
-- The agent's default build is `pocketnix-cross-aarch64`, a static agent
-  cross-compiled on x86_64, which rebuilds in seconds after a change.
-  `--native` deploys the flake's own aarch64 package instead, which an
-  aarch64 desktop needs. For a commit CI built it comes from the Cachix cache
-  when Nix accepts the flake's config (`accept-flake-config`); otherwise it
-  builds under binfmt, for minutes (the compositor's, much longer).
-- The ssh user needs passwordless sudo in the guest, and deploy refuses
-  without it. The copy runs the guest's `nix-daemon` as root and skips
-  signature checks, since the guest's Nix trusts only root and nothing built
-  here is signed; for a user who can already be root that grants nothing new.
-- Before copying, deploy asks the guest which paths of the closure it lacks,
-  prints their size, and refuses when they add up to more than
-  `deployMaxCopy`: the copy rides adb, which drops the phone on big transfers
-  (the root `AGENTS.md`'s USB trap). A guest whose system comes from another
-  nixpkgs than this flake's lacks most of a native package's closure.
-- The agent's drop-in lives under `/run/systemd/system/pocketnix-agent.service.d/`,
-  the compositor's under the user's `/run/user/<uid>/systemd/user/`, and the
-  deployed paths' GC roots under `/run/pocketnix-deploy/`; a reboot clears
-  them all. `--remove` deletes them and restarts the unit.
-- The drop-in copies the unit's ExecStart arguments as they were at deploy
-  time, so until a reboot or `--remove` a switch that changes them doesn't
-  show (the trap in `nix/AGENTS.md`). Every deploy warns about that, and about
-  a deploy already in place.
+- The agent's default build is cross-compiled on x86_64, and rebuilds in
+  seconds after a change. `--native` deploys the flake's own aarch64 package
+  instead, which an aarch64 desktop needs. For a commit CI built it comes from
+  the Cachix cache when Nix accepts the flake's config (`accept-flake-config`);
+  otherwise it builds under binfmt, for minutes (the compositor's, much longer).
+- The ssh user needs passwordless sudo in the guest: the copy runs the guest's
+  `nix-daemon` as root and skips signature checks (the trap in `nix/AGENTS.md`),
+  which grants nothing new to a user who can already be root.
+- Deploy refuses a copy whose missing paths add up to more than `deployMaxCopy`:
+  the copy rides adb, which drops the phone on big transfers (the root
+  `AGENTS.md`'s USB trap). A guest whose system comes from another nixpkgs than
+  this flake's lacks most of a native package's closure.
+- The drop-ins (`pocketnix-deploy.conf`) and the deployed paths' GC roots live
+  in `/run`, so a reboot clears them. `--remove` deletes them and restarts the
+  unit.
+- Until a reboot or `--remove`, a switch that changes the unit's ExecStart
+  arguments doesn't show (the trap in `nix/AGENTS.md`).
 - Restarting the agent ends the guest's open tabs and the ssh session, which
-  rides the agent's port forward. Deploy reconnects and checks that the unit
-  runs the deployed binary in a new invocation, which must then stay up for
-  `deploySettle` before it reports success. A timeout or a dropped ssh while
-  the guest applies the change isn't a failure yet: deploy keeps looking until
-  `deployReconnect`, and then says the guest may still apply it.
+  rides the agent's port forward. Deploy reconnects, and reports success only
+  once the deployed binary has stayed up for `deploySettle`. A dropped ssh isn't
+  a failure until `deployReconnect` runs out.
 - If the deployed agent doesn't come up, ssh goes with it, and `--remove` can't
   reach the guest either. Restart the VM from the app, or reboot from its console
   tab: the drop-in lives in `/run`, so the guest's own agent comes back.
 - Only `pocketnix-agent` changes. The user units that run `pocketnix-guest`
   keep the system's package.
-- `--ssh-config <file>` hands `-F <file>` to every ssh and `nix copy` call, so
-  the host, user and ProxyCommand can come from a config of their own. Without a
-  `User` in the config, `--host <user>@phone-usb` names the user, which for the
-  compositor has to be the guest's session user (`systemctl --user`).
+- [Pushing from a desktop](updates.md#pushing-from-a-desktop) has the ssh host
+  this expects and the user it has to log in as.
 
 ### The compositor's library rewrite
 
-The cross-built compositor, `pocketnix-compositor-cross-aarch64`, links the
-cross toolchain's glibc, libxkbcommon and gcc libraries, which no guest has:
-copied as it is, its closure is several times the compositor's own size. So
-deploy rewrites it to load the guest's libraries instead:
-
-1. It reads the binaries' loader and sonames (`DT_NEEDED`) on the desktop.
-2. It lists the lib directories of the closure of the guest's system
-   compositor, the package the unit's own ExecStart runs.
-3. For each soname it picks the directory that has it, preferring the
-   loader's own glibc, and builds `nix/deploy-rewrite.nix`, which sets the
-   binaries' interpreter and RPATH to those guest paths with patchelf.
-4. The result refers to no store path, so the copy holds the compositor's
-   own output alone. Deploy checks that before copying.
-5. In the guest, the guest's loader resolves each binary (`ld.so --list`)
-   before the unit restarts.
+The cross-built compositor links the cross toolchain's glibc and other libraries,
+which no guest has: copied as it is, its closure is several times the
+compositor's own size. So deploy rewrites its binaries to load the libraries of
+the guest's system compositor, the package the unit's own ExecStart runs
+(`deployRewrite`, `nix/deploy-rewrite.nix`). The result refers to no store path,
+so the copy holds the compositor's own output alone, and the guest's loader
+resolves each binary before the unit restarts.
 
 When the guest has no library with a soname the cross build linked, or its
 loader refuses a binary (an older glibc than the cross one, say), deploy says
-why and deploys the flake's native `pocketnix-compositor` instead, under the
-same size check. `--native` skips the rewrite.
+why and deploys the flake's native package instead, under the same size check.
+`--native` skips the rewrite.
 
-The rewritten binaries name the guest's library paths, but Nix doesn't see
-those as references, so deploy also roots the system compositor they come
-from, until a reboot or `--remove` (the trap in `nix/AGENTS.md`).
+Nix doesn't see the guest's library paths as references, so deploy also roots
+the package they come from (the trap in `nix/AGENTS.md`).
 
 The drop-in points ExecStart at the deployed package, so `pocketnix bench`
 runs its `pocketnix-gui-bench` with no flag. Restarting the compositor closes
@@ -317,11 +277,10 @@ These are the owner's, and no tool here sets them up:
 - The project's id, as `--project=<id>` on each `android device remote`
   command below, or once in `~/.androidrc` as `device remote --project <id>`.
 
-`nix/android-cli.nix` packages the launcher, which downloads the real CLI into
-`~/.android` on its first run; `android update` updates that copy. The CLI
-falls under the Android SDK terms, so it stays out of the flake's checks and
-the public cache. It sends usage data to Google unless `--no-metrics` comes
-first on the command line.
+`nix/android-cli.nix` packages the launcher, and says why it stays out of the
+flake's checks. The launcher downloads the real CLI into `~/.android` on its
+first run; `android update` updates that copy. It sends usage data to Google
+unless `--no-metrics` comes first on the command line.
 
 ### Before reserving
 
@@ -355,8 +314,7 @@ connects it again.
 Then go through these in order, cheapest finding first, and stop as soon as one
 rules the phone out:
 
-1. The probe, which runs `vm info` among its checks. A `fail` verdict ends the
-   session here:
+1. The probe. A `fail` verdict ends the session here:
 
    ```bash
    pocketnix doctor --serial <serial> --debug --record <dir>
@@ -395,8 +353,7 @@ rules the phone out:
    It took about 6.5 minutes on a Pixel 8 Pro, so don't start it with less than
    that left on the clock. A locked phone gives `ok: null` for GPU and pages,
    and so does a guest with no GUI, which is how setup leaves it without
-   `--es services gui`. `--gpu-apps` needs two ids from `dump`'s `apps=`, when
-   the guest has them.
+   `--es services gui`. `pocketnix doctor -h` has `--gpu-apps`, for the GPU step.
 
    To bring pocketnix forward, repeat the `am start` of `MainActivity`. The app
    has two launcher entries, so `resolve-activity` opens the system's chooser
