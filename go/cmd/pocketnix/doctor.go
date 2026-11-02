@@ -1437,6 +1437,16 @@ func (s *smoker) reboot() smokeStep {
 	if err != nil {
 		return stepFail(name, "opening a tab: %v", err)
 	}
+	// Cleanup has already run, so a failure here closes the tab itself.
+	fail := func(format string, args ...any) smokeStep {
+		st := stepFail(name, format, args...)
+		s.uninterrupted(func() {
+			if err := s.closeTab(tab); err != nil {
+				st.Detail += fmt.Sprintf("; its tab %d didn't close: %v", tab, err)
+			}
+		})
+		return st
+	}
 	failed := regexp.MustCompile("^" + regexp.QuoteMeta(p) + `-exit=([1-9]\d*)\s*$`)
 	var status []string
 	// The agent goes before the VM stops, and the phase with it; small dumps
@@ -1454,19 +1464,19 @@ func (s *smoker) reboot() smokeStep {
 	})
 	switch {
 	case status != nil:
-		return stepFail(name, "systemctl reboot exited %s (and sudo -n)", status[1])
+		return fail("systemctl reboot exited %s (and sudo -n)", status[1])
 	case err != nil:
-		return stepFail(name, "the VM stayed Running after systemctl reboot: %v", err)
+		return fail("the VM stayed Running after systemctl reboot: %v", err)
 	}
 	if _, _, err := s.ctl.waitDump(s.ctx, phaseRunning, smokeTimes.boot); err != nil {
-		return stepFail(name, "the guest went down, but its agent didn't answer again: %v", err)
+		return fail("the guest went down, but its agent didn't answer again: %v", err)
 	}
 	took := time.Since(start).Round(time.Second)
 	if console, err = s.ctl.dump(0, transcriptRows); err != nil {
-		return stepFail(name, "reading the console: %v", err)
+		return fail("reading the console: %v", err)
 	}
 	if countLine(console, 0, rebootLine) <= before {
-		return stepFail(name, "the agent answered again in %s, but the console has no new %q: the app didn't see a reboot", took, rebootLine)
+		return fail("the agent answered again in %s, but the console has no new %q: the app didn't see a reboot", took, rebootLine)
 	}
 	if err := s.closeTab(tab); err != nil {
 		return stepFail(name, "rebooted, Running again in %s, but its ended tab %d didn't close: %v", took, tab, err)
