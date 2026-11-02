@@ -694,16 +694,18 @@ func runSmoke(ctx context.Context, dev adb.Device, pkg string, gpuApps []string,
 	run([]string{"notification"}, one(s.notify))
 	run([]string{"inhibitor"}, one(s.inhibit))
 	run([]string{"gpu", "pages"}, s.gpu)
-	interrupted := s.ctx.Err() != nil
-	s.ctx = context.Background()
 	fmt.Fprintf(progress, "smoke: cleanup\n")
-	steps = append(steps, s.cleanup())
-	if interrupted {
-		steps = append(steps, stepSkip("reboot", "interrupted"))
-	} else {
-		run([]string{"reboot"}, one(s.reboot))
-	}
+	s.uninterrupted(func() { steps = append(steps, s.cleanup()) })
+	run([]string{"reboot"}, one(s.reboot))
 	return steps
+}
+
+// uninterrupted runs f with s's waits outlasting an interrupt.
+func (s *smoker) uninterrupted(f func()) {
+	ctx := s.ctx
+	defer func() { s.ctx = ctx }()
+	s.ctx = context.Background()
+	f()
 }
 
 // smokeVM is what a dump says about the VM.
@@ -1425,6 +1427,10 @@ func (s *smoker) reboot() smokeStep {
 		return stepFail(name, "reading the console: %v", err)
 	}
 	before := countLine(console, 0, rebootLine)
+	// That read can take seconds, and past here the guest goes down.
+	if s.ctx.Err() != nil {
+		return stepSkip(name, "interrupted")
+	}
 	p := s.marker()
 	start := time.Now()
 	tab, err := s.start(p, rebootScript)
