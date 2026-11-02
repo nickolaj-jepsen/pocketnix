@@ -33,7 +33,8 @@ The cross-built compositor is rewritten to load the guest's own libraries;
 when the guest lacks one, deploy takes the native package instead and says so.
 
 flags:
-  --host <ssh host>    the guest, as ssh names it (default phone-usb)
+  --host <ssh host>    the guest, as ssh names it, with <user>@ if its config has
+                       no User (default phone-usb)
   --ssh-config <file>  an ssh config for every ssh and nix copy call
   --flake <ref>        the flake to build from (default: this checkout's git toplevel)
   --native             build the flake's own aarch64 package instead of cross-building

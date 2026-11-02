@@ -21,10 +21,11 @@ local port to the app's port forward on the phone's 127.0.0.1, and stdin and
 stdout are spliced to it. In ~/.ssh/config:
 
   Host phone-usb
+    User <user>
     HostKeyAlias <host>
     ProxyCommand pocketnix ssh-proxy
 
-then ssh <user>@phone-usb, pocketnix deploy, or a push from a desktop
+then ssh phone-usb, pocketnix deploy, or a push from a desktop
 (docs/updates.md, "Pushing from a desktop").
 
 flags:
