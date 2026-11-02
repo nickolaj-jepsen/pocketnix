@@ -142,6 +142,18 @@ class ControlProvider : ContentProvider() {
 
                 "offers" -> out.putString("offers", encode(vm.offers.value.describe()))
 
+                "self-limiter" -> out.putString(
+                    "output",
+                    URLEncoder.encode(
+                        when (arg) {
+                            "status" -> SelfLimiter.status()
+                            "ignore" -> SelfLimiter.ignoreSelf()
+                            else -> error("self-limiter takes status or ignore")
+                        },
+                        "UTF-8"
+                    )
+                )
+
                 "offer" -> {
                     val port = arg?.toIntOrNull() ?: error("offer needs a guest port")
                     val allow = when (extras?.getString("answer")) {

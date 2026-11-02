@@ -41,12 +41,15 @@ fun exemptHiddenApis(): Boolean = hiddenApiExemption
 // selected layout is InputManager's hidden API. Each call replaces the list: name them all here.
 private val hiddenApiExemption: Boolean by lazy {
     runCatching {
-        HiddenApiBypass.addHiddenApiExemptions(
+        val always = arrayOf(
             "Landroid/system/virtualmachine/",
             "Landroid/system/virtualizationservice/",
             "Landroid/hardware/input/",
             "Landroid/view/InputDevice;"
         )
+        // SelfLimiter's, which release builds don't reach.
+        val debug = arrayOf("Landroid/os/ServiceManager;", "Landroid/os/IBinder;", "Landroid/os/ShellCallback;")
+        HiddenApiBypass.addHiddenApiExemptions(*(if (BuildConfig.DEBUG) always + debug else always))
     }.getOrElse {
         Log.w("PocketnixApp", "hidden API exemption failed", it)
         false
