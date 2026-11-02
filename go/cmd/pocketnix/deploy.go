@@ -4,12 +4,16 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"debug/elf"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -24,6 +28,9 @@ const deployUsage = `usage: pocketnix deploy [--host <ssh host>] [--ssh-config <
 Builds a component on this machine and runs it in a phone guest until the
 guest reboots, through a runtime systemd drop-in; the system's own build
 comes back on reboot or with --remove. Nothing is built in the guest.
+
+The cross-built compositor is rewritten to load the guest's own libraries;
+when the guest lacks one, deploy takes the native package instead and says so.
 
 flags:
   --host <ssh host>    the guest, as ssh names it (default phone-usb)
@@ -52,11 +59,20 @@ const (
 	// deployAttempt bounds one ssh call; deployConnectSecs is ssh's ConnectTimeout.
 	deployAttempt     = 30 * time.Second
 	deployConnectSecs = 10
+	// deployMaxCopy bounds what one deploy adds to the guest's store: the copy rides
+	// adb, whose bulk USB transfers drop the device after ~100–200 MB, and a big
+	// closure can swap a small guest.
+	deployMaxCopy = 64 << 20
 )
 
-// deployGuestRoot prefixes the guest paths deploy names itself (the roots and the
-// drop-ins): empty on a real guest, a model guest's directory in the tests.
+// deployGuestRoot prefixes the guest paths deploy reads or names itself (the
+// store, the roots and the drop-ins): empty on a real guest, a model guest's
+// directory in the tests.
 var deployGuestRoot = ""
+
+// deployReadELF reads what a package's binaries need to load; the tests swap it
+// for canned answers.
+var deployReadELF = readELFNeeds
 
 // deployComponent is a unit deploy swaps a binary in.
 type deployComponent struct {
@@ -68,6 +84,9 @@ type deployComponent struct {
 	exe string
 	// cross and native are the flake attributes that build it.
 	cross, native string
+	// rewrite marks a cross build linked against cross libraries the guest
+	// lacks: deploy points its binaries at the guest's own (deployRewrite).
+	rewrite bool
 }
 
 var deployComponents = []deployComponent{
@@ -75,7 +94,11 @@ var deployComponents = []deployComponent{
 		name: "agent", unit: "pocketnix-agent.service", exe: "pocketnix-agent",
 		cross: "pocketnix-cross-aarch64", native: "packages.aarch64-linux.pocketnix",
 	},
-	{name: "compositor", unit: "pocketnix-compositor.service", user: true, exe: "pocketnix-compositor"},
+	{
+		name: "compositor", unit: "pocketnix-compositor.service", user: true, exe: "pocketnix-compositor",
+		cross: "pocketnix-compositor-cross-aarch64", native: "packages.aarch64-linux.pocketnix-compositor",
+		rewrite: true,
+	},
 }
 
 func deployComponentNamed(name string) deployComponent {
@@ -117,6 +140,12 @@ func (c deployComponent) root() string {
 	return adb.ShellQuote(deployGuestRoot + deployRoots + "/" + c.name)
 }
 
+// libsRoot roots the system package a rewritten build loads its libraries from:
+// they aren't Nix references of the deployed path, so its own root keeps none.
+func (c deployComponent) libsRoot() string {
+	return adb.ShellQuote(deployGuestRoot + deployRoots + "/" + c.name + "-libs")
+}
+
 type deployOpts struct {
 	host, sshConfig, flake string
 	native, remove         bool
@@ -156,9 +185,6 @@ func runDeploy(args []string) error {
 		return err
 	}
 	g := deployGuest{host: o.host, sshConfig: o.sshConfig}
-	if !o.remove && deployComponentNamed(o.components[0]).cross == "" {
-		return fmt.Errorf("deploy %s: not implemented yet", o.components[0])
-	}
 	if err := g.checkSudo(); err != nil {
 		return err
 	}
@@ -186,20 +212,17 @@ func deploy(o *deployOpts, g deployGuest, c deployComponent) error {
 	}
 	fmt.Fprintf(o.log, "warning: the deployed %s keeps %s's current ExecStart arguments: a switch that changes them takes effect only after a reboot or --remove\n", c.name, c.unit)
 
-	installable, err := deployInstallable(o, c)
+	flake, err := deployFlake(o)
 	if err != nil {
 		return err
 	}
-	out, err := nixBuild(installable)
+	out, libs, err := deployBuild(o, g, c, st, flake)
 	if err != nil {
 		return err
 	}
 	exe := out + "/bin/" + c.exe
 	execStart, err := swapExecStart(st.execStart, c, exe)
 	if err != nil {
-		return err
-	}
-	if err := g.copy(out); err != nil {
 		return err
 	}
 
@@ -209,15 +232,20 @@ func deploy(o *deployOpts, g deployGuest, c deployComponent) error {
 		"ExecStart=",
 		"ExecStart=" + execStart,
 	}, "\n") + "\n"
+	libsRoot := fmt.Sprintf("sudo -n rm -f %s", c.libsRoot())
+	if libs != "" {
+		libsRoot = fmt.Sprintf("sudo -n nix-store --realise %s --add-root %s >/dev/null", adb.ShellQuote(libs), c.libsRoot())
+	}
 	script := fmt.Sprintf(`set -e
 sudo -n mkdir -p %[1]s
 sudo -n nix-store --realise %[2]s --add-root %[3]s >/dev/null
+%[10]s
 %[4]smkdir -p %[5]s
 printf %%s %[6]s | %[4]stee %[7]s >/dev/null
 %[8]s daemon-reload
 %[8]s --no-block restart %[9]s
 `, adb.ShellQuote(deployGuestRoot+deployRoots), adb.ShellQuote(out), c.root(), c.sudo(),
-		c.dropInDir(), adb.ShellQuote(dropIn), c.dropIn(), c.systemctl(), adb.ShellQuote(c.unit))
+		c.dropInDir(), adb.ShellQuote(dropIn), c.dropIn(), c.systemctl(), adb.ShellQuote(c.unit), libsRoot)
 	// The restart may cut this session before it answers.
 	if _, err := g.run(script); err != nil && !errors.Is(err, errGuestUnreachable) {
 		return err
@@ -229,6 +257,279 @@ printf %%s %[6]s | %[4]stee %[7]s >/dev/null
 	return nil
 }
 
+// deployBuild builds the component and copies it into the guest's store. It
+// returns the deployed store path, and for a rewritten build the guest's
+// system package whose closure holds the libraries it loads.
+func deployBuild(o *deployOpts, g deployGuest, c deployComponent, st deployState, flake string) (out, libs string, err error) {
+	attr := c.cross
+	if o.native {
+		attr = c.native
+	} else if c.rewrite {
+		out, libs, err = deployRewrite(o, g, c, st, flake)
+		var fallback *deployFallback
+		if !errors.As(err, &fallback) {
+			return out, libs, err
+		}
+		fmt.Fprintf(o.log, "%s: %v: deploying the native %s instead\n", o.host, err, c.native)
+		attr = c.native
+	}
+	out, err = deployNixBuild(flake + "#" + attr)
+	if err != nil {
+		return "", "", err
+	}
+	if err := g.copy(o, out); err != nil {
+		return "", "", err
+	}
+	return out, "", nil
+}
+
+// deployFallback is a reason the rewritten build can't run in the guest.
+type deployFallback struct{ reason string }
+
+func (f *deployFallback) Error() string { return f.reason }
+
+// deployRewrite cross-builds the component, then rewrites its binaries to load
+// the guest's own loader and libraries, those of the system package the unit
+// runs, so the copy holds the component's own output alone. A guest that lacks a
+// library, or whose loader refuses the result, gives a *deployFallback.
+func deployRewrite(o *deployOpts, g deployGuest, c deployComponent, st deployState, flake string) (out, libs string, err error) {
+	cross, err := deployNixBuild(flake + "#" + c.cross)
+	if err != nil {
+		return "", "", err
+	}
+	needs, err := deployReadELF(cross + "/bin")
+	if err != nil {
+		return "", "", err
+	}
+	system, _, _ := strings.Cut(st.execStart, " ")
+	libs = storePathOf(system)
+	have, err := g.libraries(libs)
+	if err != nil {
+		return "", "", err
+	}
+	interp, rpath, err := matchGuestLibs(needs, have)
+	if err != nil {
+		return "", "", err
+	}
+	fmt.Fprintf(o.log, "%s: rewriting the cross build to load %s's libraries from %s\n", o.host, path.Base(libs), strings.Join(rpath, ":"))
+	out, err = deployNixBuild("--impure", "--expr", rewriteExpr(flake, c.cross, interp, rpath))
+	if err != nil {
+		return "", "", err
+	}
+	closure, err := localClosure(out)
+	if err != nil {
+		return "", "", err
+	}
+	for _, p := range closure {
+		if p.path != out {
+			return "", "", fmt.Errorf("the rewritten %s still refers to %s, which its copy would carry along", path.Base(out), p.path)
+		}
+	}
+	if err := g.copy(o, out); err != nil {
+		return "", "", err
+	}
+	if err := g.checkLoads(interp, out, needs.bins); err != nil {
+		return "", "", err
+	}
+	return out, libs, nil
+}
+
+// elfNeeds is what a package's binaries need from the system to load.
+type elfNeeds struct {
+	// bins names the binaries.
+	bins []string
+	// interp is the dynamic loader's file name, the same for every binary.
+	interp string
+	// needed is the sonames the binaries link (DT_NEEDED), each once.
+	needed []string
+}
+
+func readELFNeeds(dir string) (elfNeeds, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return elfNeeds{}, err
+	}
+	var n elfNeeds
+	seen := map[string]bool{}
+	for _, e := range entries {
+		p := filepath.Join(dir, e.Name())
+		f, err := elf.Open(p)
+		if err != nil {
+			return elfNeeds{}, err
+		}
+		interp := ""
+		for _, prog := range f.Progs {
+			if prog.Type == elf.PT_INTERP {
+				b, err := io.ReadAll(prog.Open())
+				if err != nil {
+					f.Close()
+					return elfNeeds{}, fmt.Errorf("%s: %w", p, err)
+				}
+				interp = path.Base(string(bytes.TrimRight(b, "\x00")))
+			}
+		}
+		needed, err := f.ImportedLibraries()
+		f.Close()
+		if err != nil {
+			return elfNeeds{}, fmt.Errorf("%s: %w", p, err)
+		}
+		if interp == "" || (n.interp != "" && interp != n.interp) {
+			return elfNeeds{}, fmt.Errorf("%s: its loader %q isn't the package's one %q", p, interp, n.interp)
+		}
+		n.interp = interp
+		n.bins = append(n.bins, e.Name())
+		for _, s := range needed {
+			if !seen[s] {
+				seen[s] = true
+				n.needed = append(n.needed, s)
+			}
+		}
+	}
+	if len(n.bins) == 0 {
+		return elfNeeds{}, fmt.Errorf("%s has no binaries", dir)
+	}
+	return n, nil
+}
+
+// guestLib is a file in the lib directory of a store path in the guest.
+type guestLib struct{ path, file string }
+
+// matchGuestLibs picks the guest's loader and the library directories that
+// supply every soname needed, from libs in closure order. A soname the loader's
+// own directory has comes from there, so libc and the loader match. A missing
+// one gives a *deployFallback.
+func matchGuestLibs(n elfNeeds, libs []guestLib) (interp string, rpath []string, err error) {
+	loaderDir := ""
+	for _, l := range libs {
+		if l.file == n.interp {
+			loaderDir = l.path + "/lib"
+			break
+		}
+	}
+	if loaderDir == "" {
+		return "", nil, &deployFallback{fmt.Sprintf("the guest's system package has no loader %s", n.interp)}
+	}
+	var missing []string
+	for _, s := range n.needed {
+		dir := ""
+		for _, l := range libs {
+			if l.file == s && (dir == "" || l.path+"/lib" == loaderDir) {
+				dir = l.path + "/lib"
+			}
+		}
+		switch {
+		case dir == "":
+			missing = append(missing, s)
+		case !contains(rpath, dir):
+			rpath = append(rpath, dir)
+		}
+	}
+	if len(missing) > 0 {
+		return "", nil, &deployFallback{fmt.Sprintf("the guest's system package has no %s", strings.Join(missing, ", "))}
+	}
+	return loaderDir + "/" + n.interp, rpath, nil
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// guestStorePath is a store path or a file in one, as the guest names them; it
+// holds no character a Nix string or a shell word would treat specially.
+var guestStorePath = regexp.MustCompile(`^/nix/store/[0-9a-z]{32}-[0-9A-Za-z+._?=-]+(/[0-9A-Za-z+._?=-]+)*$`)
+
+// rewriteExpr is a Nix expression for nix/deploy-rewrite.nix applied to the
+// flake's attr, loading interp and rpath.
+func rewriteExpr(flake, attr, interp string, rpath []string) string {
+	quoted := make([]string, len(rpath))
+	for i, d := range rpath {
+		quoted[i] = nixString(d)
+	}
+	return fmt.Sprintf(`let
+  flake = builtins.getFlake %s;
+  pkgs = flake.inputs.nixpkgs.legacyPackages.${builtins.currentSystem};
+in
+  pkgs.callPackage "${flake}/nix/deploy-rewrite.nix" {
+    package = flake.packages.${builtins.currentSystem}.%s;
+    interpreter = %s;
+    rpath = [%s];
+  }`, nixString(flake), attr, nixString(interp), strings.Join(quoted, " "))
+}
+
+// nixString quotes s as a Nix string literal.
+func nixString(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `${`, `\${`)
+	return `"` + r.Replace(s) + `"`
+}
+
+// storePathOf is the store path a file in the store is in.
+func storePathOf(p string) string {
+	parts := strings.SplitN(p, "/", 5)
+	if len(parts) < 4 {
+		return p
+	}
+	return strings.Join(parts[:4], "/")
+}
+
+func deployFlake(o *deployOpts) (string, error) {
+	if o.flake == "" {
+		out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+		if err != nil {
+			return "", fmt.Errorf("--flake: this directory isn't in a git checkout: %w", err)
+		}
+		return strings.TrimSpace(string(out)), nil
+	}
+	// builtins.getFlake needs an absolute path.
+	if fi, err := os.Stat(o.flake); err == nil && fi.IsDir() {
+		return filepath.Abs(o.flake)
+	}
+	return o.flake, nil
+}
+
+// deployNixBuild builds with nix build's args and returns the one output path.
+func deployNixBuild(args ...string) (string, error) {
+	var out bytes.Buffer
+	cmd := exec.Command("nix", append([]string{"build", "--no-link", "--print-out-paths"}, args...)...)
+	cmd.Stdout, cmd.Stderr = &out, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("nix build %s: %w", args[len(args)-1], err)
+	}
+	return strings.TrimSpace(out.String()), nil
+}
+
+type storePathSize struct {
+	path string
+	size int64
+}
+
+// localClosure is a local store path's closure, with each path's NAR size.
+func localClosure(p string) ([]storePathSize, error) {
+	var out, stderr bytes.Buffer
+	cmd := exec.Command("nix", "path-info", "--recursive", "--size", p)
+	cmd.Stdout, cmd.Stderr = &out, &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("nix path-info %s: %w: %s", p, err, strings.TrimSpace(stderr.String()))
+	}
+	var closure []storePathSize
+	for _, line := range strings.Split(out.String(), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 2 {
+			continue
+		}
+		size, err := strconv.ParseInt(f[1], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("nix path-info %s: %q: %w", p, line, err)
+		}
+		closure = append(closure, storePathSize{f[0], size})
+	}
+	return closure, nil
+}
+
 func removeDeploy(o *deployOpts, g deployGuest, c deployComponent) error {
 	st, err := g.state(c)
 	if err != nil {
@@ -238,7 +539,7 @@ func removeDeploy(o *deployOpts, g deployGuest, c deployComponent) error {
 	for _, l := range st.leftovers {
 		found = found || l.component == c.name
 	}
-	script := fmt.Sprintf("set -e\nsudo -n rm -f %s\n", c.root())
+	script := fmt.Sprintf("set -e\nsudo -n rm -f %s %s\n", c.root(), c.libsRoot())
 	if !found {
 		_, err := g.run(script)
 		if err == nil {
@@ -262,21 +563,6 @@ func removeDeploy(o *deployOpts, g deployGuest, c deployComponent) error {
 	}
 	fmt.Fprintf(o.log, "%s: %s runs the system's %s again\n", o.host, c.unit, system)
 	return nil
-}
-
-func deployInstallable(o *deployOpts, c deployComponent) (string, error) {
-	flake := o.flake
-	if flake == "" {
-		out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-		if err != nil {
-			return "", fmt.Errorf("--flake: this directory isn't in a git checkout: %w", err)
-		}
-		flake = strings.TrimSpace(string(out))
-	}
-	if o.native {
-		return flake + "#" + c.native, nil
-	}
-	return flake + "#" + c.cross, nil
 }
 
 // swapExecStart is a unit file's ExecStart value with its binary replaced by exe.
@@ -342,18 +628,90 @@ func (g deployGuest) checkSudo() error {
 	return err
 }
 
-// copy copies a store path and its closure into the guest's store, as root.
-func (g deployGuest) copy(path string) error {
-	cmd := exec.Command("nix", "copy", "--no-check-sigs", "--to", "ssh-ng://"+g.host+"?remote-program="+deployRemoteProgram, path)
+// copy copies a store path and its closure into the guest's store, as root. It
+// refuses before copying when the paths the guest lacks come to more than
+// deployMaxCopy.
+func (g deployGuest) copy(o *deployOpts, p string) error {
+	closure, err := localClosure(p)
+	if err != nil {
+		return err
+	}
+	var b strings.Builder
+	for _, q := range closure {
+		fmt.Fprintf(&b, "[ -e %s ] || echo %s\n", adb.ShellQuote(deployGuestRoot+q.path), adb.ShellQuote(q.path))
+	}
+	out, err := g.run(b.String())
+	if err != nil {
+		return err
+	}
+	lacks := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		lacks[line] = true
+	}
+	var n int
+	var size int64
+	for _, q := range closure {
+		if lacks[q.path] {
+			n++
+			size += q.size
+		}
+	}
+	mib := float64(size) / (1 << 20)
+	if size > deployMaxCopy {
+		return fmt.Errorf("copying %s would add %d paths, %.1f MiB, to %s's store, over deployMaxCopy (%d MiB): its system likely comes from another nixpkgs than the flake's", path.Base(p), n, mib, g.host, deployMaxCopy>>20)
+	}
+	fmt.Fprintf(o.log, "%s: copying %s: %.1f MiB in %d store paths the guest lacks\n", g.host, path.Base(p), mib, n)
+	cmd := exec.Command("nix", "copy", "--no-check-sigs", "--to", "ssh-ng://"+g.host+"?remote-program="+deployRemoteProgram, p)
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 	if g.sshConfig != "" {
 		// Nix splits NIX_SSHOPTS as a shell would.
 		cmd.Env = append(os.Environ(), "NIX_SSHOPTS="+strings.TrimSpace(os.Getenv("NIX_SSHOPTS")+" -F "+adb.ShellQuote(g.sshConfig)))
 	}
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("nix copy %s to %s: %w", path, g.host, err)
+		return fmt.Errorf("nix copy %s to %s: %w", p, g.host, err)
 	}
 	return nil
+}
+
+// libraries lists the files in the lib directories of a guest store path's closure.
+func (g deployGuest) libraries(p string) ([]guestLib, error) {
+	script := fmt.Sprintf(`set -e
+root=%s
+closure=$(nix-store --query --requisites %s)
+for p in $closure; do
+  for f in "$root$p"/lib/*; do
+    [ ! -e "$f" ] || echo "$p ${f##*/}"
+  done
+done
+`, adb.ShellQuote(deployGuestRoot), adb.ShellQuote(p))
+	out, err := g.run(script)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s's libraries: %w", p, err)
+	}
+	var libs []guestLib
+	for _, line := range strings.Split(out, "\n") {
+		dir, file, ok := strings.Cut(line, " ")
+		// Anything a Nix string or a shell word would treat specially is left out.
+		if ok && guestStorePath.MatchString(dir+"/lib/"+file) {
+			libs = append(libs, guestLib{dir, file})
+		}
+	}
+	return libs, nil
+}
+
+// checkLoads has the guest's loader resolve each deployed binary's libraries
+// and symbol versions; a refusal gives a *deployFallback.
+func (g deployGuest) checkLoads(interp, out string, bins []string) error {
+	var b strings.Builder
+	for _, bin := range bins {
+		fmt.Fprintf(&b, `o=$(%s --list %s 2>&1) && case $o in *"not found"*) false ;; esac || { printf '%%s\n' "$o"; exit 1; }
+`, adb.ShellQuote(deployGuestRoot+interp), adb.ShellQuote(deployGuestRoot+out+"/bin/"+bin))
+	}
+	out, err := g.run(b.String())
+	if err != nil && !errors.Is(err, errGuestUnreachable) {
+		return &deployFallback{fmt.Sprintf("the guest's loader refuses the rewritten build: %s", strings.TrimSpace(out))}
+	}
+	return err
 }
 
 type deployLeftover struct{ component, dropIn string }
