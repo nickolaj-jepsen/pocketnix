@@ -357,18 +357,22 @@ func TestDoctorCaps(t *testing.T) {
 	}
 }
 
-// fastSmoke shortens smoke's waits, for a fake device that answers at once.
-func fastSmoke(t *testing.T) {
-	poll, times := controlPoll, smokeTimes
-	t.Cleanup(func() { controlPoll, smokeTimes = poll, times })
+// shortenSmoke sets smoke's waits for a fake device that answers at once.
+func shortenSmoke() {
 	controlPoll = 5 * time.Millisecond
 	s := time.Second
-	smokeTimes.cmd, smokeTimes.pty, smokeTimes.offer, smokeTimes.notify, smokeTimes.wake = s, s, s, s, s
-	smokeTimes.window, smokeTimes.frames, smokeTimes.gone, smokeTimes.exit = s, s, s, s
+	// Unkeyed, so that a new wait doesn't compile until it's shortened here too.
+	smokeTimes = smokeWaits{s, s, s, s, s, s, s, s, s, s, s, s, s}
 	smokeTimes.ptyPoll = controlPoll
 	// outputState waits this long once, between its two reads.
 	smokeTimes.exit = 50 * time.Millisecond
-	smokeTimes.forward, smokeTimes.reboot, smokeTimes.boot = s, s, s
+}
+
+// fastSmoke is shortenSmoke for one test.
+func fastSmoke(t *testing.T) {
+	poll, times := controlPoll, smokeTimes
+	t.Cleanup(func() { controlPoll, smokeTimes = poll, times })
+	shortenSmoke()
 }
 
 // cannedPath is the state path of the shell command's canned answer, for a reaction to write.
