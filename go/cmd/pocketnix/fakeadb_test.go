@@ -66,6 +66,10 @@ func fakeADB(args []string) int {
 		serial, args = args[1], args[2:]
 	}
 	devPath := func(p string) string { return filepath.Join(state, "device", p) }
+	if _, err := os.Stat(filepath.Join(state, "offline")); err == nil {
+		fmt.Fprintln(os.Stderr, "adb: device offline")
+		return 1
+	}
 	switch args[0] {
 	case "get-state":
 		if _, err := os.Stat(filepath.Join(state, "get-state-fails")); err == nil {
@@ -81,6 +85,9 @@ func fakeADB(args []string) int {
 		if b, err := os.ReadFile(filepath.Join(state, "install-fails")); err == nil {
 			fmt.Println("Performing Streamed Install")
 			fmt.Println(strings.TrimSpace(string(b)))
+			if _, err := os.Stat(filepath.Join(state, "install-drops")); err == nil {
+				os.WriteFile(filepath.Join(state, "offline"), nil, 0o644)
+			}
 			return 1
 		}
 		b, err := os.ReadFile(local)
@@ -100,6 +107,10 @@ func fakeADB(args []string) int {
 			logEvent("vm killed")
 		}
 		setFakeRunning(state, false)
+		if b, err := os.ReadFile(filepath.Join(state, "install-fails-late")); err == nil {
+			fmt.Println(strings.TrimSpace(string(b)))
+			return 1
+		}
 		fmt.Println("Success")
 	case "uninstall":
 		logEvent("uninstall %s", strings.Join(args[1:], " "))
@@ -541,8 +552,29 @@ func (d *fakeDevice) installedAPK() []byte {
 // failInstalls makes every adb install fail with msg (pm's "Failure [...]" line).
 func (d *fakeDevice) failInstalls(msg string) { d.write("install-fails", []byte(msg)) }
 
-// allowInstalls undoes failInstalls.
-func (d *fakeDevice) allowInstalls() { os.Remove(filepath.Join(d.state, "install-fails")) }
+// failInstallsLate makes every adb install replace the app and then fail with msg,
+// as when the connection goes after pm committed.
+func (d *fakeDevice) failInstallsLate(msg string) { d.write("install-fails-late", []byte(msg)) }
+
+// dropAtInstall makes the next adb install fail with msg and take the phone off adb.
+func (d *fakeDevice) dropAtInstall(msg string) {
+	d.failInstalls(msg)
+	d.write("install-drops", nil)
+}
+
+// reconnect brings the phone back on adb after dropAtInstall, with installs working.
+func (d *fakeDevice) reconnect() {
+	for _, f := range []string{"offline", "install-drops"} {
+		os.Remove(filepath.Join(d.state, f))
+	}
+	d.allowInstalls()
+}
+
+// allowInstalls undoes failInstalls and failInstallsLate.
+func (d *fakeDevice) allowInstalls() {
+	os.Remove(filepath.Join(d.state, "install-fails"))
+	os.Remove(filepath.Join(d.state, "install-fails-late"))
+}
 
 // addFile puts a file on the device, e.g. /apex/com.android.virt/etc/u-boot.bin.
 func (d *fakeDevice) addFile(path string, b []byte) { d.write(filepath.Join("device", path), b) }

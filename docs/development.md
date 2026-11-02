@@ -179,10 +179,14 @@ installs leave that backup alone, so after any number of dev builds
 `--restore` brings back the one the phone started with, over USB or Wi-Fi.
 `--restore` reinstalls it, deletes it and starts the VM.
 
-When the install fails after the VM was stopped, the VM stays stopped and
-the error names the `--restore` command that undoes the swap. A build signed
-with another key fails this way too: getting past that takes an uninstall,
-which deletes the disk image, and `install` leaves that to you. It refuses,
+When the install fails, `install` compares `pm path` before and after, which
+changes with every install. If it didn't change, nothing was replaced: `install`
+starts the VM again if it was running, and removes a backup this run made. If
+the app was replaced, or the phone can't say (or a `pm grant` failed after the
+install), the VM stays stopped, the backup stays, and the error names the
+`--restore` command that undoes the swap. A build signed with another key is
+refused without replacing anything, and getting past that takes an uninstall,
+which deletes the VM's disk image: `install` leaves that to you. It refuses,
 before stopping anything, an APK of the other package than the one it targets
 (`--debug`, which would replace that build and kill its VM), a split install
 and an APK too big for one pull (`maxPull`, for the USB transfer trap in

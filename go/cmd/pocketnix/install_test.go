@@ -149,18 +149,18 @@ func TestInstallRestoreNeedsABackup(t *testing.T) {
 	}
 }
 
-// A failed swap stays recoverable with one command.
+// A failed swap that did replace the app stays recoverable with one command.
 func TestInstallFailureKeepsBackup(t *testing.T) {
 	d := newFakeDevice(t)
 	d.installAPK([]byte("the owner's build"))
 	d.setRunning(true)
-	d.failInstalls("Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match]")
+	d.failInstallsLate("Failure [INSTALL_FAILED_INTERNAL_ERROR: the connection went]")
 
 	err := runInstall([]string{"--debug", fakeAPKFile(t, "app-debug.apk", "a dev build")})
 	if err == nil || !strings.Contains(err.Error(), "--restore") {
 		t.Fatalf("got %v, want the --restore hint", err)
 	}
-	if !strings.Contains(err.Error(), "INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
+	if !strings.Contains(err.Error(), "INSTALL_FAILED_INTERNAL_ERROR") {
 		t.Errorf("got %v, want pm's reason, which adb prints on stdout", err)
 	}
 	b := d.backups()
@@ -187,6 +187,194 @@ func TestInstallFailureKeepsBackup(t *testing.T) {
 	if !d.running() {
 		t.Error("--restore didn't start the VM")
 	}
+}
+
+// A failed install that left the app as it was changes nothing: the old build
+// goes on as if the install was never tried.
+func TestInstallFailureThatReplacedNothing(t *testing.T) {
+	const reason = "Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match]"
+
+	t.Run("restarts a running VM and drops this run's backup", func(t *testing.T) {
+		d := newFakeDevice(t)
+		d.installAPK([]byte("the owner's build"))
+		d.setRunning(true)
+		d.failInstalls(reason)
+		err := runInstall([]string{"--debug", fakeAPKFile(t, "app-debug.apk", "a dev build")})
+		if err == nil || !strings.Contains(err.Error(), "INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
+			t.Fatalf("got %v, want pm's reason", err)
+		}
+		if !strings.Contains(err.Error(), "untouched") || strings.Contains(err.Error(), "--restore") {
+			t.Errorf("got %v, want it to say the old build is untouched, with no --restore advice", err)
+		}
+		if got := string(d.installedAPK()); got != "the owner's build" {
+			t.Errorf("installed APK = %q", got)
+		}
+		if !d.running() {
+			t.Error("the VM isn't running again")
+		}
+		if b := d.backups(); len(b) != 0 {
+			t.Errorf("backups = %v, want this run's gone", b)
+		}
+		ev := d.events()
+		if stop, start := eventIndex(ev, debugStop), eventIndex(ev, debugStart); stop < 0 || start < stop {
+			t.Errorf("want a STOP, then a START; events:\n%s", ev)
+		}
+		if strings.Contains(ev, "uninstall") || strings.Contains(ev, "vm killed\n") {
+			t.Errorf("events:\n%s", ev)
+		}
+	})
+
+	t.Run("keeps a backup from an earlier run", func(t *testing.T) {
+		d := newFakeDevice(t)
+		d.installAPK([]byte("the owner's build"))
+		d.setRunning(true)
+		if err := runInstall([]string{"--debug", fakeAPKFile(t, "app-debug.apk", "dev build 1")}); err != nil {
+			t.Fatal(err)
+		}
+		d.failInstalls(reason)
+		err := runInstall([]string{"--debug", fakeAPKFile(t, "app-debug.apk", "dev build 2")})
+		if err == nil || strings.Contains(err.Error(), "--restore") {
+			t.Errorf("got %v, want a failure with no --restore advice", err)
+		}
+		if got := string(d.installedAPK()); got != "dev build 1" {
+			t.Errorf("installed APK = %q", got)
+		}
+		if !d.running() {
+			t.Error("the VM isn't running again")
+		}
+		b := d.backups()
+		if len(b) != 1 {
+			t.Fatalf("backups = %v, want the earlier one", b)
+		}
+		if got, _ := os.ReadFile(b[0]); string(got) != "the owner's build" {
+			t.Errorf("backup = %q", got)
+		}
+	})
+
+	t.Run("doesn't start a VM that wasn't running", func(t *testing.T) {
+		d := newFakeDevice(t)
+		d.installAPK([]byte("the owner's build"))
+		d.failInstalls(reason)
+		err := runInstall([]string{"--debug", fakeAPKFile(t, "app-debug.apk", "a dev build")})
+		if err == nil || !strings.Contains(err.Error(), "untouched") || strings.Contains(err.Error(), "VM is stopped") {
+			t.Errorf("got %v, want it to say the old build is untouched, and nothing of a stopped VM", err)
+		}
+		if ev := d.events(); eventIndex(ev, debugStart) >= 0 || d.running() {
+			t.Errorf("started the VM; events:\n%s", ev)
+		}
+		if b := d.backups(); len(b) != 0 {
+			t.Errorf("backups = %v, want this run's gone", b)
+		}
+	})
+
+	t.Run("leaves the VM down with --no-start", func(t *testing.T) {
+		d := newFakeDevice(t)
+		d.installAPK([]byte("the owner's build"))
+		d.setRunning(true)
+		d.failInstalls(reason)
+		err := runInstall([]string{"--debug", "--no-start", fakeAPKFile(t, "app-debug.apk", "a dev build")})
+		if err == nil || !strings.Contains(err.Error(), "--no-start") {
+			t.Errorf("got %v, want it to say --no-start kept the VM down", err)
+		}
+		if d.running() {
+			t.Error("the VM runs despite --no-start")
+		}
+	})
+
+	t.Run("a phone without the app stays without it", func(t *testing.T) {
+		d := newFakeDevice(t)
+		d.failInstalls(reason)
+		err := runInstall([]string{"--debug", fakeAPKFile(t, "app-debug.apk", "a dev build")})
+		if err == nil || strings.Contains(err.Error(), "--restore") || strings.Contains(err.Error(), "VM is stopped") {
+			t.Errorf("got %v, want a failure with no advice about a backup or a stopped VM", err)
+		}
+	})
+
+	t.Run("a failed restore keeps the backup and the build it would replace", func(t *testing.T) {
+		d := newFakeDevice(t)
+		d.installAPK([]byte("the owner's build"))
+		d.setRunning(true)
+		if err := runInstall([]string{"--debug", fakeAPKFile(t, "app-debug.apk", "a dev build")}); err != nil {
+			t.Fatal(err)
+		}
+		d.failInstalls(reason)
+		err := runInstall([]string{"--debug", "--restore"})
+		if err == nil || !strings.Contains(err.Error(), "untouched") {
+			t.Errorf("got %v, want it to say the installed build is untouched", err)
+		}
+		if got := string(d.installedAPK()); got != "a dev build" {
+			t.Errorf("installed APK = %q", got)
+		}
+		if !d.running() {
+			t.Error("the VM isn't running again")
+		}
+		if b := d.backups(); len(b) != 1 {
+			t.Errorf("backups = %v, want the one it failed to restore", b)
+		}
+	})
+}
+
+// When the phone can't say what the install did, or it did replace the app, the
+// VM stays down and the backup stays, and the message says only what's known.
+func TestInstallFailureThatMayHaveReplaced(t *testing.T) {
+	const reason = "Failure [INSTALL_FAILED_INTERNAL_ERROR: the connection went]"
+
+	t.Run("the phone drops off adb", func(t *testing.T) {
+		d := newFakeDevice(t)
+		d.installAPK([]byte("the owner's build"))
+		d.setRunning(true)
+		d.dropAtInstall(reason)
+		err := runInstall([]string{"--debug", fakeAPKFile(t, "app-debug.apk", "a dev build")})
+		if err == nil || !strings.Contains(err.Error(), "--restore") || !strings.Contains(err.Error(), "VM is stopped") {
+			t.Fatalf("got %v, want the stopped VM and the --restore hint", err)
+		}
+		if strings.Contains(err.Error(), "was replaced") {
+			t.Errorf("got %v, which claims to know the app was replaced", err)
+		}
+		if d.running() {
+			t.Error("the VM runs after an install that may have replaced the app")
+		}
+		if b := d.backups(); len(b) != 1 {
+			t.Errorf("backups = %v, want one", b)
+		}
+		d.reconnect()
+		if err := runInstall([]string{"--debug", "--restore"}); err != nil {
+			t.Fatal(err)
+		}
+		if !d.running() {
+			t.Error("--restore didn't start the VM")
+		}
+	})
+
+	t.Run("a VM that wasn't running isn't called stopped", func(t *testing.T) {
+		d := newFakeDevice(t)
+		d.installAPK([]byte("the owner's build"))
+		d.failInstallsLate(reason)
+		err := runInstall([]string{"--debug", fakeAPKFile(t, "app-debug.apk", "a dev build")})
+		if err == nil || !strings.Contains(err.Error(), "--restore") || strings.Contains(err.Error(), "VM is stopped") {
+			t.Errorf("got %v, want the --restore hint, and nothing of a stopped VM", err)
+		}
+	})
+
+	t.Run("a failed grant after the install counts as replaced", func(t *testing.T) {
+		d := newFakeDevice(t)
+		d.installAPK([]byte("the owner's build"))
+		d.setRunning(true)
+		d.can("pm grant "+debugPackage+" android.permission.MANAGE_VIRTUAL_MACHINE", "Exception occurred while executing 'grant'\n", 255)
+		err := runInstall([]string{"--debug", fakeAPKFile(t, "app-debug.apk", "a dev build")})
+		if err == nil || !strings.Contains(err.Error(), "--restore") || !strings.Contains(err.Error(), "VM is stopped") {
+			t.Errorf("got %v, want the stopped VM and the --restore hint", err)
+		}
+		if d.running() {
+			t.Error("the VM runs after a failed grant")
+		}
+		if got := string(d.installedAPK()); got != "a dev build" {
+			t.Errorf("installed APK = %q", got)
+		}
+		if b := d.backups(); len(b) != 1 {
+			t.Errorf("backups = %v, want one", b)
+		}
+	})
 }
 
 // Only pm's own exit 1 means the app isn't there: anything else could hide a running VM.
@@ -434,7 +622,7 @@ func TestInstallKeepsTheSerialToItself(t *testing.T) {
 	if err := install("--restore"); err == nil || strings.Contains(err.Error(), recordHWSerial) {
 		t.Errorf("--restore without a backup: %v", err)
 	}
-	d.failInstalls("Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match]")
+	d.failInstallsLate("Failure [INSTALL_FAILED_INTERNAL_ERROR: the connection went]")
 	err := install(fakeAPKFile(t, "app-debug.apk", "a dev build"))
 	if err == nil || !strings.Contains(err.Error(), "--serial "+recordSerial) || strings.Contains(err.Error(), recordHWSerial) {
 		t.Errorf("a failed install: %v", err)
