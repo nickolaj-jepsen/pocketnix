@@ -58,6 +58,7 @@ Fast loops run inside `nix develop`.
 | `nix/`, `example/` | build the one VM test that covers it | `agent`, `gui`, and `avf-boot` for boot or image changes |
 | a module option or its description | `nix run .#options-doc` | the `options-doc` check |
 | `nix/managed/`, the module's `managed` options | the `managed` check (evaluation only) | `managed`, `managed-boot` (the base image's first boot, as a VM test), and `managed-all` (aarch64, CI builds it) |
+| the base image users download (`nix/managed/`, `nix/module.nix`'s image) | `managed-boot`, as a VM test | `base-boot`, which boots the real image: aarch64 only, so CI's aarch64 job runs it (an x86_64 host can't assemble that image, `nix/AGENTS.md`) |
 | `nix/vgpu-relinquish/`, `nix/avf-kernel/` | `nix build -L .#checks.aarch64-linux.vgpu-relinquish` | the same |
 | the wire (`go/internal/protocol`, `docs/gui-protocol.md`) | both sides' tests | the `go` and `compositor` checks, and the app's tests through `nix run .#gradle`, which run them against the real agent and compositor |
 
@@ -65,7 +66,7 @@ Then `nix fmt`.
 
 On x86_64, `nix flake check` skips the aarch64-only checks; `nix flake check
 --no-build --all-systems` (CI's first step) still evaluates them. Building one
-there goes through binfmt.
+there goes through binfmt, except `base-boot`, which can't build there.
 
 Each VM test's file under `nix/` opens with what it covers. They need KVM
 and run on x86_64; `avf-boot` boots the real image under TCG and on x86_64
