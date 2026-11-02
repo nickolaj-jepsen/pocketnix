@@ -734,17 +734,23 @@ func TestSmokeNoGPULaunchFails(t *testing.T) {
 // With its transcript's ring wrapped, the terminal joins the marker to the row
 // before or after it (TerminalRow.clear keeps mLineWrap), as a phone's 64 MiB does.
 func TestSmokePTYFindsAJoinedMarker(t *testing.T) {
-	for name, line := range map[string]string{
-		"to-the-row-before": "AAAAAAAAAAAAAAAAAAAAAAAAAAAA            ${1}-exit=0",
-		"to-the-row-after":  "${1}-exit=0                          ~ > ",
+	for name, tc := range map[string]struct{ line, want string }{
+		"own-row":           {"${1}-exit=0", "on its own row"},
+		"to-the-row-before": {"AAAAAAAAAAAAAAAAAAAAAAAAAAAA            ${1}-exit=0", "joined to the row before"},
+		"to-the-row-after":  {"${1}-exit=0                          ~ > ", "joined to the row after"},
+		"to-both":           {"AAAA    ${1}-exit=0    ~ > ", "joined to the rows before and after"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			joined := reactPTY
-			joined.Output = []string{"AAAAAAAAAAAA", line}
+			joined.Output = []string{"AAAAAAAAAAAA", tc.line}
 			smokeDevice(t, append([]fakeReaction{joined}, without(everyTool, reactPTY)...)...)
 			r, _, _ := doctorJSON(t, "--smoke")
-			if st, _ := stepNamed(r.Smoke, "pty"); st.OK == nil || !*st.OK {
+			st, _ := stepNamed(r.Smoke, "pty")
+			if st.OK == nil || !*st.OK {
 				t.Errorf("pty: %+v, want it to find the marker", st)
+			}
+			if !strings.Contains(st.Detail, tc.want) {
+				t.Errorf("pty: %q, want it to say %q", st.Detail, tc.want)
 			}
 		})
 	}

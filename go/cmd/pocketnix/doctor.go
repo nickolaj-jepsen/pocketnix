@@ -920,7 +920,7 @@ func (s *smoker) pty() smokeStep {
 	s.ptyTab = tab
 	// Unanchored: once the transcript's ring has wrapped, the terminal can join
 	// the marker to the row before or after it. The typed line has `$s` here, never digits.
-	exit := regexp.MustCompile(regexp.QuoteMeta(p) + `-exit=(\d+)`)
+	exit := regexp.MustCompile(`^(.*?)` + regexp.QuoteMeta(p) + `-exit=(\d+)(.*)$`)
 	var status []string
 	_, err = s.ctl.untilEvery(s.ctx, tab, 0, smokeTimes.pty, smokeTimes.ptyPoll, func(dump string) bool {
 		status = tabLine(dump, tab, exit)
@@ -931,8 +931,8 @@ func (s *smoker) pty() smokeStep {
 		return stepFail(name, "no %s-exit line after %s: %v; %s; %s", p, took, err, s.ptyGuest(), s.outputState(tab))
 	}
 	guest := s.ptyGuest()
-	if status[1] != "0" {
-		return stepFail(name, "the output ended with status %s; %s", status[1], guest)
+	if status[2] != "0" {
+		return stepFail(name, "the output ended with status %s; %s", status[2], guest)
 	}
 	dump, err := s.ctl.dump(tab, 1)
 	if err != nil {
@@ -945,7 +945,22 @@ func (s *smoker) pty() smokeStep {
 		return stepFail(name, "tab %d's session ended with the output", tab)
 	}
 	rate := float64(smokePTYBytes>>10) / max(took.Seconds(), 1)
-	return stepOK(name, "%d MiB of base64 seen in %s (%.0f KiB/s, read every %s); %s", smokePTYBytes>>20, took, rate, smokeTimes.ptyPoll, guest)
+	return stepOK(name, "%d MiB of base64 seen in %s (%.0f KiB/s, read every %s); %s; the marker was %s", smokePTYBytes>>20, took, rate, smokeTimes.ptyPoll, guest, markerPlace(status[1], status[3]))
+}
+
+// markerPlace says where a marker sat in its transcript line, given what came
+// before and after it there: a row joined to its neighbour shows up as text around it.
+func markerPlace(before, after string) string {
+	place := "on its own row"
+	switch b, a := strings.TrimSpace(before) != "", strings.TrimSpace(after) != ""; {
+	case b && a:
+		place = "joined to the rows before and after"
+	case b:
+		place = "joined to the row before"
+	case a:
+		place = "joined to the row after"
+	}
+	return fmt.Sprintf("%s, at offset %d in its line, with %d characters after it", place, len(before), len(strings.TrimRight(after, " ")))
 }
 
 // ptyGuest says how long the PTY command's base64 ran by the guest's clock.
