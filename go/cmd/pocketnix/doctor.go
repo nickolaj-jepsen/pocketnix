@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -120,6 +121,13 @@ func runDoctor(args []string) error {
 	} else if err := usableDevice(dev); err != nil {
 		return err
 	}
+	secrets := []string{o.serial, os.Getenv("ANDROID_SERIAL")}
+	if out, err := dev.Run("get-serialno"); err == nil {
+		secrets = append(secrets, strings.TrimSpace(out))
+	}
+	if rec != nil {
+		secrets = append(secrets, rec.secrets...)
+	}
 	r := probe(dev, o.pkg())
 	if o.smoke {
 		if rec != nil {
@@ -132,6 +140,8 @@ func runDoctor(args []string) error {
 			stop()
 		}
 	}
+	// adb's errors, which the report quotes, name the device.
+	redactStrings(reflect.ValueOf(&r), newRedactor(secrets))
 	if rec != nil {
 		rec.writeReport(r)
 	}
@@ -156,7 +166,7 @@ func runDoctor(args []string) error {
 }
 
 // probe reads every fact doctor reports from dev's shell, the app's about
-// pkg, and judges them. It reads named props only (B1).
+// pkg, and judges them. It reads named props only.
 func probe(dev adb.Device, pkg string) doctorReport {
 	r := doctorReport{
 		Schema: doctorSchema,

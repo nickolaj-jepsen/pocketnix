@@ -1,5 +1,10 @@
 package main
 
+import (
+	"reflect"
+	"strings"
+)
+
 // doctorSchema is doctorReport.Schema; bump it when a field changes meaning.
 const doctorSchema = 1
 
@@ -73,4 +78,32 @@ type smokeStep struct {
 	// OK is nil when the step didn't apply; Detail says why.
 	OK     *bool  `json:"ok"`
 	Detail string `json:"detail"`
+}
+
+// redactStrings replaces the secrets in every string v reaches through
+// pointers, structs, slices and map values. Its structs' fields must be exported.
+func redactStrings(v reflect.Value, redact *strings.Replacer) {
+	switch v.Kind() {
+	case reflect.String:
+		v.SetString(redact.Replace(v.String()))
+	case reflect.Pointer:
+		if !v.IsNil() {
+			redactStrings(v.Elem(), redact)
+		}
+	case reflect.Struct:
+		for i := range v.NumField() {
+			redactStrings(v.Field(i), redact)
+		}
+	case reflect.Slice:
+		for i := range v.Len() {
+			redactStrings(v.Index(i), redact)
+		}
+	case reflect.Map:
+		for it := v.MapRange(); it.Next(); {
+			value := reflect.New(v.Type().Elem()).Elem()
+			value.Set(it.Value())
+			redactStrings(value, redact)
+			v.SetMapIndex(it.Key(), value)
+		}
+	}
 }

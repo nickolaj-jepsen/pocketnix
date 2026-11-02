@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
@@ -56,6 +57,9 @@ func fakeADB(args []string) int {
 		f.Close()
 	}
 	serial := fakeSerial
+	if env := os.Getenv("ANDROID_SERIAL"); env != "" {
+		serial = env
+	}
 	if len(args) >= 2 && args[0] == "-s" {
 		serial, args = args[1], args[2:]
 	}
@@ -159,6 +163,13 @@ func fakeADB(args []string) int {
 			fmt.Fprintln(os.Stderr, "fake adb: shell without exit marker")
 			return 1
 		}
+		for _, drop := range fakeDrops(state) {
+			if strings.Contains(line, drop.Match) {
+				fmt.Print(drop.Stdout)
+				fmt.Fprint(os.Stderr, drop.Stderr)
+				return 1
+			}
+		}
 		out, status := fakeShell(state, line, logEvent)
 		fmt.Print(out)
 		fmt.Printf("pocketnix-exit=%d\n", status)
@@ -167,6 +178,20 @@ func fakeADB(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// fakeDrop is adb itself failing a shell command: it printed Stdout of the
+// command's output, and Stderr is its own complaint.
+type fakeDrop struct {
+	// Match is a substring of the command.
+	Match, Stdout, Stderr string
+}
+
+func fakeDrops(state string) []fakeDrop {
+	b, _ := os.ReadFile(filepath.Join(state, "drops.json"))
+	var drops []fakeDrop
+	json.Unmarshal(b, &drops)
+	return drops
 }
 
 // fakeRunning is the VM's state: the "running" state file once anything
@@ -428,6 +453,7 @@ func newFakeDevice(t *testing.T) *fakeDevice {
 	d := &fakeDevice{state: t.TempDir(), cache: t.TempDir()}
 	t.Setenv("FAKE_ADB_STATE", d.state)
 	t.Setenv("XDG_CACHE_HOME", d.cache)
+	t.Setenv("ANDROID_SERIAL", "")
 	return d
 }
 
@@ -510,6 +536,12 @@ func (d *fakeDevice) setCaps(pairs string) { d.write("caps", []byte(pairs)) }
 func (d *fakeDevice) can(cmdline, out string, status int) {
 	d.write(filepath.Join("canned", fakeCannedKey(cmdline)), []byte(out))
 	d.write(filepath.Join("canned", fakeCannedKey(cmdline)+".status"), []byte(strconv.Itoa(status)))
+}
+
+// drop makes adb fail every shell command holding match, with this output and complaint.
+func (d *fakeDevice) drop(match, stdout, stderr string) {
+	b, _ := json.Marshal(append(fakeDrops(d.state), fakeDrop{match, stdout, stderr}))
+	d.write("drops.json", b)
 }
 
 // stdoutOf runs f and returns what it wrote to os.Stdout.
