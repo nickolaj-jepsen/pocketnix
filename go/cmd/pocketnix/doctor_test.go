@@ -901,6 +901,37 @@ func TestSmokeCleanupWatchesAForwardWhoseAllowFailed(t *testing.T) {
 	}
 }
 
+// A row of the typed line that starts at a marker's text isn't what the shell printed.
+func TestSmokeIgnoresATypedLinesMarkerText(t *testing.T) {
+	wrapped := reactInhibit
+	wrapped.Output = []string{"${1}-exit=0; exit; }; systemd-inhibit --what=sleep --who=pocket"}
+	smokeDevice(t, append(without(everyTool, reactInhibit), wrapped)...)
+	steps := runSmoke(context.Background(), adb.Device{}, debugPackage, nil, io.Discard)
+	if st, _ := stepNamed(steps, "inhibitor"); st.OK == nil || *st.OK || !strings.Contains(st.Detail, "printed no") {
+		t.Errorf("inhibitor: %+v, want a failure saying it saw no exit line", st)
+	}
+}
+
+func TestSmokeReadsMarkerValues(t *testing.T) {
+	for _, tc := range []struct {
+		row, value string
+		ok         bool
+	}{
+		{"smoke-3-exit=0", "0", true},
+		{"smoke-3-end=", "", true},
+		{"smoke-3-tool=socat   ", "socat", true},
+		{"smoke-3-exit=$s'", "", false},
+		{"smoke-3-exit=0; exit; };", "", false},
+		{"smoke-3-exit=0;", "", false},
+		{"smoke-3-exit=0'", "", false},
+	} {
+		m := markerLine.FindStringSubmatch(tc.row)
+		if (m != nil) != tc.ok || (m != nil && m[3] != tc.value) {
+			t.Errorf("%q: got %q", tc.row, m)
+		}
+	}
+}
+
 func TestSmokeSkipsWithoutInputs(t *testing.T) {
 	none := func(re string) fakeReaction {
 		return fakeReaction{Typed: re, Output: []string{"${1}-tool=none", "${1}-exit=0"}}
