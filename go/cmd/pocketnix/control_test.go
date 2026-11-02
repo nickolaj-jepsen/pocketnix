@@ -181,6 +181,13 @@ func fakeHead(state string) string {
 	return fakeRunningHead
 }
 
+// fakeReboots is the guest reboots the app counted.
+func fakeReboots(state string) int {
+	b, _ := os.ReadFile(filepath.Join(state, "control", "reboots"))
+	n, _ := strconv.Atoi(string(b))
+	return n
+}
+
 // fakeBootDumps is how many dumps after a reboot show the guest booting.
 const fakeBootDumps = 3
 
@@ -239,7 +246,7 @@ type fakeReaction struct {
 	Write  map[string]string `json:"write,omitempty"`
 	Append map[string]string `json:"append,omitempty"`
 	Remove []string          `json:"remove,omitempty"`
-	// Reboot ends every terminal tab, and the console says so as AvfEngine does.
+	// Reboot ends every terminal tab, and the app counts it as AvfEngine does.
 	Reboot bool `json:"reboot,omitempty"`
 }
 
@@ -279,7 +286,7 @@ func (r fakeReaction) apply(state string, tab int, re *regexp.Regexp, s string, 
 				putFile(fakeTabPath(state, id)+".ended", "")
 			}
 		}
-		appendFile(fakeTabPath(state, 0), "[pocketnix: the guest rebooted; starting it again]\n")
+		putFile(filepath.Join(state, "control", "reboots"), strconv.Itoa(fakeReboots(state)+1))
 		putFile(filepath.Join(state, "control", "booting"), strconv.Itoa(fakeBootDumps))
 	}
 }
@@ -359,6 +366,9 @@ func fakeDump(state string, q url.Values) string {
 	}
 	var out strings.Builder
 	out.WriteString(fakeBootingHead(state) + "\n")
+	if !exists(filepath.Join(state, "control", "no-reboot-count")) {
+		fmt.Fprintf(&out, "guest reboots=%d\n", fakeReboots(state))
+	}
 	for _, id := range fakeTabs(state) {
 		if only >= 0 && id != only {
 			continue
@@ -472,6 +482,11 @@ func (d *fakeDevice) newAppModel() {
 
 // setHead replaces the model's state, theme, setup and engine lines.
 func (d *fakeDevice) setHead(head string) { putFile(filepath.Join(d.state, "control", "head"), head) }
+
+// predateRebootCount makes the model an app whose dump has no reboot count.
+func (d *fakeDevice) predateRebootCount() {
+	putFile(filepath.Join(d.state, "control", "no-reboot-count"), "")
+}
 
 // setGUI gives the model a GUI connection, with these apps in its list.
 func (d *fakeDevice) setGUI(apps ...string) {

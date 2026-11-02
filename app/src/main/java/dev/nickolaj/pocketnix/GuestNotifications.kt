@@ -122,7 +122,7 @@ class GuestNotifications(private val context: Context, private val hostname: () 
     }
 
     companion object {
-        // Tagged, so guest ids don't collide with the app's own notification ids.
+        // Tagged, so guest ids don't collide with the app's own notification ids. The CLI's guestNotificationTag mirrors it.
         const val TAG = "guest"
         const val CHANNEL = "guest"
         const val CHANNEL_LOW = "guest-low"

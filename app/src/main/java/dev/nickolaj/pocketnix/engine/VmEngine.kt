@@ -64,6 +64,9 @@ interface VmEngine {
     /** The last launch's, null before one. */
     val launched: Launched? get() = null
 
+    /** How many guest reboots this engine booted again, in this process; a stop and a later start count none. */
+    val guestReboots: Int get() = 0
+
     /** Stops the VM at once, without asking the guest. */
     fun forceStop()
 }

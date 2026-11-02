@@ -72,6 +72,7 @@ class VmService : Service() {
     @SuppressLint("WakelockTimeout") // held exactly as long as the guest's inhibitor; released on every way out
     private fun holdWake(holders: List<WakeHolder>?) {
         val lock = wakeLock ?: getSystemService(PowerManager::class.java)
+            // The CLI's wakeLockTag mirrors this tag.
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "pocketnix:guest")
             .apply { setReferenceCounted(false) }
             .also { wakeLock = it }
