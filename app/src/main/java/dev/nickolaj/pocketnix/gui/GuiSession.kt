@@ -232,6 +232,7 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
                 GuiStats.add("decodeNs", unpacked - start)
                 GuiStats.add("wireBytes", msg.commits.sumOf { it.data.size.toLong() })
                 GuiStats.add("pixelBytes", msg.commits.filter { it.buffer }.sumOf { it.pixelBytes })
+                countEncodings(msg.commits)
                 GuiStats.record("groupWork", work)
                 hints.report(work, frameNs, GuiNative.unpackTids())
             }
@@ -835,11 +836,29 @@ class GuiSession(private val app: Context, appVersion: String) : GuiLink.Listene
         GuiStats.json().put("frameNs", frameNs).put("connected", link.connected).put("windows", windows)
     }
 
+    /** Counts [commits] that carry pixels, one counter per encoding (`pagesCommits`: read from guest RAM). */
+    private fun countEncodings(commits: List<Commit>) {
+        var raw = 0L
+        var zstd = 0L
+        var pages = 0L
+        for (c in commits) {
+            if (!c.buffer) continue
+            when (c.encoding) {
+                Gui.ENCODING_PAGES -> pages++
+                Gui.ENCODING_ZSTD -> zstd++
+                else -> raw++
+            }
+        }
+        if (raw > 0) GuiStats.add("rawCommits", raw)
+        if (zstd > 0) GuiStats.add("zstdCommits", zstd)
+        if (pages > 0) GuiStats.add("pagesCommits", pages)
+    }
+
     /** Debug dumps: the connection, every window, the hash checks, the app list and the launches waited on. */
     fun dump(): List<String> = synchronized(lock) {
         listOf(
             "connected=${link.connected} ready=${_ready.value} instance=${state.instance} hashes ok=$hashesOk bad=$hashesBad",
-            "apps=${catalog.apps.size} recent=${catalog.recent.map { it.id }} launcher=${shortcuts.launcherEnabled} " +
+            "apps=${catalog.apps.map { it.id }} recent=${catalog.recent.map { it.id }} launcher=${shortcuts.launcherEnabled} " +
                 "launches=${owners.keys.map { "$it:${launches[it]?.state?.value}" }}"
         ) +
             state.windows.values.map { w ->
