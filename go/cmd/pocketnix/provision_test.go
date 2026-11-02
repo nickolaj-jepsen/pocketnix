@@ -93,16 +93,18 @@ func TestProvisionKeepsExistingDisk(t *testing.T) {
 
 	other := filepath.Join(t.TempDir(), "other.raw")
 	os.WriteFile(other, []byte("a different image"), 0o644)
+	before := len(d.events())
 	if err := provisionFor(t, "--image", other, "--apk", apk, "--no-start"); err == nil {
 		t.Error("provision replaced an existing disk without --replace")
 	}
 	if !bytes.Equal(d.disk(), want) {
 		t.Error("the existing disk changed")
 	}
+	refused := d.events()[before:]
 	t.Run("refused before installing", func(t *testing.T) {
 		t.Skip("pending: A1")
-		if n := strings.Count(d.events(), "install "); n != 1 {
-			t.Errorf("the refused run installed the app; events:\n%s", d.events())
+		if hasEvent(refused, "install ") {
+			t.Errorf("the refused run installed the app; its events:\n%s", refused)
 		}
 	})
 	if err := provisionFor(t, "--image", other, "--apk", apk, "--no-start", "--replace"); err != nil {
@@ -140,10 +142,10 @@ func TestProvisionRefusesFailingDevice(t *testing.T) {
 	img, _ := testImage(t)
 	apk := filepath.Join(t.TempDir(), "app.apk")
 	os.WriteFile(apk, []byte("apk"), 0o644)
-	if err := provisionFor(t, "--image", img, "--apk", apk, "--no-start"); err == nil {
-		t.Error("provision went ahead on a device without AVF")
+	if err := provisionFor(t, "--image", img, "--apk", apk, "--no-start"); err == nil || !strings.Contains(err.Error(), "--force") {
+		t.Errorf("got %v, want a refusal naming --force", err)
 	}
-	if strings.Contains(d.events(), "install ") {
+	if hasEvent(d.events(), "install ") {
 		t.Errorf("installed onto a failing device; events:\n%s", d.events())
 	}
 	if err := provisionFor(t, "--image", img, "--apk", apk, "--no-start", "--force"); err != nil {

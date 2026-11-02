@@ -41,7 +41,7 @@ type doctorAVF struct {
 	HypervisorVersion    *string `json:"hypervisorVersion"`
 	ApexVersion          *string `json:"apexVersion"`
 	UBoot                bool    `json:"uboot"`
-	// VMInfo is `vm info`'s output lines.
+	// VMInfo is `vm info`'s output lines; empty, not nil, when it printed none.
 	VMInfo []string `json:"vmInfo"`
 }
 
@@ -50,13 +50,15 @@ type doctorApp struct {
 	Installed   bool    `json:"installed"`
 	VersionName *string `json:"versionName"`
 	// Caps is ProvisionProvider's caps answer, nil when there's none.
-	Caps      map[string]string `json:"caps"`
-	CapsError string            `json:"capsError,omitempty"`
+	Caps map[string]string `json:"caps"`
+	// CapsError is why Caps is nil, empty when it isn't.
+	CapsError string `json:"capsError"`
 }
 
 type doctorVerdict struct {
 	// Level is one of the level* constants.
-	Level   string   `json:"level"`
+	Level string `json:"level"`
+	// Reasons is never nil, so an ok verdict prints [].
 	Reasons []string `json:"reasons"`
 }
 

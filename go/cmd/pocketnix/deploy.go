@@ -41,10 +41,8 @@ func parseDeploy(args []string) (*deployOpts, error) {
 	fs.BoolVar(&o.native, "native", false, "")
 	fs.BoolVar(&o.remove, "remove", false, "")
 	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil, errUsage
-		}
-		return nil, err
+		// flag has printed the error, or the usage for -h.
+		return nil, errUsage
 	}
 	switch {
 	case fs.NArg() == 1 && (fs.Arg(0) == "agent" || fs.Arg(0) == "compositor"):
