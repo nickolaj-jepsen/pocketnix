@@ -413,16 +413,16 @@ func (r *recording) stop() {
 	})
 }
 
-// settleVideo leaves screen.mp4 only if scrcpy got as far as recording, and
-// notes what's wrong with it. A status of 2 is a phone gone mid-run: scrcpy
-// still closes the file then, so the video up to there stays.
+// settleVideo removes screen.mp4 only if it holds nothing, and notes what's
+// wrong with it. Whatever status scrcpy failed with, what it wrote may be the
+// only video of the run, so it stays.
 func (r *recording) settleVideo() {
 	c := r.scrcpy
 	video := filepath.Join(r.dir, "screen.mp4")
 	stderr := lastBytes(c.stderr.b, recordTailBytes)
 	fi, err := os.Stat(video)
 	switch empty := err != nil || fi.Size() == 0; {
-	case c.status == 1 || empty:
+	case empty:
 		os.Remove(video)
 		r.note("no screen.mp4: scrcpy ended with %s: %s", c.result, stderr)
 	case c.status != 0:
