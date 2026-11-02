@@ -18,22 +18,33 @@ const sshProxyUsage = `usage: pocketnix ssh-proxy [--serial <serial>] [--port <p
 
 An ssh ProxyCommand reaching the guest's sshd over USB: adb forwards a free
 local port to the app's port forward on the phone's 127.0.0.1, and stdin and
-stdout are spliced to it. For a desktop push, in ~/.ssh/config:
+stdout are spliced to it. In ~/.ssh/config:
 
   Host phone-usb
     HostKeyAlias <host>
-    ProxyCommand pocketnix ssh-proxy --port 2222
+    ProxyCommand pocketnix ssh-proxy
 
-then nixos-rebuild switch --flake .#<host> --target-host <user>@phone-usb
+then ssh <user>@phone-usb, pocketnix deploy, or a push from a desktop
+(docs/updates.md, "Pushing from a desktop").
+
+flags:
+  --port <phone port>  the ssh forward's port on the phone, its
+                       pocketnix.guest.forwards.<name>.hostPort (default 2022,
+                       a managed guest's and the example's)
+  --serial <serial>    adb device to use (default: adb's only device)
 `
+
+// sshProxyDefaultPort is a managed guest's and the example's forwards.ssh.hostPort.
+const sshProxyDefaultPort = 2022
 
 func runSSHProxy(args []string) error {
 	fs := flag.NewFlagSet("ssh-proxy", flag.ContinueOnError)
 	fs.Usage = func() { fmt.Fprint(os.Stderr, sshProxyUsage) }
-	serial := fs.String("serial", "", "adb device serial (default: adb's only device)")
-	port := fs.Int("port", 2222, "the ssh forward's port on the phone (pocketnix.guest.forwards.<name>.hostPort)")
+	serial := fs.String("serial", "", "")
+	port := fs.Int("port", sshProxyDefaultPort, "")
 	if err := fs.Parse(args); err != nil {
-		return err
+		// flag has printed the error, or the usage for -h.
+		return errUsage
 	}
 	if fs.NArg() != 0 {
 		fs.Usage()
