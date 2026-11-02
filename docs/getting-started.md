@@ -173,7 +173,7 @@ adb forward tcp:2022 tcp:2022
 ssh -p 2022 alice@127.0.0.1
 ```
 
-or use `pocketnix ssh-proxy --port 2022` as an ssh `ProxyCommand` (see
+or use `pocketnix ssh-proxy` as an ssh `ProxyCommand` (see
 `pocketnix ssh-proxy -h`). A VPN in the guest, such as Tailscale, works too.
 
 ## Things to know

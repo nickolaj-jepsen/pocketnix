@@ -1153,7 +1153,7 @@ in {
       };
       pocketnix.guest.forwards.ssh = mkIf sel.services.ssh {
         guestPort = 22;
-        # The app's managed SERVICES names this port.
+        # The app's managed SERVICES and the CLI's sshProxyDefaultPort name this port.
         hostPort = 2022;
       };
       services.tailscale = mkIf sel.services.tailscale {
