@@ -107,7 +107,7 @@ func runDoctor(args []string) error {
 	if err != nil {
 		return err
 	}
-	dev := adb.Device{Serial: o.serial}
+	dev := adb.Device{Serial: o.serial, QuietErrors: true}
 	var rec *recording
 	if o.record != "" {
 		if rec, err = startRecording(o.record, dev, o.smoke); err != nil {
@@ -1061,8 +1061,10 @@ func (s *smoker) notify() smokeStep {
 		return stepFail(name, "notify-send exited %s", vals["exit"])
 	}
 	s.notification = vals["id"]
+	// Selects only this app's records and the token: other apps' text mustn't leave the phone.
+	cmdline := "dumpsys notification --noredact | grep -e " + adb.ShellQuote("NotificationRecord.*pkg="+s.pkg+" ") + " -e " + text
 	err = pollUntil(s.ctx, smokeTimes.notify, func() (bool, error) {
-		out, _, err := shellStatus(s.dev, "dumpsys notification --noredact | grep -e NotificationRecord -e android.text=")
+		out, _, err := shellStatus(s.dev, cmdline)
 		return err == nil && notificationPosted(out, s.pkg, text), err
 	})
 	if err != nil {

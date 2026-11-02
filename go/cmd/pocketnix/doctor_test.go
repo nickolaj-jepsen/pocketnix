@@ -388,8 +388,7 @@ func fastSmoke(t *testing.T) {
 func cannedPath(cmdline string) string { return filepath.Join("canned", fakeCannedKey(cmdline)) }
 
 const (
-	powerLocks    = "dumpsys power | grep -F pocketnix:guest"
-	notifications = "dumpsys notification --noredact | grep -e NotificationRecord -e android.text="
+	powerLocks = "dumpsys power | grep -F pocketnix:guest"
 	// powerHistory is what dumpsys power keeps of a wake lock after its release, as a Pixel prints it.
 	powerHistory = "  11-02 16:59:16.878 - 10200 (dev.nickolaj.pocketnix.debug) - ACQ pocketnix:guest (partial)\n  11-02 17:00:12.971 - 10200 (dev.nickolaj.pocketnix.debug) - REL pocketnix:guest\n"
 )
@@ -406,9 +405,9 @@ var (
 	reactPTY = fakeReaction{Typed: `head -c \d+ /dev/urandom \| base64; .*echo (smoke-\d+)-exit=`, Output: []string{"AAAAAAAAAAAA", "${1}-exit=0"},
 		Write: map[string]string{"control/guest-pty": "1000\n"}}
 	reactNotify = fakeReaction{Typed: `notify-send -p .*echo (smoke-\d+)-exit=\$s' sh '[^']*' '([^']+)'`, Output: []string{"${1}-id=7", "${1}-exit=0"},
-		Write: writeCanned(notifications, "  NotificationRecord(0x0abc1234: pkg=dev.nickolaj.pocketnix.debug user=UserHandle{0} id=7 tag=guest importance=3 key=0|dev.nickolaj.pocketnix.debug|7|guest|10200: Notification(channel=guest))\n        android.text=String (${2})\n", 0)}
+		Append: map[string]string{"notifications": "  NotificationRecord(0x0abc1234: pkg=dev.nickolaj.pocketnix.debug user=UserHandle{0} id=7 tag=guest importance=3 key=0|dev.nickolaj.pocketnix.debug|7|guest|10200: Notification(channel=guest))\n        android.text=String (${2})\n"}}
 	reactUnnotify = fakeReaction{Typed: `CloseNotification u "\$1"; echo (smoke-\d+)-exit=\$\?' sh '7'`, Output: []string{"${1}-exit=0"},
-		Write: writeCanned(notifications, "", 1)}
+		Write: map[string]string{"notifications": ""}}
 	reactInhibit = fakeReaction{Typed: `systemd-inhibit --what=sleep .*echo (smoke-\d+)-exit=0' sh$`, Output: []string{"${1}-pid=4242", "${1}-exit=0"},
 		Write: writeCanned(powerLocks, "    PARTIAL_WAKE_LOCK              'pocketnix:guest'                          ACQ=-1s2ms (uid=10200 pid=31337)\n", 0)}
 	reactUninhibit = fakeReaction{Typed: `kill "\$1"; echo (smoke-\d+)-exit=\$\?' sh '4242'`, Output: []string{"${1}-exit=0"},
@@ -435,7 +434,6 @@ func smokeDevice(t *testing.T, rs ...fakeReaction) *fakeDevice {
 	d.can(powerLocks, powerHistory, 0)
 	// One uid per Android user, as on a phone with a work profile or Private space.
 	d.can("pm list packages -U dev.nickolaj.pocketnix.debug", "package:dev.nickolaj.pocketnix.debug uid:10200,1010200,1110200\n", 0)
-	d.can(notifications, "", 1)
 	d.can("dumpsys power | grep -m1 mWakefulness=", "  mWakefulness=Awake\n", 0)
 	d.can("dumpsys window | grep -E 'mDreamingLockscreen=|isKeyguardShowing=|mShowingLockscreen=' || true", "    isKeyguardShowing=false\n", 0)
 	d.can("date +%s", "1762000000\n", 0)
@@ -565,6 +563,54 @@ func ptyTab(d *fakeDevice) int {
 		}
 	}
 	return -1
+}
+
+// Other apps' notifications stay on the phone: smoke's commands print nothing of them.
+func TestSmokeKeepsOtherAppsNotificationsOnThePhone(t *testing.T) {
+	d := smokeDevice(t, everyTool...)
+	d.write("notifications", []byte("  NotificationRecord(0x0def5678: pkg=org.example.sms user=UserHandle{0} id=3 tag=thread-4512345678 importance=4 key=0|org.example.sms|3|x|10300: Notification(channel=sms))\n        android.title=String (Mum)\n        android.text=String (your code is 123456)\n"))
+	var printed strings.Builder
+	dev := adb.Device{Trace: func(_ []string, _ time.Time, _ int, stdout string) { printed.WriteString(stdout) }}
+	steps := runSmoke(context.Background(), dev, debugPackage, nil, io.Discard)
+	if st, _ := stepNamed(steps, "notification"); st.OK == nil || !*st.OK {
+		t.Errorf("notification: %+v", st)
+	}
+	for _, token := range []string{"123456", "org.example.sms", "4512345678"} {
+		if strings.Contains(printed.String(), token) {
+			t.Errorf("%q left the phone:\n%s", token, printed.String())
+		}
+	}
+}
+
+// What a command printed before failing stays out of the report, unlike adb's complaint.
+func TestDoctorLeavesStdoutOutOfItsReport(t *testing.T) {
+	const private = "export TOKEN=hunter2"
+	row := "|1| alice@phone:~$ " + private + "\n"
+	dump := "content read --uri content://dev.nickolaj.pocketnix.debug.control/dump?tab=1"
+	for name, setup := range map[string]func(d *fakeDevice){
+		"adb-fails": func(d *fakeDevice) { d.drop("dump?tab=1", row, "error: closed\n") },
+		"command-fails": func(d *fakeDevice) {
+			d.can(dump, row, 1)
+		},
+		"notification": func(d *fakeDevice) {
+			d.drop("dumpsys notification", "        android.text=String ("+private+")\n", "error: closed\n")
+		},
+	} {
+		for _, mode := range [][]string{{"--json"}, nil} {
+			t.Run(fmt.Sprintf("%s %v", name, mode), func(t *testing.T) {
+				d := smokeDevice(t, everyTool...)
+				setup(d)
+				out, err := stdoutOf(t, func() error { return runDoctor(append(slices.Clone(mode), "--smoke")) })
+				var status exitStatus
+				if !errors.As(err, &status) || status != 1 {
+					t.Errorf("run: %v, want a failed step's exit status 1", err)
+				}
+				if strings.Contains(out, private) {
+					t.Errorf("the report quotes the command's stdout:\n%s", out)
+				}
+			})
+		}
+	}
 }
 
 // A dump stalls the app's terminal output, so the PTY step reads few of them.

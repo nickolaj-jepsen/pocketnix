@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -265,6 +266,8 @@ func fakeShell(state, line string, logEvent func(string, ...any)) (string, int) 
 	unquote := func(s string) string { return strings.Trim(s, "'") }
 	devPath := func(p string) string { return filepath.Join(state, "device", p) }
 	switch {
+	case strings.HasPrefix(line, "dumpsys notification --noredact | grep "):
+		return fakeNotifications(state, w)
 	case strings.Contains(line, ".control"):
 		return fakeControl(state, line)
 	case len(w) == 2 && w[0] == "getprop":
@@ -393,6 +396,29 @@ func fakeShell(state, line string, logEvent func(string, ...any)) (string, int) 
 		return "fake adb: unknown shell command " + line, 127
 	}
 	return "", 0
+}
+
+// fakeNotifications is the phone's grep of the state's "notifications" text,
+// which stands for dumpsys notification: the lines matching any -e of w,
+// exiting 1 when there are none.
+func fakeNotifications(state string, w []string) (string, int) {
+	b, _ := os.ReadFile(filepath.Join(state, "notifications"))
+	var res []*regexp.Regexp
+	for i, a := range w {
+		if a == "-e" && i+1 < len(w) {
+			res = append(res, regexp.MustCompile(w[i+1]))
+		}
+	}
+	var out strings.Builder
+	for _, l := range strings.Split(string(b), "\n") {
+		if slices.ContainsFunc(res, func(re *regexp.Regexp) bool { return re.MatchString(l) }) {
+			out.WriteString(l + "\n")
+		}
+	}
+	if out.Len() == 0 {
+		return "", 1
+	}
+	return out.String(), 0
 }
 
 // fakeLogcat is the state's "logcat" lines, each starting with its epoch

@@ -143,7 +143,7 @@ func TestInstallRestoreNeedsABackup(t *testing.T) {
 	}
 }
 
-// D4b: a failed swap stays recoverable with one command.
+// A failed swap stays recoverable with one command.
 func TestInstallFailureKeepsBackup(t *testing.T) {
 	d := newFakeDevice(t)
 	d.installAPK([]byte("the owner's build"))
@@ -153,6 +153,9 @@ func TestInstallFailureKeepsBackup(t *testing.T) {
 	err := runInstall([]string{"--debug", fakeAPKFile(t, "app-debug.apk", "a dev build")})
 	if err == nil || !strings.Contains(err.Error(), "--restore") {
 		t.Fatalf("got %v, want the --restore hint", err)
+	}
+	if !strings.Contains(err.Error(), "INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
+		t.Errorf("got %v, want pm's reason, which adb prints on stdout", err)
 	}
 	b := d.backups()
 	if len(b) != 1 {
