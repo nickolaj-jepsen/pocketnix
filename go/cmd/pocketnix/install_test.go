@@ -189,6 +189,31 @@ func TestInstallFailureKeepsBackup(t *testing.T) {
 	}
 }
 
+// Only pm's own exit 1 means the app isn't there: anything else could hide a running VM.
+func TestInstallRefusesWhenPMPathFails(t *testing.T) {
+	const cmdline = "pm path " + debugPackage
+	for name, setup := range map[string]func(d *fakeDevice){
+		"adb": func(d *fakeDevice) { d.drop(cmdline, "", "error: closed\n") },
+		"pm":  func(d *fakeDevice) { d.can(cmdline, "cmd: Failure calling service package\n", 20) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := newFakeDevice(t)
+			d.installAPK([]byte("the owner's build"))
+			d.setRunning(true)
+			setup(d)
+			if err := runInstall([]string{"--debug", fakeAPKFile(t, "app-debug.apk", "a dev build")}); err == nil {
+				t.Error("installed without knowing whether a VM runs")
+			}
+			if ev := d.events(); hasEvent(ev, "install ") || hasEvent(ev, "am start") {
+				t.Errorf("acted on the device; events:\n%s", ev)
+			}
+			if !d.running() {
+				t.Error("the VM stopped")
+			}
+		})
+	}
+}
+
 // A chain of dev installs never overwrites the owner's build.
 func TestInstallKeepsFirstBackup(t *testing.T) {
 	d := newFakeDevice(t)

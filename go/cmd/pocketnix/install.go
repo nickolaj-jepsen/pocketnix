@@ -150,7 +150,15 @@ func (o *installOpts) run() error {
 
 	prov := provider{dev: dev, authority: o.pkg() + ".provision"}
 	wasRunning := false
-	if out, err := dev.Shell("pm path " + o.pkg()); err == nil {
+	// pm exits 1 for a package that isn't installed; anything else could hide a running VM.
+	out, status, err := shellStatus(dev, "pm path "+o.pkg())
+	if err == nil && status > 1 {
+		err = fmt.Errorf("pm path exited %d", status)
+	}
+	if err != nil {
+		return fmt.Errorf("can't tell whether %s is installed, so not installing: %w", o.pkg(), err)
+	}
+	if status == 0 {
 		// Before the stop: a refused or failed pull leaves the VM as it was.
 		if !o.restore {
 			if err := o.backUp(dev, out, backup); err != nil {
