@@ -764,6 +764,48 @@ func TestSmokeInterruptEndsTheRebootsWait(t *testing.T) {
 	}
 }
 
+// Every way the reboot step fails still closes the tab it opened.
+func TestSmokeFailedRebootClosesItsTab(t *testing.T) {
+	typed := reactReboot.Typed + `.*echo (smoke-\d+)-exit=`
+	for _, tc := range []struct {
+		name  string
+		react *fakeReaction
+		setup func()
+		// interrupt comes once the reboot is typed.
+		interrupt bool
+	}{
+		{name: "refused", react: &fakeReaction{Typed: typed, Output: []string{"${1}-exit=1"}}},
+		{name: "stays-running", setup: func() { smokeTimes.reboot = 50 * time.Millisecond }},
+		{name: "agent-stays-away", react: &fakeReaction{Typed: typed, Write: map[string]string{"control/booting": "1000000"}},
+			setup: func() { smokeTimes.boot = 50 * time.Millisecond }},
+		{name: "no-console-line", react: &fakeReaction{Typed: typed, Write: map[string]string{"control/booting": "1"}}},
+		{name: "interrupted", setup: func() { smokeTimes.reboot = 10 * time.Minute }, interrupt: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rs := without(everyTool, reactReboot)
+			if tc.react != nil {
+				rs = append(rs, *tc.react)
+			}
+			d := smokeDevice(t, rs...)
+			if tc.setup != nil {
+				tc.setup()
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.interrupt {
+				cancelOnTyped(ctx, cancel, d, isReboot)
+			}
+			steps := runSmoke(ctx, adb.Device{}, debugPackage, nil, io.Discard)
+			if st, _ := stepNamed(steps, "reboot"); st.OK == nil || *st.OK {
+				t.Errorf("reboot: %+v, want a failure", st)
+			}
+			if left := leftovers(d); len(left) > 0 {
+				t.Errorf("smoke left %q", left)
+			}
+		})
+	}
+}
+
 func TestSmokeSkipsWithoutInputs(t *testing.T) {
 	none := func(re string) fakeReaction {
 		return fakeReaction{Typed: re, Output: []string{"${1}-tool=none", "${1}-exit=0"}}
