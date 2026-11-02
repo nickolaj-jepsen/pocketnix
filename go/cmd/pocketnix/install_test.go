@@ -121,6 +121,9 @@ func TestInstallRestore(t *testing.T) {
 	if b := d.backups(); len(b) != 0 {
 		t.Errorf("backup left after --restore: %v", b)
 	}
+	if _, err := os.Stat(filepath.Join(d.cache, "pocketnix", "backup", fakeSerial)); err == nil {
+		t.Error("the device's empty backup directory is left after --restore")
+	}
 	if !d.running() {
 		t.Error("the VM isn't running after --restore")
 	}

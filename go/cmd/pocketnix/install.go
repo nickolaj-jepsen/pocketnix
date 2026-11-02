@@ -187,6 +187,8 @@ func (o *installOpts) run() error {
 		if err := os.Remove(backup); err != nil {
 			return err
 		}
+		// The device's directory goes too, once it holds no other package's backup.
+		os.Remove(filepath.Dir(backup))
 		o.logf("restored the backup and removed it")
 	}
 
