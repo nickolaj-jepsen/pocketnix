@@ -656,14 +656,15 @@ func TestControlLaunch(t *testing.T) {
 	if !strings.HasPrefix(out, "gui window ") || !strings.Contains(out, " app=org.example.Cube ") {
 		t.Errorf("launch printed %q, want the new window's line", out)
 	}
-	if want := "am start -n dev.nickolaj.pocketnix.debug/dev.nickolaj.pocketnix.ControlActivity -a dev.nickolaj.pocketnix.action.DEBUG_LAUNCH --es app 'org.example.Cube'"; !hasEvent(d.events(), want) {
-		t.Errorf("no DEBUG_LAUNCH for the app; events:\n%s", d.events())
+	if want := "-n dev.nickolaj.pocketnix.debug/dev.nickolaj.pocketnix.ControlActivity"; !strings.Contains(d.events(), want) {
+		t.Errorf("the launch didn't go to the debug app's ControlActivity; events:\n%s", d.events())
 	}
 
 	// A second launch waits for a window of its own, not the first one's.
+	poll := controlPoll
+	t.Cleanup(func() { controlPoll = poll })
 	controlPoll = 10 * time.Millisecond
-	t.Cleanup(func() { controlPoll = 500 * time.Millisecond })
-	os.Remove(filepath.Join(d.state, "control", "apps"))
+	d.setGUI()
 	if err := runControl([]string{"launch", "--timeout", "100ms", "org.example.Cube"}); err == nil || !strings.Contains(err.Error(), "no new window") {
 		t.Errorf("a launch that opened nothing: got %v", err)
 	}

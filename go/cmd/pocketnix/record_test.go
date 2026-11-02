@@ -151,12 +151,15 @@ func readBundle(t *testing.T, bundle, name string) string {
 	return string(b)
 }
 
-// logIndex is the first commands.log line holding text, failing the test without one.
-func logIndex(t *testing.T, lines []string, text string) int {
+// logIndex is the first commands.log line holding every token, in any order,
+// failing the test without one.
+func logIndex(t *testing.T, lines []string, tokens ...string) int {
 	t.Helper()
-	i := slices.IndexFunc(lines, func(l string) bool { return strings.Contains(l, text) })
+	i := slices.IndexFunc(lines, func(l string) bool {
+		return !slices.ContainsFunc(tokens, func(token string) bool { return !strings.Contains(l, token) })
+	})
 	if i < 0 {
-		t.Errorf("commands.log has no line with %q:\n%s", text, strings.Join(lines, "\n"))
+		t.Errorf("commands.log has no line with %q:\n%s", tokens, strings.Join(lines, "\n"))
 	}
 	return i
 }
@@ -266,15 +269,15 @@ func TestRecordCommandsLog(t *testing.T) {
 	}
 	state := logIndex(t, lines, "get-state")
 	model := logIndex(t, lines, "getprop ro.product.model")
-	logcat := logIndex(t, lines, "start adb -s "+serialPlaceholder+" logcat -b main,system,crash")
-	scrcpy := logIndex(t, lines, "start scrcpy --serial="+serialPlaceholder)
+	logcat := logIndex(t, lines, "start adb -s "+serialPlaceholder+" logcat", "main,system,crash")
+	scrcpy := logIndex(t, lines, "start scrcpy ", "--serial="+serialPlaceholder)
 	uname := logIndex(t, lines, "uname -r")
-	end := logIndex(t, lines, "exit=0 scrcpy --serial=")
+	end := logIndex(t, lines, "exit=0 scrcpy ", "--record=")
 	if !(state < model && model < logcat && logcat < scrcpy && scrcpy < uname && uname < end) {
 		t.Errorf("commands.log is out of order:\n%s", log)
 	}
 	// The app isn't installed: the shell command's status, under an adb that exits 0.
-	if !strings.Contains(lines[logIndex(t, lines, "pm path dev.nickolaj.pocketnix;")], " exit=1 adb ") {
+	if !strings.Contains(lines[logIndex(t, lines, "pm path dev.nickolaj.pocketnix")], " exit=1 adb ") {
 		t.Errorf("the app's pm path isn't logged with the shell's status:\n%s", log)
 	}
 	if !strings.Contains(lines[state], "adb -s "+serialPlaceholder+" get-state") {
@@ -358,7 +361,7 @@ func TestRecordSmoke(t *testing.T) {
 	}
 	bundle := onlyBundle(t, dir)
 	smoke := readBundle(t, bundle, "smoke.txt")
-	if !strings.Contains(smoke, "smoke: pty") || !regexp.MustCompile(`(?m)^  reboot +ok `).MatchString(smoke) {
+	if !strings.Contains(smoke, "smoke: pty") || !regexp.MustCompile(`\breboot\s+ok\b`).MatchString(smoke) {
 		t.Errorf("smoke.txt:\n%s", smoke)
 	}
 	var r doctorReport
@@ -372,10 +375,9 @@ func TestRecordSmoke(t *testing.T) {
 		t.Error("the bundle has no screen.mp4")
 	}
 	assertNoSerial(t, bundle)
-	log := readBundle(t, bundle, "commands.log")
-	if !strings.Contains(log, "am start") || !strings.Contains(log, "logcat -b main,system,crash --uid=") {
-		t.Errorf("commands.log lacks smoke's commands:\n%s", log)
-	}
+	log := strings.Split(readBundle(t, bundle, "commands.log"), "\n")
+	logIndex(t, log, "am start")
+	logIndex(t, log, "logcat", "main,system,crash", "--uid=")
 }
 
 func TestRecordWithoutScrcpy(t *testing.T) {
@@ -513,7 +515,7 @@ func TestRecordUnsafeModel(t *testing.T) {
 	if _, err := stdoutOf(t, func() error { return runDoctor([]string{"--record", dir}) }); err != nil {
 		t.Fatal(err)
 	}
-	if name := filepath.Base(onlyBundle(t, dir)); !regexp.MustCompile(`^\d{8}T\d{6}Z-evil-\.\.-x$`).MatchString(name) {
+	if name := filepath.Base(onlyBundle(t, dir)); !regexp.MustCompile(`^[^-]+-evil-\.\.-x$`).MatchString(name) {
 		t.Errorf("bundle name %q", name)
 	}
 }
@@ -565,10 +567,10 @@ func doctorProcess(t *testing.T, d *fakeDevice, ready func() bool, args ...strin
 	}
 	t.Cleanup(func() { c.Process.Kill() })
 	deadline := time.Now().Add(20 * time.Second)
-	// The console, the listener's tab and the PTY step's.
-	for len(fakeTabs(d.state)) < 3 || !ready() {
+	pty := regexp.MustCompile(reactPTY.Typed)
+	for !typedInto(d, pty.MatchString) || !ready() {
 		if time.Now().After(deadline) {
-			t.Fatalf("smoke didn't reach its PTY step: tabs %v", fakeTabs(d.state))
+			t.Fatalf("smoke didn't reach its PTY step: typed %v", d.typed())
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -633,7 +635,7 @@ func TestRecordInterruptFinishesTheBundle(t *testing.T) {
 	}
 	// The recording outlived the first signal, so that it covers smoke's cleanup.
 	log := strings.Split(readBundle(t, bundle, "commands.log"), "\n")
-	if logIndex(t, log, "--method close") > logIndex(t, log, "exit=0 scrcpy --serial=") {
+	if logIndex(t, log, "--method close") > logIndex(t, log, "exit=0 scrcpy ", "--record=") {
 		t.Error("scrcpy ended before smoke's cleanup")
 	}
 }

@@ -229,7 +229,7 @@ func TestManifestVersionAndDebuggable(t *testing.T) {
 		{name: "debug-build", spec: axmlSpec{code: 10203, codeType: 0x10, debuggable: trueValue, debuggableType: 0x12}, code: new(int64(10203)), debuggable: new(true)},
 		{name: "debuggable-false", spec: axmlSpec{code: 1, codeType: 0x10, debuggable: falseValue, debuggableType: 0x12}, code: new(int64(1)), debuggable: new(false)},
 		{name: "hex-version", spec: axmlSpec{code: 0x10, codeType: 0x11}, code: new(int64(16)), debuggable: new(false)},
-		{name: "major-version", spec: axmlSpec{code: 7, major: 2, codeType: 0x10}, code: new(int64(2<<32 | 7)), debuggable: new(false)},
+		{name: "major-version", spec: axmlSpec{code: 7, major: 2, codeType: 0x10}, code: new(int64(0x2_00000007)), debuggable: new(false)},
 		{name: "names-blanked", spec: axmlSpec{code: 7, codeType: 0x10, debuggable: trueValue, debuggableType: 0x12, blankAttrNames: true}, code: new(int64(7)), debuggable: new(true)},
 		{name: "no-version", spec: axmlSpec{}, debuggable: new(false)},
 		{name: "version-by-reference", spec: axmlSpec{code: 0x7f010001, codeType: 0x01}, debuggable: new(false)},
