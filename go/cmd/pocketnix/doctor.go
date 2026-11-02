@@ -876,14 +876,14 @@ func (s *smoker) pty() smokeStep {
 	const name = "pty"
 	p := s.marker()
 	start := time.Now()
-	// base64 makes 4 bytes of 3.
-	tab, err := s.start(p, fmt.Sprintf(`head -c %d /dev/zero | base64; echo @-exit=$?`, smokePTYBytes/4*3))
+	// base64 makes 4 bytes of 3. Random lines differ, so outputState can see them move.
+	tab, err := s.start(p, fmt.Sprintf(`head -c %d /dev/urandom | base64; echo @-exit=$?`, smokePTYBytes/4*3))
 	if err != nil {
 		return stepFail(name, "opening a tab: %v", err)
 	}
 	vals, err := s.await(tab, p, "exit", smokeTimes.pty)
 	if err != nil {
-		return stepFail(name, "%v", err)
+		return stepFail(name, "%v; %s", err, s.outputState(tab))
 	}
 	if vals["exit"] != "0" {
 		return stepFail(name, "the output ended with status %s", vals["exit"])
@@ -900,6 +900,33 @@ func (s *smoker) pty() smokeStep {
 		return stepFail(name, "tab %d's session ended with the output", tab)
 	}
 	return stepOK(name, "%d MiB of base64 in %s", smokePTYBytes>>20, took)
+}
+
+// outputState says whether tab's last lines still change, which tells output
+// that's slow from output that's stuck.
+func (s *smoker) outputState(tab int) string {
+	tail := func(dump string) string {
+		var rows []string
+		prefix := fmt.Sprintf("|%d| ", tab)
+		for _, l := range strings.Split(dump, "\n") {
+			if strings.HasPrefix(l, prefix) {
+				rows = append(rows, l)
+			}
+		}
+		return strings.Join(rows, "\n")
+	}
+	first, err := s.ctl.dump(tab, 3)
+	if err != nil {
+		return "couldn't read the tab: " + err.Error()
+	}
+	_, err = s.ctl.until(s.ctx, tab, 3, smokeTimes.exit, func(dump string) bool { return tail(dump) != tail(first) })
+	switch {
+	case err == nil:
+		return "the output was still moving: slow, not stuck"
+	case errors.Is(err, errNotYet):
+		return "the output had stopped moving"
+	}
+	return "couldn't read the tab: " + err.Error()
 }
 
 // notificationPosted is whether dumpsys notification's lines show a
@@ -943,14 +970,14 @@ func (s *smoker) notify() smokeStep {
 	return stepOK(name, "notify-send's notification shows under tag %s", guestNotificationTag)
 }
 
-// wakeLock is whether the app with uid holds its wake lock.
-func (s *smoker) wakeLock(uid string) (bool, error) {
+// wakeLock is whether the app with uids (appUID's) holds its wake lock.
+func (s *smoker) wakeLock(uids string) (bool, error) {
 	// grep exits 1 when no line matches.
 	out, status, err := shellStatus(s.dev, "dumpsys power | grep -F "+wakeLockTag)
 	if err != nil || status > 1 {
 		return false, fmt.Errorf("dumpsys power: %v (status %d)", err, status)
 	}
-	owner := regexp.MustCompile(`\buid=` + uid + `\b`)
+	owner := regexp.MustCompile(`\buid=(` + strings.ReplaceAll(uids, ",", "|") + `)\b`)
 	for _, l := range strings.Split(out, "\n") {
 		if strings.Contains(l, "WAKE_LOCK") && owner.MatchString(l) {
 			return true, nil
@@ -1051,8 +1078,6 @@ func (s *smoker) gpu() []smokeStep {
 	switch {
 	case !vm.gui:
 		return skip("the app has no GUI connection: is GUI on in the guest?")
-	case vm.gpu != "gfxstream" && !vm.guestRam:
-		return skip("the VM has neither a GPU (engine gpu=%s) nor guest RAM", vm.gpu)
 	}
 	for _, app := range apps {
 		switch {
@@ -1087,15 +1112,15 @@ func (s *smoker) gpu() []smokeStep {
 
 	var gpu smokeStep
 	switch {
-	case vm.gpu != "gfxstream":
-		gpu = stepSkip("gpu", "the VM has no GPU (engine gpu=%s)", vm.gpu)
-	case strings.Contains(log.String(), gpuFailure):
+	case vm.gpu == "gfxstream" && strings.Contains(log.String(), gpuFailure):
 		gpu = stepFail("gpu", "crosvm logged %s: a GPU context after the first failed (app/AGENTS.md, gfxstream)", gpuFailure)
 		if problem != "" {
 			gpu.Detail += "; " + problem
 		}
 	case problem != "":
 		gpu = stepFail("gpu", "%s", problem)
+	case vm.gpu != "gfxstream":
+		gpu = stepSkip("gpu", "the VM has no GPU (engine gpu=%s), so no GPU context was tested; %s, then %s after pkill, drew frames in software", vm.gpu, apps[0], apps[1])
 	case logErr != nil:
 		gpu = stepFail("gpu", "both drew, but crosvm's log couldn't be read: %v", logErr)
 	default:

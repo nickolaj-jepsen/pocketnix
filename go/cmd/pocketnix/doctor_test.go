@@ -345,6 +345,8 @@ func cannedPath(cmdline string) string { return filepath.Join("canned", fakeCann
 const (
 	powerLocks    = "dumpsys power | grep -F pocketnix:guest"
 	notifications = "dumpsys notification --noredact | grep -e NotificationRecord -e android.text="
+	// powerHistory is what dumpsys power keeps of a wake lock after its release, as a Pixel prints it.
+	powerHistory = "  11-02 16:59:16.878 - 10200 (dev.nickolaj.pocketnix.debug) - ACQ pocketnix:guest (partial)\n  11-02 17:00:12.971 - 10200 (dev.nickolaj.pocketnix.debug) - REL pocketnix:guest\n"
 )
 
 // writeCanned is a reaction's Write making cmdline answer out with status.
@@ -356,7 +358,7 @@ func writeCanned(cmdline, out string, status int) map[string]string {
 var (
 	reactListen = fakeReaction{Typed: `echo (smoke-\d+)-tool=socat;.*' sh '(\d+)' '([^']+)'`,
 		Output: []string{"${1}-tool=socat"}, Write: map[string]string{"control/listening/${2}": "${3}"}}
-	reactPTY    = fakeReaction{Typed: `head -c \d+ /dev/zero \| base64; echo (smoke-\d+)-exit=`, Output: []string{"AAAAAAAAAAAA", "${1}-exit=0"}}
+	reactPTY    = fakeReaction{Typed: `head -c \d+ /dev/urandom \| base64; echo (smoke-\d+)-exit=`, Output: []string{"AAAAAAAAAAAA", "${1}-exit=0"}}
 	reactNotify = fakeReaction{Typed: `notify-send -p .*echo (smoke-\d+)-exit=\$s' sh '[^']*' '([^']+)'`, Output: []string{"${1}-id=7", "${1}-exit=0"},
 		Write: writeCanned(notifications, "  NotificationRecord(0x0abc1234: pkg=dev.nickolaj.pocketnix.debug user=UserHandle{0} id=7 tag=guest importance=3 key=0|dev.nickolaj.pocketnix.debug|7|guest|10200: Notification(channel=guest))\n        android.text=String (${2})\n", 0)}
 	reactUnnotify = fakeReaction{Typed: `CloseNotification u "\$1"; echo (smoke-\d+)-exit=\$\?' sh '7'`, Output: []string{"${1}-exit=0"},
@@ -364,7 +366,7 @@ var (
 	reactInhibit = fakeReaction{Typed: `systemd-inhibit --what=sleep .*echo (smoke-\d+)-exit=0' sh$`, Output: []string{"${1}-pid=4242", "${1}-exit=0"},
 		Write: writeCanned(powerLocks, "    PARTIAL_WAKE_LOCK              'pocketnix:guest'                          ACQ=-1s2ms (uid=10200 pid=31337)\n", 0)}
 	reactUninhibit = fakeReaction{Typed: `kill "\$1"; echo (smoke-\d+)-exit=\$\?' sh '4242'`, Output: []string{"${1}-exit=0"},
-		Write: writeCanned(powerLocks, "", 1)}
+		Write: writeCanned(powerLocks, powerHistory, 0)}
 	reactKill = fakeReaction{Typed: `echo (smoke-\d+)-killed=\$n; echo smoke-\d+-exit=0' sh '([^']+)'`, Output: []string{"${1}-killed=1", "${1}-exit=0"},
 		Remove: []string{"control/windows/${2}"}}
 	reactReboot = fakeReaction{Typed: `systemctl reboot`, Reboot: true}
@@ -384,7 +386,9 @@ func smokeDevice(t *testing.T, rs ...fakeReaction) *fakeDevice {
 	d.setGUI(smokeApps...)
 	putFile(filepath.Join(d.state, "control", "pages"), "")
 	d.react(rs...)
-	d.can(powerLocks, "", 1)
+	d.can(powerLocks, powerHistory, 0)
+	// One uid per Android user, as on a phone with a work profile or Private space.
+	d.can("pm list packages -U dev.nickolaj.pocketnix.debug", "package:dev.nickolaj.pocketnix.debug uid:10200,1010200,1110200\n", 0)
 	d.can(notifications, "", 1)
 	d.can("dumpsys power | grep -m1 mWakefulness=", "  mWakefulness=Awake\n", 0)
 	d.can("dumpsys window | grep -E 'mDreamingLockscreen=|isKeyguardShowing=|mShowingLockscreen=' || true", "    isKeyguardShowing=false\n", 0)
@@ -420,7 +424,7 @@ func leftovers(d *fakeDevice) []string {
 	if o := fakeOffers(d.state); o != "" {
 		left = append(left, "offer "+o)
 	}
-	if b, _ := os.ReadFile(filepath.Join(d.state, cannedPath(powerLocks))); len(b) > 0 {
+	if b, _ := os.ReadFile(filepath.Join(d.state, cannedPath(powerLocks))); strings.Contains(string(b), "WAKE_LOCK") {
 		left = append(left, "wake lock")
 	}
 	return left
@@ -490,8 +494,8 @@ func TestSmokeCleanupExitsEveryTab(t *testing.T) {
 	if !errors.As(err, &status) || status != 1 {
 		t.Errorf("a failed step returned %v, want exit status 1", err)
 	}
-	if st, _ := stepNamed(r.Smoke, "pty"); st.OK == nil || *st.OK {
-		t.Errorf("pty without its output: %+v", st)
+	if st, _ := stepNamed(r.Smoke, "pty"); st.OK == nil || *st.OK || !strings.Contains(st.Detail, "stopped") {
+		t.Errorf("pty without its output: %+v, want a failure saying the output stopped", st)
 	}
 	if st, _ := stepNamed(r.Smoke, "cleanup"); st.OK == nil || !*st.OK {
 		t.Errorf("cleanup: %+v", st)
@@ -609,5 +613,44 @@ func TestSmokeNeedsARunningVM(t *testing.T) {
 	}
 	if len(d.typed()) > 0 {
 		t.Errorf("smoke typed into tabs of a stopped VM: %v", d.typed())
+	}
+}
+
+// Without a GPU or guest RAM there's nothing to judge, but the launches still run.
+func TestSmokeNoGPUStillLaunches(t *testing.T) {
+	d := smokeDevice(t, everyTool...)
+	head := strings.Replace(fakeRunningHead, "gpu=gfxstream", "gpu=2d", 1)
+	d.setHead(strings.Replace(head, "guestRam=true", "guestRam=false", 1))
+	r, _, err := doctorJSON(t, "--smoke", "--gpu-apps", strings.Join(smokeApps, ","))
+	if err != nil {
+		t.Errorf("doctor --smoke: %v", err)
+	}
+	for name, token := range map[string]string{"gpu": "gpu=2d", "pages": "guestRam=false"} {
+		if st, ok := stepNamed(r.Smoke, name); !ok || st.OK != nil || !strings.Contains(st.Detail, token) {
+			t.Errorf("step %s: %+v, want ok null with %q", name, st, token)
+		}
+	}
+	for _, app := range smokeApps {
+		if !strings.Contains(d.events(), "DEBUG_LAUNCH --es app '"+app+"'") {
+			t.Errorf("%s was never launched:\n%s", app, d.events())
+		}
+	}
+	if left := leftovers(d); len(left) > 0 {
+		t.Errorf("smoke left %q", left)
+	}
+}
+
+// A launch that fails is a failure even without a GPU.
+func TestSmokeNoGPULaunchFails(t *testing.T) {
+	d := smokeDevice(t, everyTool...)
+	d.setHead(strings.Replace(fakeRunningHead, "gpu=gfxstream", "gpu=2d", 1))
+	smokeTimes.window = 50 * time.Millisecond
+	// In the guest's list, but it opens no window.
+	apps := []string{smokeApps[0], "org.example.Silent"}
+	d.setGUI(apps...)
+	d.react(append(slices.Clone(everyTool), fakeReaction{Launch: "org.example.Silent", Remove: []string{"control/windows/org.example.Silent"}})...)
+	r, _, _ := doctorJSON(t, "--smoke", "--gpu-apps", strings.Join(apps, ","))
+	if st, _ := stepNamed(r.Smoke, "gpu"); st.OK == nil || *st.OK || !strings.Contains(st.Detail, "org.example.Silent") {
+		t.Errorf("gpu: %+v, want a failure naming the app", st)
 	}
 }
