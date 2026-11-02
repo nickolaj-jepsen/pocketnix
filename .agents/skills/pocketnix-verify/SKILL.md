@@ -10,6 +10,42 @@ touched. The checks are `checks` in `flake.nix`; build one with
 `nix build -L .#checks.<system>.<name>`. `.github/workflows/ci.yml` says which
 system runs which.
 
+## Fast first
+
+Start at the cheapest rung that sees the change, and go up only when that rung
+can't see it. Cheapest first:
+
+1. One Go test or `cargo test`, in seconds.
+2. One filtered gradle test, in about 10 s once warm.
+3. One Nix check; VM tests take 1–3 min.
+4. `bench --local`, for speed measured on the desktop's CPU.
+5. An `avf-boot`-style boot, in minutes.
+6. The emulator with `dev-agent`: the real UI against an agent on this
+   machine, with no VM.
+7. `pocketnix deploy` to a phone guest: this checkout's agent or compositor in
+   a VM that keeps its disk. The first cross-built compositor compiles rustc
+   from source, so expect a long wait once.
+8. A full install or provision on a phone, the one rung that changes the app
+   on a device. `pocketnix install` stops the VM to do it.
+
+The "By area" table has the command for each area, and `checks` in `flake.nix`
+has every name. The table's "before committing" column still applies once the
+fast rungs pass.
+
+Go past the cheapest rung for:
+
+- The wire: a test of one side can't see the other, so run both sides' tests.
+- Boot or image changes: `avf-boot` boots the real disk image and installs its
+  boot loader, and the NixOS VM tests use neither. Batch aarch64 changes first
+  ("What it costs").
+- The GPU: QEMU's VM has no gfxstream, so a GPU change needs a phone.
+- Anything AVF-specific (crosvm, virtmgr, u-boot, the `pm grant`s): the emulator
+  has no VM at all and the boot check runs QEMU with other firmware, so these
+  need a phone too.
+- What only a phone shows (touch, SurfaceFlinger, heat, throttling, real frame
+  rates through `pocketnix bench run`): use `pocketnix deploy` when the agent or
+  compositor changed, and a full install when the app did.
+
 ## By area
 
 Fast loops run inside `nix develop`.
@@ -67,6 +103,10 @@ calls one at a time, `run_tests()` for all of it, or
 Use the pocketnix-control skill: it drives tabs, reads transcripts and GUI
 state, and `pocketnix control logcat` prints the app's log. A phone may hold
 a working VM: read `AGENTS.md`'s working rules before installing anything.
+
+`docs/development.md` has the rest: "Deploying a dev build to a phone guest"
+for an agent or compositor, and "Testing on a rented phone" for a phone you
+don't own.
 
 ## When a check fails
 
