@@ -27,10 +27,11 @@ in `docs/development.md`.
   the VM's disk: never do it to a phone's working VM without asking.
 - The owner's desktop has a remote aarch64 builder (`builders` in `nix config show`),
   billed per CPU-hour, and Nix sends it aarch64 builds unasked: a rebuilt image,
-  `avf-boot` on x86_64, a native `deploy`. Don't waste it. Before such a build, see what
-  it would rebuild with `nix build --dry-run`, and batch the changes. Leave what CI's
-  `aarch64` job can answer to CI, which is free. `--builders ''` keeps a build local,
-  under binfmt.
+  `avf-boot` on x86_64, a native `deploy`. When debugging needs the real aarch64 image,
+  use it, rather than waiting on a CI push to fill the cache. Just don't rebuild at every
+  step: batch the changes, test on a cheaper rung between builds, and see what a build
+  would rebuild with `nix build --dry-run`. `--builders ''` keeps a build local, under
+  binfmt.
 
 ## Keeping docs and tests from drifting
 
