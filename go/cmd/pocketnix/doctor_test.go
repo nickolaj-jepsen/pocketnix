@@ -617,7 +617,7 @@ func TestSmokeKeepsOtherAppsNotificationsOnThePhone(t *testing.T) {
 	d.write("notifications", []byte("  NotificationRecord(0x0def5678: pkg=org.example.sms user=UserHandle{0} id=3 tag=thread-4512345678 importance=4 key=0|org.example.sms|3|x|10300: Notification(channel=sms))\n        android.title=String (Mum)\n        android.text=String (your code is 123456)\n"))
 	var printed strings.Builder
 	dev := adb.Device{Trace: func(_ []string, _ time.Time, _ int, stdout string) { printed.WriteString(stdout) }}
-	steps := runSmoke(context.Background(), dev, debugPackage, nil, io.Discard)
+	steps, _ := runSmoke(context.Background(), dev, debugPackage, nil, io.Discard)
 	if st, _ := stepNamed(steps, "notification"); st.OK == nil || !*st.OK {
 		t.Errorf("notification: %+v", st)
 	}
@@ -729,7 +729,7 @@ func TestSmokeInterruptCleansUp(t *testing.T) {
 		}
 		cancel()
 	}()
-	steps := runSmoke(ctx, adb.Device{}, debugPackage, smokeApps, io.Discard)
+	steps, _ := runSmoke(ctx, adb.Device{}, debugPackage, smokeApps, io.Discard)
 	for _, name := range []string{"notification", "inhibitor", "gpu", "pages", "reboot"} {
 		if st, _ := stepNamed(steps, name); st.OK != nil || !strings.Contains(st.Detail, "interrupted") {
 			t.Errorf("step %s after the interrupt: %+v", name, st)
@@ -776,7 +776,7 @@ func TestSmokeInterruptDuringCleanupSkipsTheReboot(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cancelOnTyped(ctx, cancel, d, isExit)
-	steps := runSmoke(ctx, adb.Device{}, debugPackage, nil, io.Discard)
+	steps, _ := runSmoke(ctx, adb.Device{}, debugPackage, nil, io.Discard)
 	if st, _ := stepNamed(steps, "reboot"); st.OK != nil || !strings.Contains(st.Detail, "interrupted") {
 		t.Errorf("reboot: %+v, want it skipped", st)
 	}
@@ -799,7 +799,10 @@ func TestSmokeInterruptEndsTheRebootsWait(t *testing.T) {
 	defer cancel()
 	cancelOnTyped(ctx, cancel, d, isReboot)
 	done := make(chan []smokeStep)
-	go func() { done <- runSmoke(ctx, adb.Device{}, debugPackage, nil, io.Discard) }()
+	go func() {
+		steps, _ := runSmoke(ctx, adb.Device{}, debugPackage, nil, io.Discard)
+		done <- steps
+	}()
 	select {
 	case steps := <-done:
 		if st, _ := stepNamed(steps, "reboot"); st.OK == nil || *st.OK || !strings.Contains(st.Detail, "interrupted") {
@@ -841,7 +844,7 @@ func TestSmokeFailedRebootClosesItsTab(t *testing.T) {
 			if tc.interrupt {
 				cancelOnTyped(ctx, cancel, d, isReboot)
 			}
-			steps := runSmoke(ctx, adb.Device{}, debugPackage, nil, io.Discard)
+			steps, _ := runSmoke(ctx, adb.Device{}, debugPackage, nil, io.Discard)
 			if st, _ := stepNamed(steps, "reboot"); st.OK == nil || *st.OK {
 				t.Errorf("reboot: %+v, want a failure", st)
 			}
@@ -876,7 +879,7 @@ func TestSmokeInterruptDuringInhibitEndsIt(t *testing.T) {
 			}
 		}
 	}()
-	steps := runSmoke(ctx, adb.Device{}, debugPackage, nil, io.Discard)
+	steps, _ := runSmoke(ctx, adb.Device{}, debugPackage, nil, io.Discard)
 	if st, _ := stepNamed(steps, "cleanup"); st.OK == nil || !*st.OK {
 		t.Errorf("cleanup: %+v", st)
 	}
@@ -893,7 +896,7 @@ func TestSmokeCleanupWatchesAForwardWhoseAllowFailed(t *testing.T) {
 	d := smokeDevice(t, append(without(everyTool, reactListen), allowedAtOnce)...)
 	smokeTimes.forward = 50 * time.Millisecond
 	d.drop("answer:s:allow", "", "error: closed\n")
-	steps := runSmoke(context.Background(), adb.Device{}, debugPackage, nil, io.Discard)
+	steps, _ := runSmoke(context.Background(), adb.Device{}, debugPackage, nil, io.Discard)
 	if st, _ := stepNamed(steps, "forward"); st.OK == nil || *st.OK {
 		t.Errorf("forward: %+v, want a failure", st)
 	}
@@ -907,7 +910,7 @@ func TestSmokeIgnoresATypedLinesMarkerText(t *testing.T) {
 	wrapped := reactInhibit
 	wrapped.Output = []string{"${1}-exit=0; exit; }; systemd-inhibit --what=sleep --who=pocket"}
 	smokeDevice(t, append(without(everyTool, reactInhibit), wrapped)...)
-	steps := runSmoke(context.Background(), adb.Device{}, debugPackage, nil, io.Discard)
+	steps, _ := runSmoke(context.Background(), adb.Device{}, debugPackage, nil, io.Discard)
 	if st, _ := stepNamed(steps, "inhibitor"); st.OK == nil || *st.OK || !strings.Contains(st.Detail, "printed no") {
 		t.Errorf("inhibitor: %+v, want a failure saying it saw no exit line", st)
 	}
@@ -1006,7 +1009,11 @@ func TestSmokeSkipsWithoutInputs(t *testing.T) {
 			if tc.setup != nil {
 				tc.setup(d)
 			}
-			r, _, _ := doctorJSON(t, append([]string{"--smoke"}, tc.args...)...)
+			r, _, err := doctorJSON(t, append([]string{"--smoke"}, tc.args...)...)
+			// Steps that don't apply are no failure while the others ran.
+			if err != nil {
+				t.Errorf("doctor --smoke: %v", err)
+			}
 			for name, token := range tc.tokens {
 				if st, ok := stepNamed(r.Smoke, name); !ok || st.OK != nil || !strings.Contains(st.Detail, token) {
 					t.Errorf("step %s: %+v, want ok null with %q", name, st, token)
@@ -1038,8 +1045,9 @@ func TestSmokeNeedsARunningVM(t *testing.T) {
 	d := smokeDevice(t, everyTool...)
 	d.setHead("state=Stopped phase=Stopped link=Down host=null\nengine launched=none audio=off")
 	r, _, err := doctorJSON(t, "--smoke")
-	if err != nil {
-		t.Errorf("doctor --smoke on a stopped VM: %v", err)
+	var status exitStatus
+	if !errors.As(err, &status) || status != 1 {
+		t.Errorf("doctor --smoke on a stopped VM: %v, want exit status 1, as nothing ran", err)
 	}
 	for _, name := range smokeSteps {
 		if st, ok := stepNamed(r.Smoke, name); !ok || st.OK != nil || !strings.Contains(st.Detail, "Stopped") {
@@ -1048,6 +1056,23 @@ func TestSmokeNeedsARunningVM(t *testing.T) {
 	}
 	if len(d.typed()) > 0 {
 		t.Errorf("smoke typed into tabs of a stopped VM: %v", d.typed())
+	}
+}
+
+// A debug app that isn't there means nothing ran either, and the report keeps
+// every step, with the reason.
+func TestSmokeNeedsTheDebugApp(t *testing.T) {
+	d := newFakeDevice(t)
+	cannedPixel(d)
+	r, _, err := doctorJSON(t, "--smoke")
+	var status exitStatus
+	if !errors.As(err, &status) || status != 1 {
+		t.Errorf("doctor --smoke without the app: %v, want exit status 1", err)
+	}
+	for _, name := range smokeSteps {
+		if st, ok := stepNamed(r.Smoke, name); !ok || st.OK != nil || st.Detail == "" {
+			t.Errorf("step %s: %+v, want ok null with a reason", name, st)
+		}
 	}
 }
 
