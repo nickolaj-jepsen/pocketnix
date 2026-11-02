@@ -669,12 +669,16 @@ func TestRecordSecondInterruptStopsAtOnce(t *testing.T) {
 		b, _ := os.ReadFile(stderr)
 		return strings.Contains(string(b), "interrupted")
 	})
-	if c.ProcessState != nil {
-		t.Fatal("the run ended with the first signal")
+	ended := make(chan error, 1)
+	go func() { ended <- c.Wait() }()
+	select {
+	case err := <-ended:
+		t.Fatalf("the run ended with the first signal: %v", err)
+	case <-time.After(300 * time.Millisecond):
 	}
 	c.Process.Signal(os.Interrupt)
 	var exit *exec.ExitError
-	if err := c.Wait(); !errors.As(err, &exit) || exit.ExitCode() != 130 {
+	if err := <-ended; !errors.As(err, &exit) || exit.ExitCode() != 130 {
 		t.Errorf("the run: %v, want exit status 130", err)
 	}
 	assertGone(t, d.state, "scrcpy.pid")
