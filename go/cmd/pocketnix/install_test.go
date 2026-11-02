@@ -127,8 +127,8 @@ func TestInstallRestore(t *testing.T) {
 	if b := d.backups(); len(b) != 0 {
 		t.Errorf("backup left after --restore: %v", b)
 	}
-	if _, err := os.Stat(filepath.Join(d.cache, "pocketnix", "backup", fakeSerial)); err == nil {
-		t.Error("the device's empty backup directory is left after --restore")
+	if left, _ := os.ReadDir(filepath.Join(d.cache, "pocketnix", "backup")); len(left) != 0 {
+		t.Errorf("left under the backup directory after --restore: %v", left)
 	}
 	if !d.running() {
 		t.Error("the VM isn't running after --restore")
@@ -356,17 +356,96 @@ func TestInstallOntoAFreshPhone(t *testing.T) {
 	}
 }
 
-// Backups are per device: another phone's restore doesn't see this one's.
-func TestInstallBacksUpPerSerial(t *testing.T) {
+// Backups go by the phone: another one's restore doesn't see this one's.
+func TestInstallBacksUpPerDevice(t *testing.T) {
+	d := newFakeDevice(t)
+	d.installAPK([]byte("the owner's build"))
+	d.setProp("ro.serialno", "PHONE-A")
+	if err := runInstall([]string{"--debug", fakeAPKFile(t, "app-debug.apk", "a dev build")}); err != nil {
+		t.Fatal(err)
+	}
+	if b := d.backups(); len(b) != 1 {
+		t.Errorf("backups = %v, want one", b)
+	}
+	d.setProp("ro.serialno", "PHONE-B")
+	if err := runInstall([]string{"--debug", "--restore"}); err == nil {
+		t.Error("restored PHONE-A's backup onto PHONE-B")
+	}
+	d.setProp("ro.serialno", "PHONE-A")
+	if err := runInstall([]string{"--debug", "--restore"}); err != nil {
+		t.Errorf("PHONE-A's own restore: %v", err)
+	}
+}
+
+// Over USB and over Wi-Fi the phone has different adb serials, and the same backup.
+func TestInstallFindsItsBackupOverANewTransport(t *testing.T) {
+	d := newFakeDevice(t)
+	d.installAPK([]byte("the owner's build"))
+	d.setProp("ro.serialno", recordHWSerial)
+	const usb, wifi = "--serial=" + recordHWSerial, "--serial=192.0.2.1:5555"
+	if err := runInstall([]string{usb, "--debug", fakeAPKFile(t, "app-debug.apk", "dev build 1")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runInstall([]string{wifi, "--debug", fakeAPKFile(t, "app-debug.apk", "dev build 2")}); err != nil {
+		t.Fatal(err)
+	}
+	if b := d.backups(); len(b) != 1 {
+		t.Fatalf("backups = %v, want one", b)
+	}
+	if err := runInstall([]string{wifi, "--debug", "--restore"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(d.installedAPK()); got != "the owner's build" {
+		t.Errorf("installed APK = %q, want the first build", got)
+	}
+}
+
+// A phone that hides ro.serialno still keeps its backup apart from another's.
+func TestInstallWithoutTheSerialProp(t *testing.T) {
 	d := newFakeDevice(t)
 	d.installAPK([]byte("the owner's build"))
 	if err := runInstall([]string{"--serial", "PHONE-A", "--debug", fakeAPKFile(t, "app-debug.apk", "a dev build")}); err != nil {
 		t.Fatal(err)
 	}
-	if b := d.backups(); len(b) != 1 || filepath.Base(filepath.Dir(b[0])) != "PHONE-A" {
-		t.Errorf("backups = %v, want one under PHONE-A", b)
-	}
 	if err := runInstall([]string{"--serial", "PHONE-B", "--debug", "--restore"}); err == nil {
 		t.Error("restored PHONE-A's backup onto PHONE-B")
+	}
+	if err := runInstall([]string{"--serial", "PHONE-A", "--debug", "--restore"}); err != nil {
+		t.Errorf("PHONE-A's own restore: %v", err)
+	}
+}
+
+// The phone's own serial keys the backup and goes nowhere else: not its path,
+// the log or an error. The restore command names the transport it was given.
+func TestInstallKeepsTheSerialToItself(t *testing.T) {
+	d := newFakeDevice(t)
+	d.installAPK([]byte("the owner's build"))
+	d.setProp("ro.serialno", recordHWSerial)
+	var log strings.Builder
+	install := func(args ...string) error {
+		t.Helper()
+		o, err := parseInstall(append([]string{"--serial", recordSerial, "--debug"}, args...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.log = &log
+		return o.run()
+	}
+	if err := install("--restore"); err == nil || strings.Contains(err.Error(), recordHWSerial) {
+		t.Errorf("--restore without a backup: %v", err)
+	}
+	d.failInstalls("Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match]")
+	err := install(fakeAPKFile(t, "app-debug.apk", "a dev build"))
+	if err == nil || !strings.Contains(err.Error(), "--serial "+recordSerial) || strings.Contains(err.Error(), recordHWSerial) {
+		t.Errorf("a failed install: %v", err)
+	}
+	if err := install("--restore"); err == nil || strings.Contains(err.Error(), recordHWSerial) {
+		t.Errorf("a failed restore: %v", err)
+	}
+	if strings.Contains(log.String(), recordHWSerial) {
+		t.Errorf("the log holds the serial:\n%s", log.String())
+	}
+	if b := d.backups(); len(b) != 1 || strings.Contains(b[0], recordHWSerial) {
+		t.Errorf("backups = %v, want one, whose path doesn't hold the serial", b)
 	}
 }

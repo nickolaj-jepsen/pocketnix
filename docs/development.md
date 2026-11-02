@@ -172,10 +172,11 @@ That START carries no extras, so the settings saved in the app stay as they
 were.
 
 Before the first swap, `install` pulls the installed APK into Go's
-`os.UserCacheDir()`, under `pocketnix/backup/<serial>/<package>.apk`. Later
+`os.UserCacheDir()`, under `pocketnix/backup/<hash of ro.serialno>/<package>.apk`:
+the phone's own serial, because adb's changes with the connection. Later
 installs leave that backup alone, so after any number of dev builds
-`--restore` brings back the one the phone started with. `--restore`
-reinstalls it, deletes it and starts the VM.
+`--restore` brings back the one the phone started with, over USB or Wi-Fi.
+`--restore` reinstalls it, deletes it and starts the VM.
 
 When the install fails after the VM was stopped, the VM stays stopped and
 the error names the `--restore` command that undoes the swap. A build signed

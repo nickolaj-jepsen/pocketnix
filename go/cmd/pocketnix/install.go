@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
@@ -40,6 +42,8 @@ const (
 	// startDeadline bounds the wait for a START to reach the app; status counts Starting as running.
 	startDeadline = 30 * time.Second
 	statusPoll    = 500 * time.Millisecond
+	// backupKeyBytes is how much of a hash names a phone's backup directory.
+	backupKeyBytes = 8
 )
 
 // signatureHint follows a failed `adb install -r`: neither provision nor install ever uninstalls.
@@ -105,15 +109,32 @@ func (o *installOpts) restoreCommand() string {
 	return cmd + " --restore"
 }
 
-// backupPath is where the APK that an install replaced on serial's pkg is
-// kept, outliving the run.
-func backupPath(serial, pkg string) (string, error) {
+// backupPath is where the APK that an install replaced on dev's pkg is kept,
+// outliving the run. It goes by a hash of the phone's ro.serialno: adb's serial
+// changes between USB and Wi-Fi, and between Wi-Fi sessions, which would strand a
+// backup, and the path turns up in logs and adb's errors.
+func (o *installOpts) backupPath(dev adb.Device) (string, error) {
+	out, err := dev.Shell("getprop ro.serialno")
+	if err != nil {
+		return "", err
+	}
+	id := strings.TrimSpace(out)
+	if id == "" || id == "unknown" {
+		o.logf("the phone doesn't show its ro.serialno, so its backup goes by adb's serial, which changes with the connection")
+		if id = o.serial; id == "" {
+			out, err := dev.Run("get-serialno")
+			if err != nil {
+				return "", err
+			}
+			id = strings.TrimSpace(out)
+		}
+	}
 	dir, err := os.UserCacheDir()
 	if err != nil {
 		return "", err
 	}
-	serial = strings.ReplaceAll(serial, string(os.PathSeparator), "_")
-	return filepath.Join(dir, "pocketnix", "backup", serial, pkg+".apk"), nil
+	sum := sha256.Sum256([]byte(id))
+	return filepath.Join(dir, "pocketnix", "backup", hex.EncodeToString(sum[:backupKeyBytes]), o.pkg()+".apk"), nil
 }
 
 // run never uninstalls the app: that deletes the VM's disk. A failure after
@@ -128,22 +149,14 @@ func (o *installOpts) run() error {
 	if state, err := dev.State(); err != nil || state != "device" {
 		return fmt.Errorf("no usable adb device (state %q): %v", state, err)
 	}
-	serial := o.serial
-	if serial == "" {
-		out, err := dev.Run("get-serialno")
-		if err != nil {
-			return err
-		}
-		serial = strings.TrimSpace(out)
-	}
-	backup, err := backupPath(serial, o.pkg())
+	backup, err := o.backupPath(dev)
 	if err != nil {
 		return err
 	}
 	apk := o.apk
 	if o.restore {
 		if _, err := os.Stat(backup); err != nil {
-			return fmt.Errorf("no backup of %s for %s at %s", o.pkg(), serial, backup)
+			return fmt.Errorf("no backup of %s for this phone at %s", o.pkg(), backup)
 		}
 		apk = backup
 	}
