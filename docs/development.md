@@ -184,6 +184,43 @@ which deletes the disk image, and `install` leaves that to you. It refuses,
 before stopping anything, a split install and an APK too big for one pull
 (`maxPull`, for the USB transfer trap in `AGENTS.md`).
 
+## Deploying a dev build to a phone guest
+
+`pocketnix deploy` runs this checkout's agent in a phone guest without a new
+system (`pocketnix deploy -h`). It builds on the desktop, copies the result
+into the guest's store over ssh, and points the unit at it with a runtime
+drop-in, so the guest's own system comes back when it reboots:
+
+```bash
+pocketnix deploy agent            # over ssh to phone-usb (pocketnix ssh-proxy -h)
+pocketnix deploy --remove agent   # the system's agent again, without a reboot
+```
+
+- The default build is `pocketnix-cross-aarch64`, a static agent
+  cross-compiled on x86_64, which rebuilds in seconds after a change.
+  `--native` deploys the flake's own aarch64 package instead, which an
+  aarch64 desktop needs. For a commit CI built it comes from the Cachix cache
+  when Nix accepts the flake's config (`accept-flake-config`); otherwise it
+  builds under binfmt, for minutes.
+- The ssh user needs passwordless sudo in the guest, and deploy refuses
+  without it. The copy runs the guest's `nix-daemon` as root and skips
+  signature checks, since the guest's Nix trusts only root and nothing built
+  here is signed; for a user who can already be root that grants nothing new.
+- The drop-in lives under `/run/systemd/system/pocketnix-agent.service.d/`
+  and the deployed path's GC root under `/run/pocketnix-deploy/`; a reboot
+  clears both. `--remove` deletes them and restarts the unit.
+- The drop-in copies the unit's ExecStart arguments as they were at deploy
+  time, so until a reboot or `--remove` a switch that changes them doesn't
+  show (the trap in `nix/AGENTS.md`). Every deploy warns about that, and about
+  a deploy already in place.
+- Restarting the agent ends the guest's open tabs and the ssh session, which
+  rides the agent's port forward. Deploy reconnects and checks that the unit
+  runs the deployed binary in a new invocation.
+- Only `pocketnix-agent` changes. The user units that run `pocketnix-guest`
+  keep the system's package.
+- `--ssh-config <file>` hands `-F <file>` to every ssh and `nix copy` call, so
+  the host, user and ProxyCommand can come from a config of their own.
+
 ## Benchmarks
 
 `pocketnix bench` measures the GUI pipeline: frame rate, latency, and what
