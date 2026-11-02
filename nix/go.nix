@@ -3,6 +3,7 @@
 # guest's image; `withTests` vets and tests the whole module instead.
 {
   lib,
+  stdenv,
   buildGoModule,
   llvmPackages,
   e2fsprogs,
@@ -35,7 +36,11 @@ in
     vendorHash = "sha256-4lP2HSoobu81vk4kTDxnmDNyiBy1KvIbNl9YBhSBOBI=";
 
     # The agent runs in the guest from a NixOS store path; no cgo keeps it a single static binary.
-    env.CGO_ENABLED = 0;
+    env =
+      {CGO_ENABLED = 0;}
+      # nixpkgs' cross Go links externally through the cross gcc, which breaks bpf2go's host build.
+      # In env, not preBuild: there the agent still links dynamically against the cross glibc.
+      // lib.optionalAttrs (stdenv.buildPlatform != stdenv.hostPlatform) {GO_EXTLINK_ENABLED = "0";};
     # bpf2go's clang and llvm-strip. Unwrapped: the wrapper's hardening flags aren't valid for BPF,
     # and its cross-compiling name is target-prefixed.
     nativeBuildInputs = [llvmPackages.clang-unwrapped llvmPackages.llvm];

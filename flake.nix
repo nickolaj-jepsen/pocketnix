@@ -41,6 +41,12 @@
         base-image = self.nixosConfigurations.base.config.system.build.pocketnixImage.${pkgs.stdenv.hostPlatform.system};
         options-doc = import ./nix/options-doc.nix {inherit pkgs nixpkgs self;};
       }
+      // nixpkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
+        # `pocketnix deploy agent`'s default: a static aarch64 agent in seconds, not minutes under binfmt.
+        pocketnix-cross-aarch64 = pkgs.pkgsCross.aarch64-multiplatform.callPackage ./nix/go.nix {
+          subPackages = ["cmd/pocketnix-agent"];
+        };
+      }
       // nixpkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "aarch64-linux") {
         avf-kernel = pkgs.callPackage ./nix/avf-kernel/package.nix {};
         # gpu.enable's kernel module, for the AVF kernel.
