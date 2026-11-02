@@ -4,7 +4,8 @@
   pocketnix.guest = {
     enable = true;
     user = "nixos";
-    # Forwards share the phone's ports with other apps; 2222 is a popular one.
+    # Forwards share the phone's ports with other apps; 2222 is a popular one,
+    # and this one is the CLI's sshProxyDefaultPort.
     forwards.ssh = {
       guestPort = 22;
       hostPort = 2022;

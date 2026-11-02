@@ -138,7 +138,7 @@ with `pocketnix ssh-proxy` as the ssh `ProxyCommand`:
 Host phone-usb
   User alice
   HostKeyAlias phone
-  ProxyCommand pocketnix ssh-proxy --port 2022
+  ProxyCommand pocketnix ssh-proxy
 ```
 
 `pocketnix deploy` runs plain `ssh phone-usb`, so it needs that `User`; without

@@ -14,6 +14,7 @@ import (
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/adb"
 )
 
+// sshProxyUsage is a format for sshProxyDefaultPort.
 const sshProxyUsage = `usage: pocketnix ssh-proxy [--serial <serial>] [--port <phone port>]
 
 An ssh ProxyCommand reaching the guest's sshd over USB: adb forwards a free
@@ -30,7 +31,7 @@ then ssh phone-usb, pocketnix deploy, or a push from a desktop
 
 flags:
   --port <phone port>  the ssh forward's port on the phone, its
-                       pocketnix.guest.forwards.<name>.hostPort (default 2022,
+                       pocketnix.guest.forwards.<name>.hostPort (default %d,
                        a managed guest's and the example's)
   --serial <serial>    adb device to use (default: adb's only device)
 `
@@ -40,7 +41,7 @@ const sshProxyDefaultPort = 2022
 
 func runSSHProxy(args []string) error {
 	fs := flag.NewFlagSet("ssh-proxy", flag.ContinueOnError)
-	fs.Usage = func() { fmt.Fprint(os.Stderr, sshProxyUsage) }
+	fs.Usage = func() { fmt.Fprintf(os.Stderr, sshProxyUsage, sshProxyDefaultPort) }
 	serial := fs.String("serial", "", "")
 	port := fs.Int("port", sshProxyDefaultPort, "")
 	if err := fs.Parse(args); err != nil {
