@@ -18,7 +18,7 @@ in
     // {
       # The Go and compositor checks' build and test inputs.
       inputsFrom = [goTests compositorTests];
-      packages = android.packages ++ [pkgs.gopls pkgs.clippy pkgs.rust-analyzer pocketnix];
+      packages = android.packages ++ [pkgs.gopls pkgs.clippy pkgs.rust-analyzer pkgs.scrcpy pocketnix];
       RUST_SRC_PATH = pkgs.rustPlatform.rustLibSrc;
       # `cargo test` runs the GUI tests against foot as the check does.
       inherit (compositorTests) FOOT FONTCONFIG_FILE;
