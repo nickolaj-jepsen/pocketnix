@@ -1,10 +1,20 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/nickolaj-jepsen/pocketnix/go/internal/adb"
 )
 
 // doctorJSON runs doctor --json with args and decodes its report, and the
@@ -315,5 +325,289 @@ func TestDoctorCaps(t *testing.T) {
 				t.Errorf("an app without caps: caps %v, capsError %q", r.App.Caps, r.App.CapsError)
 			}
 		})
+	}
+}
+
+// fastSmoke shortens smoke's waits, for a fake device that answers at once.
+func fastSmoke(t *testing.T) {
+	poll, times := controlPoll, smokeTimes
+	t.Cleanup(func() { controlPoll, smokeTimes = poll, times })
+	controlPoll = 5 * time.Millisecond
+	s := time.Second
+	smokeTimes.cmd, smokeTimes.pty, smokeTimes.offer, smokeTimes.notify, smokeTimes.wake = s, s, s, s, s
+	smokeTimes.window, smokeTimes.frames, smokeTimes.gone, smokeTimes.exit = s, s, s, s
+	smokeTimes.forward, smokeTimes.reboot, smokeTimes.boot = s, s, s
+}
+
+// cannedPath is the state path of the shell command's canned answer, for a reaction to write.
+func cannedPath(cmdline string) string { return filepath.Join("canned", fakeCannedKey(cmdline)) }
+
+const (
+	powerLocks    = "dumpsys power | grep -F pocketnix:guest"
+	notifications = "dumpsys notification --noredact | grep -e NotificationRecord -e android.text="
+)
+
+// writeCanned is a reaction's Write making cmdline answer out with status.
+func writeCanned(cmdline, out string, status int) map[string]string {
+	return map[string]string{cannedPath(cmdline): out, cannedPath(cmdline) + ".status": strconv.Itoa(status)}
+}
+
+// Reactions of a guest with every tool smoke uses.
+var (
+	reactListen = fakeReaction{Typed: `echo (smoke-\d+)-tool=socat;.*' sh '(\d+)' '([^']+)'`,
+		Output: []string{"${1}-tool=socat"}, Write: map[string]string{"control/listening/${2}": "${3}"}}
+	reactPTY    = fakeReaction{Typed: `head -c \d+ /dev/zero \| base64; echo (smoke-\d+)-exit=`, Output: []string{"AAAAAAAAAAAA", "${1}-exit=0"}}
+	reactNotify = fakeReaction{Typed: `notify-send -p .*echo (smoke-\d+)-exit=\$s' sh '[^']*' '([^']+)'`, Output: []string{"${1}-id=7", "${1}-exit=0"},
+		Write: writeCanned(notifications, "  NotificationRecord(0x0abc1234: pkg=dev.nickolaj.pocketnix.debug user=UserHandle{0} id=7 tag=guest importance=3 key=0|dev.nickolaj.pocketnix.debug|7|guest|10200: Notification(channel=guest))\n        android.text=String (${2})\n", 0)}
+	reactUnnotify = fakeReaction{Typed: `CloseNotification u "\$1"; echo (smoke-\d+)-exit=\$\?' sh '7'`, Output: []string{"${1}-exit=0"},
+		Write: writeCanned(notifications, "", 1)}
+	reactInhibit = fakeReaction{Typed: `systemd-inhibit --what=sleep .*echo (smoke-\d+)-exit=0' sh$`, Output: []string{"${1}-pid=4242", "${1}-exit=0"},
+		Write: writeCanned(powerLocks, "    PARTIAL_WAKE_LOCK              'pocketnix:guest'                          ACQ=-1s2ms (uid=10200 pid=31337)\n", 0)}
+	reactUninhibit = fakeReaction{Typed: `kill "\$1"; echo (smoke-\d+)-exit=\$\?' sh '4242'`, Output: []string{"${1}-exit=0"},
+		Write: writeCanned(powerLocks, "", 1)}
+	reactKill = fakeReaction{Typed: `echo (smoke-\d+)-killed=\$n; echo smoke-\d+-exit=0' sh '([^']+)'`, Output: []string{"${1}-killed=1", "${1}-exit=0"},
+		Remove: []string{"control/windows/${2}"}}
+	reactReboot = fakeReaction{Typed: `systemctl reboot`, Reboot: true}
+)
+
+// smokeApps are the guest's GPU apps in smokeDevice.
+var smokeApps = []string{"org.example.Cube", "org.example.Gears"}
+
+// smokeDevice is the maintainer's Pixel with the debug app's VM running,
+// GUI on, guest RAM and a GPU, unlocked; its guest answers rs.
+func smokeDevice(t *testing.T, rs ...fakeReaction) *fakeDevice {
+	t.Helper()
+	fastSmoke(t)
+	d := newFakeDevice(t)
+	cannedPixel(d)
+	d.newAppModel()
+	d.setGUI(smokeApps...)
+	putFile(filepath.Join(d.state, "control", "pages"), "")
+	d.react(rs...)
+	d.can(powerLocks, "", 1)
+	d.can(notifications, "", 1)
+	d.can("dumpsys power | grep -m1 mWakefulness=", "  mWakefulness=Awake\n", 0)
+	d.can("dumpsys window | grep -E 'mDreamingLockscreen=|isKeyguardShowing=|mShowingLockscreen=' || true", "    isKeyguardShowing=false\n", 0)
+	d.can("date +%s", "1762000000\n", 0)
+	// An earlier boot's GPU failure, before smoke ran.
+	d.write("logcat", []byte("1761999000.000  4321  4400 E crosvm  : ResourceUnmapBlob: ErrUnspec\n"))
+	return d
+}
+
+var everyTool = []fakeReaction{reactListen, reactPTY, reactNotify, reactUnnotify, reactInhibit, reactUninhibit, reactKill, reactReboot}
+
+func stepNamed(steps []smokeStep, name string) (smokeStep, bool) {
+	for _, s := range steps {
+		if s.Name == name {
+			return s, true
+		}
+	}
+	return smokeStep{}, false
+}
+
+// leftovers is what smoke left on the fake device: tabs other than the
+// console, windows, offers and the wake lock.
+func leftovers(d *fakeDevice) []string {
+	var left []string
+	for _, id := range fakeTabs(d.state) {
+		if id != 0 {
+			left = append(left, fmt.Sprintf("tab %d", id))
+		}
+	}
+	for _, app := range fakeWindows(d.state) {
+		left = append(left, "window "+app)
+	}
+	if o := fakeOffers(d.state); o != "" {
+		left = append(left, "offer "+o)
+	}
+	if b, _ := os.ReadFile(filepath.Join(d.state, cannedPath(powerLocks))); len(b) > 0 {
+		left = append(left, "wake lock")
+	}
+	return left
+}
+
+// exitedEveryTab checks that each tab smoke opened before the reboot got exit typed.
+func exitedEveryTab(t *testing.T, d *fakeDevice) {
+	t.Helper()
+	typed := d.typed()
+	if len(typed) == 0 {
+		t.Fatal("smoke typed into no tab")
+	}
+	for tab, lines := range typed {
+		if strings.Contains(lines[0], "systemctl reboot") {
+			continue
+		}
+		if !slices.Contains(lines, "exit") {
+			t.Errorf("tab %d got no exit: %q", tab, lines)
+		}
+	}
+}
+
+func without(rs []fakeReaction, drop fakeReaction) []fakeReaction {
+	var out []fakeReaction
+	for _, r := range rs {
+		if r.Typed != drop.Typed {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func TestSmokeRunsEveryStep(t *testing.T) {
+	d := smokeDevice(t, everyTool...)
+	r, raw, err := doctorJSON(t, "--smoke", "--gpu-apps", strings.Join(smokeApps, ","))
+	if err != nil {
+		t.Errorf("doctor --smoke: %v", err)
+	}
+	for _, name := range smokeSteps {
+		if st, ok := stepNamed(r.Smoke, name); !ok || st.OK == nil || !*st.OK {
+			t.Errorf("step %s: %+v (found %v)", name, st, ok)
+		}
+	}
+	if steps, ok := field(raw, "smoke").([]any); !ok || len(steps) == 0 {
+		t.Errorf("the JSON has no smoke list: %v", field(raw, "smoke"))
+	}
+	if left := leftovers(d); len(left) > 0 {
+		t.Errorf("smoke left %q", left)
+	}
+	exitedEveryTab(t, d)
+	console, _ := os.ReadFile(fakeTabPath(d.state, 0))
+	if !strings.Contains(string(console), rebootLine) {
+		t.Error("the guest never rebooted")
+	}
+	for _, e := range []string{"uninstall", "am force-stop"} {
+		if hasEvent(d.events(), e) {
+			t.Errorf("smoke ran %s:\n%s", e, d.events())
+		}
+	}
+}
+
+// A step that fails midway still leaves cleanup to end every tab.
+func TestSmokeCleanupExitsEveryTab(t *testing.T) {
+	d := smokeDevice(t, without(everyTool, reactPTY)...)
+	r, _, err := doctorJSON(t, "--smoke", "--gpu-apps", strings.Join(smokeApps, ","))
+	var status exitStatus
+	if !errors.As(err, &status) || status != 1 {
+		t.Errorf("a failed step returned %v, want exit status 1", err)
+	}
+	if st, _ := stepNamed(r.Smoke, "pty"); st.OK == nil || *st.OK {
+		t.Errorf("pty without its output: %+v", st)
+	}
+	if st, _ := stepNamed(r.Smoke, "cleanup"); st.OK == nil || !*st.OK {
+		t.Errorf("cleanup: %+v", st)
+	}
+	exitedEveryTab(t, d)
+	if left := leftovers(d); len(left) > 0 {
+		t.Errorf("smoke left %q", left)
+	}
+}
+
+// An interrupt skips the steps left and the reboot, and still cleans up.
+func TestSmokeInterruptCleansUp(t *testing.T) {
+	d := smokeDevice(t, without(everyTool, reactPTY)...)
+	smokeTimes.pty = time.Minute
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Interrupted once the PTY step's tab is open: the console, the listener's and its own.
+	go func() {
+		for len(fakeTabs(d.state)) < 3 && ctx.Err() == nil {
+			time.Sleep(time.Millisecond)
+		}
+		cancel()
+	}()
+	steps := runSmoke(ctx, adb.Device{}, debugPackage, smokeApps, io.Discard)
+	for _, name := range []string{"notification", "inhibitor", "gpu", "pages", "reboot"} {
+		if st, _ := stepNamed(steps, name); st.OK != nil || !strings.Contains(st.Detail, "interrupted") {
+			t.Errorf("step %s after the interrupt: %+v", name, st)
+		}
+	}
+	if st, _ := stepNamed(steps, "cleanup"); st.OK == nil || !*st.OK {
+		t.Errorf("cleanup: %+v", st)
+	}
+	if left := leftovers(d); len(left) > 0 {
+		t.Errorf("smoke left %q", left)
+	}
+	if console, _ := os.ReadFile(fakeTabPath(d.state, 0)); strings.Contains(string(console), rebootLine) {
+		t.Error("an interrupted smoke rebooted the guest")
+	}
+}
+
+func TestSmokeSkipsWithoutInputs(t *testing.T) {
+	none := func(re string) fakeReaction {
+		return fakeReaction{Typed: re, Output: []string{"${1}-tool=none", "${1}-exit=0"}}
+	}
+	toolless := []fakeReaction{
+		none(`echo (smoke-\d+)-tool=socat;`), none(`notify-send -p .*echo (smoke-\d+)-exit=\$s'`), none(`systemd-inhibit --what=sleep .*echo (smoke-\d+)-exit=0' sh$`),
+		reactPTY, reactKill, reactReboot,
+	}
+	gpuApps := []string{"--gpu-apps", strings.Join(smokeApps, ",")}
+	for _, tc := range []struct {
+		name  string
+		setup func(d *fakeDevice)
+		args  []string
+		// tokens are in the detail of each step that didn't apply.
+		tokens map[string]string
+	}{
+		{name: "no-tools-no-gpu-apps", tokens: map[string]string{
+			"forward": "socat", "notification": "notify-send", "inhibitor": "systemd-inhibit", "gpu": "--gpu-apps", "pages": "--gpu-apps",
+		}},
+		{name: "no-gui", args: gpuApps, setup: func(d *fakeDevice) {
+			os.Remove(filepath.Join(d.state, "control", "gui"))
+		}, tokens: map[string]string{"gpu": "GUI", "pages": "GUI"}},
+		{name: "locked", args: gpuApps, setup: func(d *fakeDevice) {
+			d.can("dumpsys power | grep -m1 mWakefulness=", "  mWakefulness=Asleep\n", 0)
+		}, tokens: map[string]string{"gpu": "locked", "pages": "locked"}},
+		{name: "unknown-app", args: []string{"--gpu-apps", "org.example.Cube,org.example.Missing"}, tokens: map[string]string{"gpu": "org.example.Missing"}},
+		{name: "no-guest-ram", args: gpuApps, setup: func(d *fakeDevice) {
+			d.setHead(strings.Replace(fakeRunningHead, "guestRam=true", "guestRam=false", 1))
+		}, tokens: map[string]string{"pages": "guestRam=false"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := smokeDevice(t, toolless...)
+			if tc.setup != nil {
+				tc.setup(d)
+			}
+			r, _, _ := doctorJSON(t, append([]string{"--smoke"}, tc.args...)...)
+			for name, token := range tc.tokens {
+				if st, ok := stepNamed(r.Smoke, name); !ok || st.OK != nil || !strings.Contains(st.Detail, token) {
+					t.Errorf("step %s: %+v, want ok null with %q", name, st, token)
+				}
+			}
+			if left := leftovers(d); len(left) > 0 {
+				t.Errorf("smoke left %q", left)
+			}
+		})
+	}
+}
+
+func TestSmokeGPUFailsOnErrUnspec(t *testing.T) {
+	second := fakeReaction{Launch: smokeApps[1], Append: map[string]string{
+		"logcat": "1762000005.000  4321  4400 E crosvm  : ResourceUnmapBlob: ErrUnspec\n",
+	}}
+	smokeDevice(t, append(slices.Clone(everyTool), second)...)
+	r, _, err := doctorJSON(t, "--smoke", "--gpu-apps", strings.Join(smokeApps, ","))
+	var status exitStatus
+	if !errors.As(err, &status) || status != 1 {
+		t.Errorf("a failed GPU step returned %v, want exit status 1", err)
+	}
+	if st, _ := stepNamed(r.Smoke, "gpu"); st.OK == nil || *st.OK || !strings.Contains(st.Detail, "ErrUnspec") {
+		t.Errorf("gpu: %+v, want a failure naming ErrUnspec", st)
+	}
+}
+
+func TestSmokeNeedsARunningVM(t *testing.T) {
+	d := smokeDevice(t, everyTool...)
+	d.setHead("state=Stopped phase=Stopped link=Down host=null\nengine launched=none audio=off")
+	r, _, err := doctorJSON(t, "--smoke")
+	if err != nil {
+		t.Errorf("doctor --smoke on a stopped VM: %v", err)
+	}
+	for _, name := range smokeSteps {
+		if st, ok := stepNamed(r.Smoke, name); !ok || st.OK != nil || !strings.Contains(st.Detail, "Stopped") {
+			t.Errorf("step %s: %+v, want ok null naming the phase", name, st)
+		}
+	}
+	if len(d.typed()) > 0 {
+		t.Errorf("smoke typed into tabs of a stopped VM: %v", d.typed())
 	}
 }
