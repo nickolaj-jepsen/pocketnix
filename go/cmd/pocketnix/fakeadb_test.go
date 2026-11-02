@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -224,14 +225,14 @@ func fakeStatusRunning(state string) bool {
 }
 
 // fakeInstalled reports whether pkg is installed: the "installed" state file
-// names one package, or is empty for either.
+// names one package, or is empty for either. Without it, a running VM means
+// the app is there, as either package.
 func fakeInstalled(state, pkg string) bool {
-	// A running VM means the app is there.
-	if fakeRunning(state) {
-		return true
-	}
 	b, err := os.ReadFile(filepath.Join(state, "installed"))
-	return err == nil && (len(b) == 0 || string(b) == pkg)
+	if err != nil {
+		return fakeRunning(state)
+	}
+	return len(b) == 0 || string(b) == pkg
 }
 
 // fakeProviderPackage is the app package of a content call's provider URI.
@@ -523,9 +524,17 @@ func (d *fakeDevice) installAPKAs(pkg string, b []byte) {
 	d.write("installed", []byte(pkg))
 }
 
-// installedAPK is the installed app's APK, nil when there's none.
+// installedAPK is the installed app's APK, nil when there's none, and what
+// fakeAPK put in it for one of those.
 func (d *fakeDevice) installedAPK() []byte {
 	b, _ := os.ReadFile(filepath.Join(d.state, "device", fakeAPKPath(d.state)))
+	if z, err := zip.NewReader(bytes.NewReader(b), int64(len(b))); err == nil {
+		if f, err := z.Open("build"); err == nil {
+			defer f.Close()
+			build, _ := io.ReadAll(f)
+			return build
+		}
+	}
 	return b
 }
 

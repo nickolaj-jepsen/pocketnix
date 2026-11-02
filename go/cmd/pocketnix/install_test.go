@@ -7,10 +7,16 @@ import (
 	"testing"
 )
 
-func fakeAPKFile(t *testing.T, name, content string) string {
+// fakeAPKFile writes a fakeAPK holding build, of the debug package when name
+// says so, as gradle's names do.
+func fakeAPKFile(t *testing.T, name, build string) string {
 	t.Helper()
+	pkg := releasePackage
+	if strings.Contains(name, "debug") {
+		pkg = debugPackage
+	}
 	p := filepath.Join(t.TempDir(), name)
-	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(p, fakeAPK(pkg, build), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return p
@@ -201,6 +207,51 @@ func TestInstallKeepsFirstBackup(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(b[0]); string(got) != "the owner's build" {
 		t.Errorf("backup = %q, want the first build", got)
+	}
+}
+
+// An APK of the other package would replace that app and kill its VM, with
+// nothing backed up. The refusal names the flag that was probably meant.
+func TestInstallRefusesTheOtherPackage(t *testing.T) {
+	for _, tc := range []struct {
+		name, running, apk string
+		args               []string
+	}{
+		{name: "debug-apk-without-debug", running: debugPackage, apk: "app-debug.apk"},
+		{name: "release-apk-with-debug", running: releasePackage, apk: "app-release.apk", args: []string{"--debug"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newFakeDevice(t)
+			d.installAPKAs(tc.running, []byte("the owner's build"))
+			d.setRunning(true)
+			err := runInstall(append(tc.args, fakeAPKFile(t, tc.apk, "a dev build")))
+			if err == nil || !strings.Contains(err.Error(), "--debug") {
+				t.Errorf("got %v, want a refusal naming --debug", err)
+			}
+			if ev := d.events(); hasEvent(ev, "install ") || hasEvent(ev, "vm killed") || hasEvent(ev, "am start") {
+				t.Errorf("acted on the device; events:\n%s", ev)
+			}
+			if !d.running() {
+				t.Error("the VM stopped")
+			}
+			if got := string(d.installedAPK()); got != "the owner's build" {
+				t.Errorf("installed APK = %q", got)
+			}
+		})
+	}
+}
+
+func TestInstallRefusesAFileThatIsNoAPK(t *testing.T) {
+	d := newFakeDevice(t)
+	d.installAPK([]byte("the owner's build"))
+	d.setRunning(true)
+	p := filepath.Join(t.TempDir(), "app-debug.apk")
+	os.WriteFile(p, []byte("not a zip"), 0o644)
+	if err := runInstall([]string{"--debug", p}); err == nil {
+		t.Error("installed a file that isn't an APK")
+	}
+	if ev := d.events(); hasEvent(ev, "install ") || hasEvent(ev, "am start") {
+		t.Errorf("acted on the device; events:\n%s", ev)
 	}
 }
 

@@ -12,8 +12,7 @@ import (
 func TestProvisionReleaseImage(t *testing.T) {
 	d := newFakeDevice(t)
 	img, want := testImage(t)
-	apk := filepath.Join(t.TempDir(), "app-debug.apk")
-	os.WriteFile(apk, []byte("apk"), 0o644)
+	apk := fakeAPKFile(t, "app-debug.apk", "apk")
 	o, err := parseProvision([]string{"--apk", apk, "--debug", "--no-start"})
 	if err != nil {
 		t.Fatal(err)

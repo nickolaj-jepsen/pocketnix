@@ -119,6 +119,11 @@ func backupPath(serial, pkg string) (string, error) {
 // run never uninstalls the app: that deletes the VM's disk. A failure after
 // the VM was stopped leaves it stopped and keeps the backup.
 func (o *installOpts) run() error {
+	if !o.restore {
+		if err := checkAPKPackage(o.apk, o.pkg()); err != nil {
+			return err
+		}
+	}
 	dev := adb.Device{Serial: o.serial}
 	if state, err := dev.State(); err != nil || state != "device" {
 		return fmt.Errorf("no usable adb device (state %q): %v", state, err)
@@ -141,8 +146,6 @@ func (o *installOpts) run() error {
 			return fmt.Errorf("no backup of %s for %s at %s", o.pkg(), serial, backup)
 		}
 		apk = backup
-	} else if _, err := os.Stat(apk); err != nil {
-		return err
 	}
 
 	prov := provider{dev: dev, authority: o.pkg() + ".provision"}
