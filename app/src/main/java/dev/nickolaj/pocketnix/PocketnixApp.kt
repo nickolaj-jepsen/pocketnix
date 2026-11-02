@@ -19,17 +19,7 @@ class PocketnixApp : Application() {
         Thread.setDefaultUncaughtExceptionHandler { t, e ->
             if (t === mainLooper.thread) crash?.uncaughtException(t, e) else Log.e("PocketnixApp", "uncaught in ${t.name}; the thread ends, the app stays", e)
         }
-        // The AVF API is @SystemApi and VirtualMachineCustomImageConfig @hide, and a
-        // keyboard's selected layout is InputManager's hidden API; this exempts them
-        // for this process only. Each call replaces the list: name them all here.
-        runCatching {
-            HiddenApiBypass.addHiddenApiExemptions(
-                "Landroid/system/virtualmachine/",
-                "Landroid/system/virtualizationservice/",
-                "Landroid/hardware/input/",
-                "Landroid/view/InputDevice;"
-            )
-        }.onFailure { Log.w("PocketnixApp", "hidden API exemption failed", it) }
+        exemptHiddenApis()
         registerActivityLifecycleCallbacks(Foreground)
         // Every entry point runs this, so a stale guest window's card never shows a window that's gone.
         GuiSession.sweep(this)
@@ -38,3 +28,27 @@ class PocketnixApp : Application() {
 }
 
 val android.content.Context.vm: Vm get() = (applicationContext as PocketnixApp).vm
+
+/**
+ * Exempts this process from the hidden API checks on what the app reflects
+ * on; false when the exemption failed. Idempotent and thread-safe: call it
+ * before any hidden API, from any entry point, as a content provider can be
+ * called before [PocketnixApp.onCreate].
+ */
+fun exemptHiddenApis(): Boolean = hiddenApiExemption
+
+// The AVF API is @SystemApi and VirtualMachineCustomImageConfig @hide, and a keyboard's
+// selected layout is InputManager's hidden API. Each call replaces the list: name them all here.
+private val hiddenApiExemption: Boolean by lazy {
+    runCatching {
+        HiddenApiBypass.addHiddenApiExemptions(
+            "Landroid/system/virtualmachine/",
+            "Landroid/system/virtualizationservice/",
+            "Landroid/hardware/input/",
+            "Landroid/view/InputDevice;"
+        )
+    }.getOrElse {
+        Log.w("PocketnixApp", "hidden API exemption failed", it)
+        false
+    }
+}

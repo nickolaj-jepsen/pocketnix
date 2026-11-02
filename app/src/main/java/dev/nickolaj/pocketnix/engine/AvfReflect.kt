@@ -3,6 +3,7 @@
  */
 package dev.nickolaj.pocketnix.engine
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.os.ParcelFileDescriptor
 import android.util.Log
@@ -29,6 +30,12 @@ object AvfReflect {
     private val DISK by lazy { Class.forName("$PKG.VirtualMachineCustomImageConfig\$Disk") }
     private val GPU by lazy { runCatching { Class.forName("$PKG.VirtualMachineCustomImageConfig\$GpuConfig") }.getOrNull() }
     private val GPU_B by lazy { runCatching { Class.forName("$PKG.VirtualMachineCustomImageConfig\$GpuConfig\$Builder") }.getOrNull() }
+
+    // GpuConfig.Builder's renderer flags, in [Gpu.flags]' order.
+    private val RENDERER_FLAGS = listOf("setRendererUseVulkan", "setRendererUseEgl", "setRendererUseGles", "setRendererUseGlx", "setRendererUseSurfaceless")
+
+    // A config builder's Boolean parameter, in the order [set] tries them.
+    private val BOOLEAN_TYPES = listOf(Boolean::class.javaObjectType, Boolean::class.javaPrimitiveType!!)
 
     // VirtualMachineConfig and VirtualMachineManager constants (stable SystemApi values).
     const val CPU_TOPOLOGY_ONE_CPU = 0
@@ -113,7 +120,10 @@ object AvfReflect {
         val glx: Boolean? = null,
         val surfaceless: Boolean? = null,
         val contexts: List<String> = emptyList()
-    )
+    ) {
+        /** The renderer flags, in [RENDERER_FLAGS]' order. */
+        internal val flags: List<Boolean?> get() = listOf(vulkan, egl, gles, glx, surfaceless)
+    }
 
     /** What a networked VM asks for when it wants no GPU (see [setGpuConfig]). */
     val GPU_2D = Gpu("2d")
@@ -145,14 +155,8 @@ object AvfReflect {
     fun setGpuConfig(b: Any, gpu: Gpu): Boolean = runCatching {
         val gpuB = (GPU_B ?: return true).getDeclaredConstructor().apply { isAccessible = true }.newInstance()
         if (!set(gpuB, "setBackend", gpu.backend)) error("GpuConfig.Builder.setBackend(${gpu.backend}) is missing or failed")
-        val missing = listOf(
-            "setRendererUseVulkan" to gpu.vulkan,
-            "setRendererUseEgl" to gpu.egl,
-            "setRendererUseGles" to gpu.gles,
-            "setRendererUseGlx" to gpu.glx,
-            "setRendererUseSurfaceless" to gpu.surfaceless,
-            "setContextTypes" to gpu.contexts.takeIf { it.isNotEmpty() }?.toTypedArray()
-        ).filter { (name, value) -> value != null && !set(gpuB, name, value) }.map { it.first }
+        val missing = (RENDERER_FLAGS.zip(gpu.flags) + ("setContextTypes" to gpu.contexts.takeIf { it.isNotEmpty() }?.toTypedArray()))
+            .filter { (name, value) -> value != null && !set(gpuB, name, value) }.map { it.first }
         val cfg = invoke(gpuB, "build") ?: error("GpuConfig.Builder.build() returned null")
         invoke(b, "setGpuConfig", GPU!! to cfg)
         Log.i(TAG, "gpu config: $gpu" + if (missing.isEmpty()) "" else "; this AVF lacks $missing")
@@ -255,6 +259,45 @@ object AvfReflect {
         }.isSuccess
     }
 
+    /** What [probe] found. */
+    class Probe(
+        /**
+         * Per GpuConfig.Builder renderer flag, the Boolean class its setter
+         * takes (boxed or primitive), null for a missing setter; null itself
+         * when this AVF has no GpuConfig.
+         */
+        val gpuFlagTypes: List<Class<*>?>?,
+        /** Every class and member [editRawConfig] reaches exists. */
+        val rawConfigBinder: Boolean,
+        /** [useAutoMemoryBalloon]'s method exists. */
+        val autoMemoryBalloon: Boolean
+    )
+
+    /**
+     * What [setGpuConfig], [editRawConfig] and [useAutoMemoryBalloon] would
+     * find on this AVF, looked up with `Class.forName`, `getDeclaredMethod`
+     * and `getDeclaredField` only: it builds nothing, invokes nothing and
+     * never connects to virtmgr. Needs the hidden API exemptions first.
+     */
+    @SuppressLint("PrivateApi") // Looking up AVF's internals is what it's for.
+    fun probe(): Probe {
+        val gpuFlagTypes = GPU_B?.takeIf { GPU != null }?.let { b ->
+            RENDERER_FLAGS.map { name -> BOOLEAN_TYPES.firstOrNull { t -> found { b.getDeclaredMethod(name, t) } } }
+        }
+        val rawConfigBinder = found {
+            // Not initialized, so none of their static code runs.
+            val vs = Class.forName("$PKG.VirtualizationService", false, MGR.classLoader)
+            MGR.getDeclaredField("sCreateLock")
+            vs.getDeclaredMethod("getInstance")
+            vs.getDeclaredField("mBinder")
+            Class.forName("android.system.virtualizationservice.IVirtualizationService", false, MGR.classLoader)
+        }
+        val autoMemoryBalloon = found { CUSTOM_B.getDeclaredMethod("useAutoMemoryBalloon", Boolean::class.javaPrimitiveType!!) }
+        return Probe(gpuFlagTypes, rawConfigBinder, autoMemoryBalloon)
+    }
+
+    private inline fun found(lookup: () -> Any) = runCatching { lookup() }.isSuccess
+
     /** The edit [editRawConfig] was given failed, so the VM didn't start: what it needed isn't there. */
     class RawEditFailed(cause: Throwable) : IllegalStateException("editing the raw VM config failed: ${cause.message}", cause)
 
@@ -294,7 +337,7 @@ object AvfReflect {
      */
     private fun set(target: Any, name: String, value: Any): Boolean {
         val types = when (value) {
-            is Boolean -> listOf(Boolean::class.javaObjectType, Boolean::class.javaPrimitiveType!!)
+            is Boolean -> BOOLEAN_TYPES
             is String -> listOf(String::class.java)
             is Array<*> -> listOf(Array<String>::class.java)
             else -> emptyList()
