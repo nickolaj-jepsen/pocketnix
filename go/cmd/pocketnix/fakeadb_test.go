@@ -62,6 +62,9 @@ const (
 	fakeRuntimeGrants = "runtime-grants"
 )
 
+// fakeDiskFile is the app's disk image, under the state directory.
+const fakeDiskFile = "app/files/disk.img"
+
 // fakeSerial is what get-serialno answers when no -s is given.
 const fakeSerial = "FAKESERIAL0001"
 
@@ -388,8 +391,8 @@ func fakeShell(state, line string, logEvent func(string, ...any)) (string, int) 
 	}
 	f := strings.Fields(line)
 	w := shellWords(line)
-	files := filepath.Join(state, "app", "files")
-	disk, part := filepath.Join(files, "disk.img"), filepath.Join(files, "disk.img.part")
+	disk := filepath.Join(state, fakeDiskFile)
+	part := disk + ".part"
 	unquote := func(s string) string { return strings.Trim(s, "'") }
 	devPath := func(p string) string { return filepath.Join(state, "device", p) }
 	if _, err := os.Stat(filepath.Join(state, "limiter-high")); err == nil {
@@ -480,7 +483,7 @@ func fakeShell(state, line string, logEvent func(string, ...any)) (string, int) 
 			return "Result: Bundle[{" + string(b) + ", ok=true}]\n", 0
 		case "begin":
 			n, _ := strconv.ParseInt(arg, 10, 64)
-			os.MkdirAll(files, 0o755)
+			os.MkdirAll(filepath.Dir(disk), 0o755)
 			os.WriteFile(part, nil, 0o600)
 			os.Truncate(part, n)
 		case "commit":
@@ -703,9 +706,12 @@ func hasEvent(events, prefix string) bool {
 }
 
 func (d *fakeDevice) disk() []byte {
-	b, _ := os.ReadFile(filepath.Join(d.state, "app", "files", "disk.img"))
+	b, _ := os.ReadFile(filepath.Join(d.state, fakeDiskFile))
 	return b
 }
+
+// setDisk gives the phone a disk image, as if provisioned before the test.
+func (d *fakeDevice) setDisk(b []byte) { d.write(fakeDiskFile, b) }
 
 func (d *fakeDevice) running() bool { return fakeRunning(d.state) }
 
@@ -780,6 +786,9 @@ func (d *fakeDevice) setAPKSize(n int64) { d.write("stat-size", []byte(strconv.F
 func (d *fakeDevice) setProp(name, value string) {
 	d.write(filepath.Join("props", name), []byte(value))
 }
+
+// denyAVF makes the phone say it lacks AVF's system feature.
+func (d *fakeDevice) denyAVF() { d.can(avfFeatureCommand, "false\n", 1) }
 
 // addPackages installs packages other than the app (e.g. app.grapheneos.apps).
 func (d *fakeDevice) addPackages(pkgs ...string) {

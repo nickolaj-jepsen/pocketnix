@@ -54,6 +54,8 @@ const (
 	vmTool    = "/apex/com.android.virt/bin/vm"
 	// avfFeature is the system feature an AVF device declares.
 	avfFeature = "android.software.virtualization_framework"
+	// avfFeatureCommand prints true or false, exiting 0 or 1.
+	avfFeatureCommand = "pm has-feature " + avfFeature
 	// grapheneOSPackage is GrapheneOS's App Store, present on every GrapheneOS install.
 	grapheneOSPackage = "app.grapheneos.apps"
 	// testedKernel is the kernel branch pocketnix has booted on.
@@ -258,8 +260,7 @@ func probeAVF(dev adb.Device) doctorAVF {
 		HypervisorVersion:    getprop(dev, "ro.boot.hypervisor.version"),
 		VMInfo:               []string{},
 	}
-	// pm has-feature prints true or false, exiting 0 or 1.
-	if out, status, err := dev.ShellStatus("pm has-feature " + avfFeature); err == nil && (status == 0 || status == 1) {
+	if out, status, err := dev.ShellStatus(avfFeatureCommand); err == nil && (status == 0 || status == 1) {
 		a.Feature = propBool(ptr(strings.TrimSpace(out)))
 	}
 	if out := shellOK(dev, "pm list packages --apex-only --show-versioncode"); out != nil {
@@ -562,6 +563,8 @@ const (
 	smokeToken = "pocketnix-smoke-forward"
 	// wakeLockTag mirrors VmService's wake lock tag.
 	wakeLockTag = "pocketnix:guest"
+	// wakeLockCommand's grep exits 1 when no line matches.
+	wakeLockCommand = "dumpsys power | grep -F " + wakeLockTag
 	// guestNotificationTag mirrors GuestNotifications.TAG.
 	guestNotificationTag = "guest"
 	// gpuFailure is crosvm's line when a GPU context after the first can't map its blob (app/AGENTS.md).
@@ -1116,8 +1119,7 @@ func (s *smoker) notify() smokeStep {
 
 // wakeLock is whether the app with uids (appUID's) holds its wake lock.
 func (s *smoker) wakeLock(uids string) (bool, error) {
-	// grep exits 1 when no line matches.
-	out, status, err := s.dev.ShellStatus("dumpsys power | grep -F " + wakeLockTag)
+	out, status, err := s.dev.ShellStatus(wakeLockCommand)
 	if err != nil || status > 1 {
 		return false, fmt.Errorf("dumpsys power: %v (status %d)", err, status)
 	}

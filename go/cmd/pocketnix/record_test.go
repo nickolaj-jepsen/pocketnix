@@ -534,7 +534,7 @@ func TestRecordNoDevice(t *testing.T) {
 
 func TestRecordFailVerdictStillWritesTheBundle(t *testing.T) {
 	d := recordDevice(t)
-	d.can("pm has-feature android.software.virtualization_framework", "false\n", 1)
+	d.denyAVF()
 	dir := t.TempDir()
 	_, err := stdoutOf(t, func() error { return runDoctor([]string{"--record", dir}) })
 	var status exitStatus
