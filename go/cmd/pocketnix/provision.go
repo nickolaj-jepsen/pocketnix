@@ -291,10 +291,10 @@ func (o *provisionOpts) run() error {
 func (o *provisionOpts) checkDevice(dev adb.Device) error {
 	v := shellVerdict(probeDevice(dev), probeAVF(dev))
 	if v.Level == levelFail && !o.force {
-		return fmt.Errorf("this phone can't run the VM (%s); --force provisions it anyway", strings.Join(v.Reasons, "; "))
+		return fmt.Errorf("this phone can't run the VM (%s); --force provisions it anyway", plainText(strings.Join(v.Reasons, "; ")))
 	}
 	for _, reason := range v.Reasons {
-		o.logf("%s", reason)
+		o.logf("%s", plainText(reason))
 	}
 	return nil
 }
