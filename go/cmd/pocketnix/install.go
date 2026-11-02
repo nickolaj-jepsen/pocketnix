@@ -103,12 +103,7 @@ func runInstall(args []string) error {
 	return o.run()
 }
 
-func (o *installOpts) pkg() string {
-	if o.debug {
-		return debugPackage
-	}
-	return releasePackage
-}
+func (o *installOpts) pkg() string { return appPackage(o.debug) }
 
 func (o *installOpts) logf(format string, args ...any) {
 	fmt.Fprintf(o.log, "install: "+format+"\n", args...)
