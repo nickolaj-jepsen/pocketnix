@@ -33,6 +33,20 @@ that cross directories.
 
 - Google's AVF kernel has no ACPI: under QEMU it needs `-M virt,acpi=off`, or
   edk2 boots it with an empty device tree and it hangs silently.
+- An x86_64 host can't assemble the aarch64 image under binfmt: systemd-repart's
+  `unshare --map-root-user` fails under qemu-user (`unshare: unshare failed:
+  Invalid argument`). `imageBuiltOn` gives x86_64 an image of its own, but
+  `checks.aarch64-linux.base-boot` boots the aarch64-assembled one, so only an
+  aarch64 builder (CI's aarch64 job) runs it.
+- The guest's Nix trusts only root, and even a root `nix-daemon` refuses paths
+  built on the desktop for lacking a trusted signature: copy them with
+  `nix copy --no-check-sigs` to a daemon run through sudo (`deployRemoteProgram`).
+  In a store URL `%20` separates the remote program's words; `+` doesn't.
+- A `pocketnix deploy` drop-in copies the unit's ExecStart arguments as they
+  were at deploy time: a switch that changes them (`agent.listen`, say) shows
+  only after a reboot or `pocketnix deploy --remove`. Look for
+  `pocketnix-deploy.conf` drop-ins under `/run` when a switch's change is
+  missing.
 - The Nix build sandbox has no `/dev/vhost-vsock`, so the NixOS test reaches the
   agent over TCP; `nix run .#boot-example` (outside the sandbox) covers vsock.
 - The CLI's pure-Go resolver asks DNS before /etc/hosts under NixOS's nsswitch

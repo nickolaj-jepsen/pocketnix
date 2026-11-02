@@ -131,7 +131,7 @@ prunes, there is none.
 
 ## Pushing from a desktop
 
-`nixos-rebuild --target-host` works as usual, over the network or over USB
+`nixos-rebuild --target-host` reaches the guest over the network, or over USB
 with `pocketnix ssh-proxy` as the ssh `ProxyCommand`:
 
 ```
@@ -140,6 +140,20 @@ Host phone-usb
   ProxyCommand pocketnix ssh-proxy --port 2022
 ```
 
+nixos-rebuild copies the system as the ssh user, `--sudo` or not, and the
+guest's Nix trusts only root (`nix.settings.trusted-users`), so it refuses
+what you built on the desktop: those paths carry no signature it trusts.
+With passwordless sudo for that user, copy the system as root first, then
+switch; nixos-rebuild finds it already there:
+
 ```bash
+sys=$(nix build --no-link --print-out-paths .#nixosConfigurations.phone.config.system.build.toplevel)
+nix copy --no-check-sigs --to 'ssh-ng://alice@phone-usb?remote-program=sudo%20-n%20/run/current-system/sw/bin/nix-daemon' "$sys"
 nixos-rebuild switch --flake .#phone --target-host alice@phone-usb --sudo
 ```
+
+Otherwise sign the paths (`nix store sign`) with a key in the guest's
+`nix.settings.trusted-public-keys`, or make the user trusted, which lets it
+write anything into the store, as root can. To try a build of the agent
+without a new system, see [Deploying a dev build to a phone
+guest](development.md#deploying-a-dev-build-to-a-phone-guest).
