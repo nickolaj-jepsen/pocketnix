@@ -53,6 +53,8 @@ import kotlinx.coroutines.withTimeoutOrNull
  * - `--method rename --arg <tab id> --extra title:s:<title>`: gives a terminal
  *   tab its user title; an empty one clears it
  * - `--method reopen --arg <tab id>`: starts an ended terminal tab again
+ * - `--method close --arg <tab id>`: closes a terminal tab as its × does,
+ *   hanging up what still runs in it
  * - `--method offers`: the port forward offers as `offers`, one
  *   [ForwardOffers.describe] line per known guest port
  * - `--method offer --arg <guest port> --extra answer:s:<allow|dismiss>`:
@@ -125,6 +127,12 @@ class ControlProvider : ContentProvider() {
                     val t = onMain { tab(vm, tabId(arg ?: error("reopen needs a tab id"))) }
                     if (!t.ended) error("tab ${t.id} hasn't ended")
                     onMain { vm.reopenTab(t.id) } ?: error("the agent can't be reached")
+                }
+
+                "close" -> {
+                    val t = onMain { tab(vm, tabId(arg ?: error("close needs a tab id"))) }
+                    if (t.kind == Tab.Kind.Console) error("the console can't be closed")
+                    onMain { vm.tabs.close(t.id) }
                 }
 
                 "links" -> {
