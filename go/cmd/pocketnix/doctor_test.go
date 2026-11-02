@@ -402,7 +402,7 @@ func writeCanned(cmdline, out string, status int) map[string]string {
 var (
 	reactListen = fakeReaction{Typed: `echo (smoke-\d+)-tool=socat;.*' sh '(\d+)' '([^']+)'`,
 		Output: []string{"${1}-tool=socat"}, Write: map[string]string{"control/listening/${2}": "${3}"}}
-	reactPTY = fakeReaction{Typed: `head -c \d+ /dev/urandom \| base64; .*echo (smoke-\d+)-exit=`, Output: []string{"AAAAAAAAAAAA", "${1}-exit=0"},
+	reactPTY = fakeReaction{Typed: `head -c \d+ /dev/urandom.*\| base64; .*echo (smoke-\d+)-exit=`, Output: []string{"AAAAAAAAAAAA", "${1}-exit=0"},
 		Write: map[string]string{"control/guest-pty": "1000\n"}}
 	reactNotify = fakeReaction{Typed: `notify-send -p .*echo (smoke-\d+)-exit=\$s' sh '[^']*' '([^']+)'`, Output: []string{"${1}-id=7", "${1}-exit=0"},
 		Append: map[string]string{"notifications": "  NotificationRecord(0x0abc1234: pkg=dev.nickolaj.pocketnix.debug user=UserHandle{0} id=7 tag=guest importance=3 key=0|dev.nickolaj.pocketnix.debug|7|guest|10200: Notification(channel=guest))\n        android.text=String (${2})\n"}}

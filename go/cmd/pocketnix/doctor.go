@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -134,7 +135,7 @@ func runDoctor(args []string) error {
 		if rec != nil {
 			r.Smoke = runSmoke(rec.ctx, dev, o.pkg(), o.gpuApps, rec.smokeProgress())
 		} else {
-			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 			// After the first interrupt smoke cleans up; a second one kills it as usual.
 			context.AfterFunc(ctx, stop)
 			r.Smoke = runSmoke(ctx, dev, o.pkg(), o.gpuApps, os.Stderr)
