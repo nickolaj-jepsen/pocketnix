@@ -48,8 +48,14 @@ func fakeAPKPath(state string) string {
 	return "/data/app/~~preinstalled==/base.apk"
 }
 
-// fakeCrashes is the file that marks an APK as a build whose process dies at start.
-const fakeCrashes = "crashes"
+const (
+	// fakeCrashes is the file that marks an APK as a build whose process dies at start.
+	fakeCrashes = "crashes"
+	// fakeVersionCode and fakeDebuggable mark an APK with what the device reads of
+	// it, independently of the CLI's manifest parser.
+	fakeVersionCode = "version-code"
+	fakeDebuggable  = "debuggable"
+)
 
 // fakeSerial is what get-serialno answers when no -s is given.
 const fakeSerial = "FAKESERIAL0001"
@@ -96,6 +102,11 @@ func fakeADB(args []string) int {
 		b, err := os.ReadFile(local)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if fakeRefusesDowngrade(state, b) {
+			fmt.Println("Performing Streamed Install")
+			fmt.Println("Failure [INSTALL_FAILED_VERSION_DOWNGRADE: Downgrade detected]")
 			return 1
 		}
 		os.RemoveAll(filepath.Dir(devPath(fakeAPKPath(state))))
@@ -256,6 +267,50 @@ func fakeAPKEntry(state, name string) ([]byte, bool) {
 	if err != nil {
 		return nil, false
 	}
+	return zipEntry(b, name)
+}
+
+// fakeRefusesDowngrade is Android's rule for installing apk with -d: a lower
+// version code passes only over a debuggable build or on a debuggable OS. APKs
+// without the fakeVersionCode mark aren't compared.
+func fakeRefusesDowngrade(state string, apk []byte) bool {
+	newer, ok := zipEntry(apk, fakeVersionCode)
+	if !ok {
+		return false
+	}
+	older, ok := fakeAPKEntry(state, fakeVersionCode)
+	if !ok {
+		return false
+	}
+	n, _ := strconv.ParseInt(string(newer), 10, 64)
+	o, _ := strconv.ParseInt(string(older), 10, 64)
+	if _, debuggable := fakeAPKEntry(state, fakeDebuggable); n >= o || debuggable {
+		return false
+	}
+	osDebuggable, _ := os.ReadFile(filepath.Join(state, "props", "ro.debuggable"))
+	return string(osDebuggable) != "1"
+}
+
+// fakeDumpsysPackage is dumpsys package for a build with the fakeVersionCode
+// mark, in a phone's shape; a resolver table comes first, whose lines must not count.
+func fakeDumpsysPackage(state, pkg string) (string, bool) {
+	code, ok := fakeAPKEntry(state, fakeVersionCode)
+	if !ok {
+		return "", false
+	}
+	flags := "HAS_CODE ALLOW_CLEAR_USER_DATA"
+	if _, debuggable := fakeAPKEntry(state, fakeDebuggable); debuggable {
+		flags = "DEBUGGABLE " + flags
+	}
+	return "Activity Resolver Table:\n  versionCode=1\n  flags=[ DEBUGGABLE ]\n\nPackages:\n" +
+		"  Package [" + pkg + "] (a1b2c3):\n    appId=10200\n" +
+		"    versionCode=" + string(code) + " minSdk=34 targetSdk=36\n    versionName=0.1.0\n" +
+		"    flags=[ " + flags + " ]\n    privateFlags=[ PRIVATE_FLAG_ACTIVITIES_RESIZE_MODE_RESIZEABLE ]\n" +
+		"    pkgFlags=[ " + flags + " ]\n", true
+}
+
+// zipEntry is a file in the zip b, false if it has none or b is no zip.
+func zipEntry(b []byte, name string) ([]byte, bool) {
 	z, err := zip.NewReader(bytes.NewReader(b), int64(len(b)))
 	if err != nil {
 		return nil, false
@@ -334,6 +389,11 @@ func fakeShell(state, line string, logEvent func(string, ...any)) (string, int) 
 			out += fakeAppUID(state) + " crosvm_pocketnix\n"
 		}
 		return out, 0
+	case len(w) == 3 && w[0] == "dumpsys" && w[1] == "package" && (w[2] == releasePackage || w[2] == debugPackage):
+		if out, ok := fakeDumpsysPackage(state, w[2]); ok {
+			return out, 0
+		}
+		return "fake adb: unknown shell command " + line, 127
 	case len(w) == 2 && w[0] == "ls":
 		if _, err := os.Stat(devPath(w[1])); err != nil {
 			return "ls: " + w[1] + ": No such file or directory\n", 1

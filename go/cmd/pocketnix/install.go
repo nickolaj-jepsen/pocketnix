@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -54,8 +55,18 @@ const (
 	vmProcessPrefix = "crosvm"
 )
 
-// signatureHint follows a failed `adb install -r`: neither provision nor install ever uninstalls.
-const signatureHint = "A signature mismatch needs an uninstall first, which deletes the VM's disk image; do that by hand if you mean it"
+// uninstallCost follows any mention of an uninstall: neither provision nor install ever does one.
+const uninstallCost = "only an uninstall gets past it, and an uninstall deletes the VM's disk image and everything in the guest, for good. pocketnix won't do that: do it by hand only if you mean to lose them"
+
+// signatureHint follows a failed `adb install -r`, whatever failed it.
+const signatureHint = "If that's a signature mismatch, " + uninstallCost
+
+// What a package's entry in `dumpsys package` holds: its long version code, and
+// its flags, among them DEBUGGABLE.
+var (
+	dumpsysVersionCode = regexp.MustCompile(`(?m)^\s*versionCode=(\d+)`)
+	dumpsysFlags       = regexp.MustCompile(`(?m)^\s*(?:pkgF|f)lags=\[([^\]]*)\]`)
+)
 
 type installOpts struct {
 	apk, serial             string
@@ -205,10 +216,20 @@ func (o *installOpts) run() error {
 		default:
 			return fmt.Errorf("can't tell whether the VM is running, so not installing: %w", err)
 		}
+		// Before the backup and the stop: a refusal changes nothing.
+		osDebuggable := propBool(getprop(dev, "ro.debuggable"))
+		incoming, _ := readAPKManifest(apk)
+		installedCode, installedDebuggable := installedBuild(dev, o.pkg())
+		if downgradeRefused(incoming.versionCode, installedCode, installedDebuggable, osDebuggable) {
+			return o.refuseDowngrade(*incoming.versionCode, *installedCode, backup)
+		}
 		// Before the stop: a refused or failed pull leaves the VM as it was.
 		if !o.restore {
 			if s.newBackup, err = o.backUp(dev, out, backup); err != nil {
 				return err
+			}
+			if kept, err := readAPKManifest(backup); err == nil && downgradeRefused(kept.versionCode, incoming.versionCode, incoming.debuggable, osDebuggable) {
+				o.logf("warning: after this install --restore can't go back: Android won't take the backup's versionCode %d over this build's %d, which isn't debuggable, on this phone", *kept.versionCode, *incoming.versionCode)
 			}
 		}
 	}
@@ -240,6 +261,46 @@ func (o *installOpts) run() error {
 		return nil
 	}
 	return o.startVM(dev, prov)
+}
+
+// installedBuild reads pkg's version code and debuggable flag from dumpsys
+// package, nil where it doesn't show one: only its entry for pkg counts.
+func installedBuild(dev adb.Device, pkg string) (code *int64, debuggable *bool) {
+	out := shellOK(dev, "dumpsys package "+pkg)
+	if out == nil {
+		return nil, nil
+	}
+	_, entry, ok := strings.Cut(*out, "Package ["+pkg+"]")
+	if !ok {
+		return nil, nil
+	}
+	if m := dumpsysVersionCode.FindStringSubmatch(entry); m != nil {
+		if n, err := strconv.ParseInt(m[1], 10, 64); err == nil {
+			code = &n
+		}
+	}
+	if m := dumpsysFlags.FindStringSubmatch(entry); m != nil {
+		debuggable = new(contains(strings.Fields(m[1]), "DEBUGGABLE"))
+	}
+	return code, debuggable
+}
+
+// downgradeRefused reports whether Android definitely refuses an install of
+// version incoming with -d over a build at installed: a lower version passes
+// only over a debuggable build or on a debuggable OS (ro.debuggable). A nil,
+// which is something unreadable, makes it false: adb decides then.
+func downgradeRefused(incoming, installed *int64, installedDebuggable, osDebuggable *bool) bool {
+	return incoming != nil && installed != nil && installedDebuggable != nil && osDebuggable != nil &&
+		*incoming < *installed && !*installedDebuggable && !*osDebuggable
+}
+
+// refuseDowngrade is the error for a run downgradeRefused stops.
+func (o *installOpts) refuseDowngrade(incoming, installed int64, backup string) error {
+	what, kept := "that APK", ""
+	if o.restore {
+		what, kept = "the backup", ", and the backup stays at "+backup
+	}
+	return fmt.Errorf("%s has versionCode %d, the installed build %d, and Android refuses to downgrade a build that isn't debuggable on a phone that isn't either. Nothing changed%s. As it stands, %s", what, incoming, installed, kept, uninstallCost)
 }
 
 // checkNoVM errors if a VM process runs for the app, or adb can't show the

@@ -4,9 +4,12 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+	"reflect"
+	"slices"
+	"strconv"
 	"testing"
 	"unicode/utf16"
 )
@@ -69,6 +72,95 @@ func axmlManifest(utf8 bool, extra ...string) []byte {
 	return axmlChunk(0x0003, nil, body)
 }
 
+// The framework's ids for the attributes the CLI reads, as aapt2 writes them.
+const (
+	axmlIDVersionCode      = 0x0101021b
+	axmlIDVersionCodeMajor = 0x01010576
+	axmlIDDebuggable       = 0x0101000f
+)
+
+// axmlTyped is an attribute with a typed value: no raw string.
+func axmlTyped(ns, name int, typ byte, data uint32) []byte {
+	return bytes.Join([][]byte{u32(ns), u32(name), u32(axmlNone), u16(8), {0, typ}, binary.LittleEndian.AppendUint32(nil, data)}, nil)
+}
+
+// axmlStart is a start element's chunk.
+func axmlStart(name int, attrs ...[]byte) []byte {
+	body := bytes.Join([][]byte{u32(axmlNone), u32(name), u16(20), u16(20), u16(len(attrs)), u16(0), u16(0), u16(0), bytes.Join(attrs, nil)}, nil)
+	return axmlChunk(0x0102, append(u32(1), u32(axmlNone)...), body)
+}
+
+// axmlSpec describes a compiled manifest: a package, then what the manifest and
+// application elements hold. A zero codeType leaves versionCode out.
+type axmlSpec struct {
+	pkg               string
+	code, major       uint32
+	codeType          byte
+	debuggable        *uint32
+	debuggableType    byte
+	noApplication     bool
+	blankAttrNames    bool
+}
+
+// axmlManifestOf is the manifest spec describes, with attributes and resource
+// map in the order aapt2 writes them.
+func axmlManifestOf(spec axmlSpec) []byte {
+	const (
+		strCode = iota
+		strMajor
+		strDebuggable
+		strAndroid
+		strNS
+		strManifest
+		strUsesSDK
+		strApplication
+		strPackage
+		strPkg
+	)
+	names := []string{"versionCode", "versionCodeMajor", "debuggable"}
+	if spec.blankAttrNames {
+		// Resource shrinkers can leave only the map to go by.
+		names = []string{"", "", ""}
+	}
+	strs := append(names, "android", "http://schemas.android.com/apk/res/android", "manifest", "uses-sdk", "application", "package", spec.pkg)
+	var attrs [][]byte
+	if spec.codeType != 0 {
+		attrs = append(attrs, axmlTyped(strNS, strCode, spec.codeType, spec.code))
+	}
+	if spec.major != 0 {
+		attrs = append(attrs, axmlTyped(strNS, strMajor, 0x10, spec.major))
+	}
+	attrs = append(attrs, axmlAttr(axmlNone, strPackage, strPkg))
+	var appAttrs [][]byte
+	if spec.debuggable != nil {
+		appAttrs = append(appAttrs, axmlTyped(strNS, strDebuggable, spec.debuggableType, *spec.debuggable))
+	}
+	chunks := [][]byte{
+		axmlPool(strs, false),
+		axmlChunk(0x0180, nil, bytes.Join([][]byte{u32(axmlIDVersionCode), u32(axmlIDVersionCodeMajor), u32(axmlIDDebuggable)}, nil)),
+		axmlChunk(0x0100, append(u32(1), u32(axmlNone)...), append(u32(strAndroid), u32(strNS)...)),
+		axmlStart(strManifest, attrs...),
+		axmlStart(strUsesSDK),
+	}
+	if !spec.noApplication {
+		chunks = append(chunks, axmlStart(strApplication, appAttrs...))
+	}
+	return axmlChunk(0x0003, nil, bytes.Join(chunks, nil))
+}
+
+// fakeVersionedAPK is an APK of pkg at versionCode code, with the marks the fake
+// device reads, as a release build is (android:debuggable left out) unless debuggable.
+func fakeVersionedAPK(pkg, build string, code uint32, debuggable bool) []byte {
+	spec := axmlSpec{pkg: pkg, code: code, codeType: 0x10}
+	files := map[string][]byte{"build": []byte(build), fakeVersionCode: []byte(strconv.Itoa(int(code)))}
+	if debuggable {
+		spec.debuggable, spec.debuggableType = new(uint32(0xffffffff)), 0x12
+		files[fakeDebuggable] = nil
+	}
+	files["AndroidManifest.xml"] = axmlManifestOf(spec)
+	return zipOf(files)
+}
+
 // fakeAPK is an APK of pkg that holds build, which fakeDevice.installedAPK reads back.
 func fakeAPK(pkg, build string) []byte {
 	return zipOf(map[string][]byte{"AndroidManifest.xml": axmlManifest(false, "package", pkg), "build": []byte(build)})
@@ -103,26 +195,88 @@ func TestAPKPackage(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := filepath.Join(t.TempDir(), "app.apk")
 			os.WriteFile(p, tc.apk, 0o644)
-			got, err := apkPackage(p)
+			m, err := readAPKManifest(p)
 			if tc.want == "" {
 				if err == nil {
-					t.Errorf("read package %q, want an error", got)
+					t.Errorf("read package %q, want an error", m.pkg)
 				}
 				return
 			}
-			if err != nil || got != tc.want {
-				t.Errorf("got %q, %v, want %s", got, err, tc.want)
+			if err != nil || m.pkg != tc.want {
+				t.Errorf("got %q, %v, want %s", m.pkg, err, tc.want)
 			}
 		})
 	}
 }
 
-// Every damaged manifest gives an error rather than a panic.
-func TestManifestPackageSurvivesTruncation(t *testing.T) {
-	whole := axmlManifest(false, "package", debugPackage)
+// shown is a pointer's value for a test's message.
+func shown[T any](p *T) string {
+	if p == nil {
+		return "nil"
+	}
+	return fmt.Sprint(*p)
+}
+
+func TestManifestVersionAndDebuggable(t *testing.T) {
+	trueValue, falseValue := new(uint32(0xffffffff)), new(uint32(0))
+	for _, tc := range []struct {
+		name       string
+		spec       axmlSpec
+		code       *int64
+		debuggable *bool
+	}{
+		{name: "release-build", spec: axmlSpec{code: 10203, codeType: 0x10}, code: new(int64(10203)), debuggable: new(false)},
+		{name: "debug-build", spec: axmlSpec{code: 10203, codeType: 0x10, debuggable: trueValue, debuggableType: 0x12}, code: new(int64(10203)), debuggable: new(true)},
+		{name: "debuggable-false", spec: axmlSpec{code: 1, codeType: 0x10, debuggable: falseValue, debuggableType: 0x12}, code: new(int64(1)), debuggable: new(false)},
+		{name: "hex-version", spec: axmlSpec{code: 0x10, codeType: 0x11}, code: new(int64(16)), debuggable: new(false)},
+		{name: "major-version", spec: axmlSpec{code: 7, major: 2, codeType: 0x10}, code: new(int64(2<<32 | 7)), debuggable: new(false)},
+		{name: "names-blanked", spec: axmlSpec{code: 7, codeType: 0x10, debuggable: trueValue, debuggableType: 0x12, blankAttrNames: true}, code: new(int64(7)), debuggable: new(true)},
+		{name: "no-version", spec: axmlSpec{}, debuggable: new(false)},
+		{name: "version-by-reference", spec: axmlSpec{code: 0x7f010001, codeType: 0x01}, debuggable: new(false)},
+		{name: "debuggable-by-reference", spec: axmlSpec{code: 7, codeType: 0x10, debuggable: trueValue, debuggableType: 0x01}, code: new(int64(7))},
+		{name: "no-application", spec: axmlSpec{code: 7, codeType: 0x10, noApplication: true}, code: new(int64(7))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.spec.pkg = debugPackage
+			m, err := parseManifest(axmlManifestOf(tc.spec))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m.pkg != debugPackage {
+				t.Errorf("package = %q", m.pkg)
+			}
+			if !reflect.DeepEqual(m.versionCode, tc.code) {
+				t.Errorf("versionCode = %s, want %s", shown(m.versionCode), shown(tc.code))
+			}
+			if !reflect.DeepEqual(m.debuggable, tc.debuggable) {
+				t.Errorf("debuggable = %s, want %s", shown(m.debuggable), shown(tc.debuggable))
+			}
+		})
+	}
+}
+
+// A manifest compiled before this read versionCode as a string has none to give.
+func TestManifestWithoutTypedVersion(t *testing.T) {
+	m, err := parseManifest(axmlManifest(false, "package", debugPackage))
+	if err != nil || m.pkg != debugPackage || m.versionCode != nil {
+		t.Errorf("got %+v, %v", m, err)
+	}
+}
+
+// Every damaged manifest gives an error or fewer fields, rather than a panic or
+// a package it doesn't name.
+func TestManifestSurvivesDamage(t *testing.T) {
+	whole := axmlManifestOf(axmlSpec{pkg: debugPackage, code: 7, major: 2, codeType: 0x10, debuggable: new(uint32(1)), debuggableType: 0x12})
 	for n := range whole {
-		if got, err := manifestPackage(whole[:n]); err == nil && !strings.HasPrefix(got, "dev.") {
-			t.Errorf("%d bytes: read package %q", n, got)
+		if m, err := parseManifest(whole[:n]); err == nil && m.pkg != debugPackage {
+			t.Errorf("%d bytes: read package %q", n, m.pkg)
+		}
+	}
+	for i := range whole {
+		for _, v := range []byte{0x00, 0x7f, 0xff} {
+			damaged := slices.Clone(whole)
+			damaged[i] = v
+			parseManifest(damaged)
 		}
 	}
 }
