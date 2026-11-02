@@ -43,6 +43,7 @@ attached (`adb devices`). `pocketnix control -h` lists the commands.
 | `offer <port> allow\|dismiss` | Answers an offer as its notification's buttons do. `allow` returns once the phone port listens, and fails with the reason when it couldn't. |
 | `stats` | Prints the GUI link's counters and latency histograms, with the last launch's `guestRam` and `gpu`, as one line of JSON (what `pocketnix bench` samples). |
 | `logcat [--follow]` | Prints the log (main, system, crash and events buffers) of every process running as the app's uid, so it keeps lines from before a crash or restart, with the other uids' lines that name the app. `--follow` streams it. Works on release builds too (`--package`). |
+| `lift-limit [--restore]` | Takes the app out of Android's memory limit until the phone reboots (`docs/development.md`, "Android's memory limit"). Works on release builds too. |
 
 `tab` and `type` take `--no-enter` to type without pressing Enter. Tab 0 is
 the hvc0 console: it always exists and shows boot and login output.

@@ -64,6 +64,9 @@ commands:
         the log of every process running as the app's uid, which keeps
         its lines across the app's crashes and restarts, and the OS's lines
         that name the app; --follow streams it
+  lift-limit [--restore]
+        take the app out of Android's memory limit until the phone reboots
+        (docs/development.md, "Android's memory limit")
   stats
         the GUI link's counters and latency histograms, as JSON (see
         pocketnix bench -h)
@@ -263,6 +266,15 @@ func runControl(args []string) error {
 			return err
 		}
 		return logcat(c.dev, *pkg, *follow, os.Stdout)
+	case "lift-limit":
+		restore := sub.Bool("restore", false, "")
+		if err := parseArgs(sub, rest, 0); err != nil {
+			return err
+		}
+		if *restore {
+			return restoreLimit(c.dev, os.Stdout)
+		}
+		return liftLimit(context.Background(), c.dev, *pkg, os.Stdout)
 	default:
 		fs.Usage()
 		return errUsage

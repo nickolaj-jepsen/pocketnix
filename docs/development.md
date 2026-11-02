@@ -153,6 +153,24 @@ debug-only ones on `BuildConfig.DEBUG`.
 In debug builds, `pocketnix control` opens tabs, types into them and reads
 them back (`pocketnix control -h`; `.agents/skills/pocketnix-control/SKILL.md`).
 
+## Android's memory limit
+
+Android 17 limits the memory of each app's process, and crosvm counts as the
+app's ([the trap](../app/AGENTS.md)). `pocketnix doctor` shows a phone's limits
+and where the app stands against them. To test without the limit, or until a
+VM's size fits it:
+
+```bash
+pocketnix control lift-limit            # until the phone reboots
+pocketnix control lift-limit --restore
+```
+
+- It lifts one uid, and needs adb after each reboot.
+- The rest of the phone loses the limit's protection against this app, and
+  memory pressure on the phone as a whole stays.
+- The command underneath is the limiter's own test support, so an Android
+  update may take it away.
+
 ## Swapping an app build
 
 `provision` sets up a phone. To put another build of the app on a phone that

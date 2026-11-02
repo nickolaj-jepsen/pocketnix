@@ -365,6 +365,11 @@ func fakeShell(state, line string, logEvent func(string, ...any)) (string, int) 
 	disk, part := filepath.Join(files, "disk.img"), filepath.Join(files, "disk.img.part")
 	unquote := func(s string) string { return strings.Trim(s, "'") }
 	devPath := func(p string) string { return filepath.Join(state, "device", p) }
+	if _, err := os.Stat(filepath.Join(state, "limiter-high")); err == nil {
+		if out, status, ok := fakeLimiter(state, line, w); ok {
+			return out, status
+		}
+	}
 	switch {
 	case strings.HasPrefix(line, "dumpsys notification --noredact | grep "):
 		return fakeNotifications(state, w)
@@ -534,6 +539,59 @@ func fakeNotifications(state string, w []string) (string, int) {
 		return "", 1
 	}
 	return out.String(), 0
+}
+
+// fakePID is the app's process in a fake phone with a limiter.
+const fakePID = "4242"
+
+// fakeLimiter is MemoryLimiter with one running process: ok says it took line.
+// As on a phone, an ignored uid's manual limit is dropped, and `manual none`
+// changes nothing.
+func fakeLimiter(state, line string, w []string) (out string, status int, ok bool) {
+	read := func(name string) string {
+		b, _ := os.ReadFile(filepath.Join(state, name))
+		return strings.TrimSpace(string(b))
+	}
+	write := func(name, value string) { os.WriteFile(filepath.Join(state, name), []byte(value), 0o644) }
+	if strings.HasPrefix(line, "pidof ") {
+		return fakePID + "\n", 0, true
+	}
+	if line == "stat -c %u /proc/"+fakePID {
+		return fakeAppUID(state) + "\n", 0, true
+	}
+	if strings.HasPrefix(line, "p=$(pidof ") {
+		return "state=4 (FGS)\nhigh=" + read("limiter-high") + "\nswapMax=max\ncurrent=1\npeak=1\nhighEvents=0\n", 0, true
+	}
+	if !strings.HasPrefix(line, "cmd activity memory-limiter ") {
+		return "", 0, false
+	}
+	ignored := read("limiter-ignored")
+	if ignored == "" {
+		ignored = "none"
+	}
+	switch args := w[3:]; args[0] {
+	case "status":
+		return "Memory limiter\n  enabled limits=true monitoring=true killing=true ignored=" + ignored +
+			"\n  visibleMem=6144MB visibleSwap=3072MB notVisibleMem=3072MB notVisibleSwap=3072MB\n", 0, true
+	case "ignore":
+		write("limiter-ignored", args[1])
+		return "", 0, true
+	case "manual":
+		if args[2] == "none" || ignored == fakeAppUID(state) || ignored == "all" {
+			return "", 0, true
+		}
+		// With limiter-stuck, a limit never reaches the cgroup.
+		if _, err := os.Stat(filepath.Join(state, "limiter-stuck")); err == nil {
+			return "", 0, true
+		}
+		mib, err := strconv.ParseInt(args[2], 10, 64)
+		if err != nil {
+			return "Invalid limit\n", 255, true
+		}
+		write("limiter-high", strconv.FormatInt(mib<<20, 10))
+		return "", 0, true
+	}
+	return "Error: unknown sub-command\n", 255, true
 }
 
 // fakeLogcat is the state's "logcat" lines; with -T <epoch>, only those since
