@@ -250,6 +250,9 @@ type fakeReaction struct {
 	Reboot bool `json:"reboot,omitempty"`
 }
 
+// matches is whether a line typed into a tab sets r off.
+func (r fakeReaction) matches(line string) bool { return regexp.MustCompile(r.Typed).MatchString(line) }
+
 func fakeReactions(state string) []fakeReaction {
 	b, _ := os.ReadFile(filepath.Join(state, "control", "reactions.json"))
 	var rs []fakeReaction
