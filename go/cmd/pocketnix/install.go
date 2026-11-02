@@ -33,8 +33,6 @@ flags:
 `
 
 const (
-	// actionStop mirrors ControlActivity.ACTION_STOP.
-	actionStop = "dev.nickolaj.pocketnix.action.STOP"
 	// maxPull bounds the backup's one adb pull: bulk USB transfers drop the device after ~100–200 MB.
 	maxPull = 64 << 20
 	// stopDeadline outlasts Vm.GRACEFUL_STOP_MS plus AvfEngine.forceStop's 10 s wait for
@@ -444,7 +442,7 @@ func (o *installOpts) backUp(dev adb.Device, pmPath, backup string) (bool, error
 // the STOP intent returns before the guest is down.
 func (o *installOpts) stopVM(dev adb.Device, prov provider) error {
 	o.logf("stopping the VM")
-	if _, err := dev.Shell(fmt.Sprintf("am start -n %s/%s -a %s", o.pkg(), activityClass, actionStop)); err != nil {
+	if _, err := amStart(dev, o.pkg(), actionStop); err != nil {
 		return err
 	}
 	if err := waitRunning(prov, false, stopDeadline); err != nil {
@@ -457,7 +455,7 @@ func (o *installOpts) stopVM(dev adb.Device, prov provider) error {
 // startVM sends a bare START: its extras would overwrite the saved
 // settings, which survive the install.
 func (o *installOpts) startVM(dev adb.Device, prov provider) error {
-	if _, err := dev.Shell(fmt.Sprintf("am start -n %s/%s -a %s", o.pkg(), activityClass, actionStart)); err != nil {
+	if _, err := amStart(dev, o.pkg(), actionStart); err != nil {
 		return err
 	}
 	if err := waitRunning(prov, true, startDeadline); err != nil {

@@ -522,16 +522,14 @@ func fakeShell(state, line string, logEvent func(string, ...any)) (string, int) 
 		return out.String(), 0
 	case len(f) >= 1 && f[0] == "am":
 		logEvent("%s", line)
-		// The app's ControlActivity; the action names mirror ControlActivity.ACTION_START and ACTION_STOP.
 		switch {
-		case strings.Contains(line, "-a dev.nickolaj.pocketnix.action.STOP"):
+		case strings.Contains(line, "-a "+actionStop):
 			if fakeRunning(state) {
 				os.WriteFile(filepath.Join(state, "stopping"), []byte(strconv.Itoa(fakeStopLag)), 0o644)
 			}
-		case strings.Contains(line, "-a dev.nickolaj.pocketnix.action.START"):
+		case strings.Contains(line, "-a "+actionStart):
 			setFakeRunning(state, true)
-		// ControlActivity.ACTION_LAUNCH.
-		case strings.Contains(line, "-a dev.nickolaj.pocketnix.action.DEBUG_LAUNCH"):
+		case strings.Contains(line, "-a "+actionLaunch):
 			fakeLaunch(state, w)
 		}
 	// The phone side of a forward: toybox nc to a phone port.
