@@ -609,7 +609,7 @@ const (
 		`for u in $(systemctl --user list-units --plain --no-legend --type=scope "app-pocketnix-*" | cut -d" " -f1); do ` +
 		`case "$u" in "app-pocketnix-$e-"*) pkill --cgroup "$(systemctl --user show -P ControlGroup "$u")" && n=$((n+1));; esac; done; ` +
 		`echo @-killed=$n; echo @-exit=0`
-	rebootScript   = `systemctl reboot || sudo -n systemctl reboot; echo @-exit=$?`
+	rebootScript = `systemctl reboot || sudo -n systemctl reboot; echo @-exit=$?`
 	// See ptyScript for the file's lines.
 	ptyTimeScript  = `set -- $(cat ` + smokePTYFile + ` 2>/dev/null); echo @-start=$1; echo @-end=$3; echo @-now=$(date +%s); echo @-exit=0`
 	ptyCleanScript = `rm -f ` + smokePTYFile + `; echo @-exit=$?`
