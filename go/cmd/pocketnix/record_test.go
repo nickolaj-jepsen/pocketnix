@@ -502,11 +502,11 @@ func TestRecordFailVerdictStillWritesTheBundle(t *testing.T) {
 	assertGone(t, d.state, "scrcpy.pid")
 }
 
-// interruptedRun starts `doctor --smoke --record` in its own process, and
-// returns it once smoke sits in its PTY step with both children recording.
-func interruptedRun(t *testing.T, d *fakeDevice, dir string) *exec.Cmd {
+// doctorProcess starts `doctor --smoke` with args in its own process, and returns
+// it once smoke sits in its PTY step and ready holds.
+func doctorProcess(t *testing.T, d *fakeDevice, ready func() bool, args ...string) *exec.Cmd {
 	t.Helper()
-	c := exec.Command(addFakeBin(t, fakeDoctorName), "--smoke", "--serial", recordSerial, "--record", dir)
+	c := exec.Command(addFakeBin(t, fakeDoctorName), append([]string{"--smoke", "--serial", recordSerial}, args...)...)
 	c.Env = os.Environ()
 	// A file: a hung fake adb outliving the run would hold a pipe open.
 	stderr, err := os.Create(filepath.Join(d.state, "doctor-stderr"))
@@ -521,13 +521,39 @@ func interruptedRun(t *testing.T, d *fakeDevice, dir string) *exec.Cmd {
 	t.Cleanup(func() { c.Process.Kill() })
 	deadline := time.Now().Add(20 * time.Second)
 	// The console, the listener's tab and the PTY step's.
-	for len(fakeTabs(d.state)) < 3 || !exists(filepath.Join(d.state, "scrcpy.pid")) || !exists(filepath.Join(d.state, "logcat.pid")) {
+	for len(fakeTabs(d.state)) < 3 || !ready() {
 		if time.Now().After(deadline) {
 			t.Fatalf("smoke didn't reach its PTY step: tabs %v", fakeTabs(d.state))
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
 	return c
+}
+
+// interruptedRun is doctorProcess with --record into dir, once both children record.
+func interruptedRun(t *testing.T, d *fakeDevice, dir string) *exec.Cmd {
+	t.Helper()
+	return doctorProcess(t, d, func() bool {
+		return exists(filepath.Join(d.state, "scrcpy.pid")) && exists(filepath.Join(d.state, "logcat.pid"))
+	}, "--record", dir)
+}
+
+// Without --record too, smoke cleans up after whatever signal ends a run.
+func TestSmokeSignalsCleanUp(t *testing.T) {
+	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
+		t.Run(sig.String(), func(t *testing.T) {
+			d := smokeDevice(t, without(everyTool, reactPTY)...)
+			c := doctorProcess(t, d, func() bool { return true })
+			c.Process.Signal(sig)
+			c.Wait()
+			if !c.ProcessState.Exited() {
+				t.Errorf("the run: %v, want it to finish", c.ProcessState)
+			}
+			if left := leftovers(d); len(left) > 0 {
+				t.Errorf("smoke left %q", left)
+			}
+		})
+	}
 }
 
 func TestRecordInterruptFinishesTheBundle(t *testing.T) {
