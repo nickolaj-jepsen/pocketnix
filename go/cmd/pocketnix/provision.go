@@ -199,6 +199,18 @@ func (o *provisionOpts) run() error {
 		}
 	}()
 
+	prov := provider{dev: dev, authority: o.pkg() + ".provision"}
+	// Before any image work and the install: replacing the app kills its
+	// process, and with it a running VM, which would then look stopped.
+	// An app whose provider doesn't answer is left to the check after the install.
+	if _, err := dev.Shell("pm path " + o.pkg()); err == nil {
+		if st, err := prov.call("status", ""); err == nil {
+			if err := o.refuse(st); err != nil {
+				return err
+			}
+		}
+	}
+
 	img, err := o.prepareImage()
 	if err != nil {
 		return err
@@ -217,17 +229,9 @@ func (o *provisionOpts) run() error {
 			return fmt.Errorf("%w (pass --apk to install a local build)", err)
 		}
 	}
-	prov := provider{dev: dev, authority: o.pkg() + ".provision"}
-	// Before the install: replacing the app kills its process, and with it a
-	// running VM, which would then look stopped to the check below.
-	if _, err := dev.Shell("pm path " + o.pkg()); err == nil {
-		if st, err := prov.call("status", ""); err == nil && st["running"] == "true" {
-			return errors.New("the VM is running; stop it in the app first (installing the app would kill it)")
-		}
-	}
 	o.logf("installing %s", apk)
 	if _, err := dev.Run("install", "-r", "-g", apk); err != nil {
-		return fmt.Errorf("%w\nA signature mismatch needs an uninstall first, which deletes the VM's disk image; do that by hand if you mean it", err)
+		return fmt.Errorf("%w\n%s", err, signatureHint)
 	}
 	for _, p := range avfPermissions {
 		if _, err := dev.Shell("pm grant " + o.pkg() + " " + p); err != nil {
@@ -240,11 +244,8 @@ func (o *provisionOpts) run() error {
 	if err != nil {
 		return err
 	}
-	if st["running"] == "true" {
-		return errors.New("the VM is running; stop it in the app first")
-	}
-	if st["disk"] == "true" && !o.replace {
-		return errors.New("the phone already has a disk image; --replace destroys it and everything in the guest")
+	if err := o.refuse(st); err != nil {
+		return err
 	}
 	if err := o.upload(dev, prov, img); err != nil {
 		return err
@@ -273,6 +274,18 @@ func (o *provisionOpts) run() error {
 		o.logf("started the VM (network %t)", !o.noNetwork)
 	}
 	return err
+}
+
+// refuse turns a status answer that shows a running VM, or a disk without
+// --replace, into an error.
+func (o *provisionOpts) refuse(st map[string]string) error {
+	if st["running"] == "true" {
+		return errors.New("the VM is running; stop it in the app first (installing the app would kill it)")
+	}
+	if st["disk"] == "true" && !o.replace {
+		return errors.New("the phone already has a disk image; --replace destroys it and everything in the guest")
+	}
+	return nil
 }
 
 // startCommand starts the VM with the hardware flags.

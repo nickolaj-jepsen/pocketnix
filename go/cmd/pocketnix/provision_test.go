@@ -102,7 +102,6 @@ func TestProvisionKeepsExistingDisk(t *testing.T) {
 	}
 	refused := d.events()[before:]
 	t.Run("refused before installing", func(t *testing.T) {
-		t.Skip("pending: A1")
 		if hasEvent(refused, "install ") {
 			t.Errorf("the refused run installed the app; its events:\n%s", refused)
 		}
@@ -130,6 +129,36 @@ func TestProvisionRefusesWhileRunning(t *testing.T) {
 	// Installing would have killed it.
 	if strings.Contains(d.events(), "install ") {
 		t.Errorf("installed the app over a running VM; events:\n%s", d.events())
+	}
+}
+
+// The phone's refusals come before building an image, so a refused run
+// costs no build.
+func TestProvisionChecksThePhoneFirst(t *testing.T) {
+	for _, tc := range []struct {
+		name, token string
+		setup       func(d *fakeDevice)
+	}{
+		{"running", "running", func(d *fakeDevice) { d.setRunning(true) }},
+		{"disk", "--replace", func(d *fakeDevice) { d.write("app/files/disk.img", []byte("the guest")) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newFakeDevice(t)
+			d.installAPK([]byte("apk"))
+			tc.setup(d)
+			o, err := parseProvision([]string{"--image", ".#nixosConfigurations.phone", "--apk", fakeAPKFile(t, "app.apk", "apk")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			o.log = io.Discard
+			o.resolveInstallable = func(string) (string, error) { return "", fmt.Errorf("built the image") }
+			if err := o.run(); err == nil || !strings.Contains(err.Error(), tc.token) {
+				t.Errorf("got %v, want a refusal naming %s", err, tc.token)
+			}
+			if hasEvent(d.events(), "install ") {
+				t.Errorf("installed; events:\n%s", d.events())
+			}
+		})
 	}
 }
 
