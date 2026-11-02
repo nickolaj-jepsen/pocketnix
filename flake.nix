@@ -266,6 +266,14 @@
             fi
             echo "$size" > $out
           '';
+        # The base image as users download it, assembled on aarch64 as a release's is.
+        # Under binfmt that assembly fails (`imageBuiltOn`): it needs an aarch64 builder.
+        aarch64-linux.base-boot = nixpkgs.legacyPackages.aarch64-linux.callPackage ./nix/avf-boot-test.nix {
+          name = "base-boot";
+          image = self.packages.aarch64-linux.base-image;
+          # Its autologin is root.
+          prompt = ''@[^ ]+:~\][$#]'';
+        };
         x86_64-linux.agent = import ./nix/test.nix {
           inherit self;
           pkgs = nixpkgs.legacyPackages.x86_64-linux;
