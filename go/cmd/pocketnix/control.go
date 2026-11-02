@@ -292,7 +292,8 @@ func logcatSince(dev adb.Device, pkg, since string, w io.Writer) error {
 	return dev.Stream(w, "logcat", "-b", "main,system,crash", "--uid="+uid, "-d", "-v", "epoch", "-T", since+".000")
 }
 
-// appUID is installed package pkg's uid.
+// appUID is installed package pkg's uids, comma-separated with one per
+// Android user, as logcat's --uid takes them.
 func appUID(dev adb.Device, pkg string) (string, error) {
 	out, err := dev.Shell("pm list packages -U " + adb.ShellQuote(pkg))
 	if err != nil {
