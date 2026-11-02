@@ -366,7 +366,7 @@ in {
       default = {};
       example = lib.literalExpression ''
         {
-          ssh = { guestPort = 22; hostPort = 2222; };
+          ssh = { guestPort = 22; hostPort = 2022; };
           mosh = { guestPort = 60001; protocol = "udp"; };
         }
       '';
