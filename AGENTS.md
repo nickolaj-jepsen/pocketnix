@@ -25,6 +25,12 @@ in `docs/development.md`.
   (`pocketnix.guest.managed.cpuQuota`); start one only through the app.
 - Uninstalling the app, clearing its data or `provision --replace` deletes
   the VM's disk: never do it to a phone's working VM without asking.
+- The owner's desktop has a remote aarch64 builder (`builders` in `nix config show`),
+  billed per CPU-hour, and Nix sends it aarch64 builds unasked: a rebuilt image,
+  `avf-boot` on x86_64, a native `deploy`. Don't waste it. Before such a build, see what
+  it would rebuild with `nix build --dry-run`, and batch the changes. Leave what CI's
+  `aarch64` job can answer to CI, which is free. `--builders ''` keeps a build local,
+  under binfmt.
 
 ## Keeping docs and tests from drifting
 
