@@ -2,8 +2,9 @@
 # sandbox, in `qemu-machine.nix`'s machine, through the hvc0 autologin: the
 # system must reach `running` with zram swap on, and a real `switch` must
 # install the boot loader, as every update on the phone does. TCG only, so it
-# runs anywhere. `avf-boot` boots the example's image. `prompt` is a Tcl
-# regex matching the autologin's shell prompt.
+# runs anywhere. `avf-boot` boots the example's image; `base-boot` boots the
+# base image, the managed guest the app's setup downloads, whose autologin is
+# root. `prompt` is a Tcl regex matching the autologin's shell prompt.
 {
   lib,
   runCommand,
