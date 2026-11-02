@@ -7,17 +7,24 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The test binary doubles as a fake adb: tests put a symlink named adb to it
 // first on PATH, and it simulates a device plus the app's providers in the
 // directory $FAKE_ADB_STATE.
 func TestMain(m *testing.M) {
-	if filepath.Base(os.Args[0]) == "adb" {
+	switch filepath.Base(os.Args[0]) {
+	case "adb":
 		os.Exit(fakeADB(os.Args[1:]))
+	case "scrcpy":
+		os.Exit(fakeScrcpy(os.Args[1:]))
+	case fakeDoctorName:
+		os.Exit(fakeDoctorProcess(os.Args[1:]))
 	}
 	os.Exit(m.Run())
 }
@@ -55,6 +62,10 @@ func fakeADB(args []string) int {
 	devPath := func(p string) string { return filepath.Join(state, "device", p) }
 	switch args[0] {
 	case "get-state":
+		if _, err := os.Stat(filepath.Join(state, "get-state-fails")); err == nil {
+			fmt.Fprintln(os.Stderr, "adb: no devices/emulators found")
+			return 1
+		}
 		fmt.Println("device")
 	case "get-serialno":
 		fmt.Println(serial)
@@ -128,7 +139,21 @@ func fakeADB(args []string) int {
 				fmt.Printf("I Vm: a line from uid %s\n", uid)
 			}
 		}
+		// As on a phone, logcat without -d follows the log until it's killed.
+		if !slices.Contains(args, "-d") {
+			writePID(state, "logcat.pid")
+			time.Sleep(time.Hour)
+		}
 	case "shell":
+		// With shell-hangs, the phone stops answering for as long as the file stays.
+		if _, err := os.Stat(filepath.Join(state, "shell-hangs")); err == nil {
+			writePID(state, "shell-hung.pid")
+			for err == nil {
+				time.Sleep(5 * time.Millisecond)
+				_, err = os.Stat(filepath.Join(state, "shell-hangs"))
+			}
+			return 1
+		}
 		line, ok := strings.CutSuffix(args[1], "; echo pocketnix-exit=$?")
 		if !ok {
 			fmt.Fprintln(os.Stderr, "fake adb: shell without exit marker")

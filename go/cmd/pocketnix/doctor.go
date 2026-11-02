@@ -37,7 +37,9 @@ flags:
                      inhibitor and apps, end them all, and reboot the guest last;
                      a failing check also exits 1
   --gpu-apps <ids>   two app ids from pocketnix control dump's apps=, for the GPU step
-  --record <dir>     record the run (screen, logcat, commands) into a bundle under dir
+  --record <dir>     record the run into a new bundle under dir: the screen (with
+                     scrcpy, if it's on PATH), logcat, every command and the report.
+                     It can hold personal data: review it before sharing it
   --serial <serial>  adb device to use (default: adb's only device)
 `
 
@@ -104,20 +106,34 @@ func runDoctor(args []string) error {
 	if err != nil {
 		return err
 	}
-	if o.record != "" {
-		return errors.New("doctor: --record is not implemented yet")
-	}
 	dev := adb.Device{Serial: o.serial}
-	if state, err := dev.State(); err != nil || state != "device" {
-		return fmt.Errorf("no usable adb device (state %q): %v", state, err)
+	var rec *recording
+	if o.record != "" {
+		if rec, err = startRecording(o.record, dev, o.smoke); err != nil {
+			return err
+		}
+		dev = rec.dev
+		defer func() {
+			rec.stop()
+			fmt.Fprintln(os.Stderr, "doctor: recorded in", rec.dir)
+		}()
+	} else if err := usableDevice(dev); err != nil {
+		return err
 	}
 	r := probe(dev, o.pkg())
 	if o.smoke {
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-		// After the first interrupt smoke cleans up; a second one kills it as usual.
-		context.AfterFunc(ctx, stop)
-		r.Smoke = runSmoke(ctx, dev, o.pkg(), o.gpuApps, os.Stderr)
-		stop()
+		if rec != nil {
+			r.Smoke = runSmoke(rec.ctx, dev, o.pkg(), o.gpuApps, rec.smokeProgress())
+		} else {
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+			// After the first interrupt smoke cleans up; a second one kills it as usual.
+			context.AfterFunc(ctx, stop)
+			r.Smoke = runSmoke(ctx, dev, o.pkg(), o.gpuApps, os.Stderr)
+			stop()
+		}
+	}
+	if rec != nil {
+		rec.writeReport(r)
 	}
 	if o.json {
 		b, err := json.MarshalIndent(r, "", "  ")
@@ -153,21 +169,23 @@ func probe(dev adb.Device, pkg string) doctorReport {
 	return r
 }
 
+// shellExitMarker is adb.Device.Shell's: what precedes a shell command's exit status.
+const shellExitMarker = "pocketnix-exit="
+
 // shellStatus runs cmdline in dev's shell and returns its stdout and exit
-// status; err is only adb's own failure. The marker is adb.Device.Shell's.
+// status; err is only adb's own failure.
 func shellStatus(dev adb.Device, cmdline string) (string, int, error) {
-	const marker = "pocketnix-exit="
-	out, err := dev.Run("shell", cmdline+"; echo "+marker+"$?")
+	out, err := dev.Run("shell", cmdline+"; echo "+shellExitMarker+"$?")
 	if err != nil {
 		return "", -1, err
 	}
-	i := strings.LastIndex(out, marker)
+	i := strings.LastIndex(out, shellExitMarker)
 	if i < 0 {
 		return "", -1, fmt.Errorf("adb shell %s: no exit status in output", cmdline)
 	}
-	status, err := strconv.Atoi(strings.TrimSpace(out[i+len(marker):]))
+	status, err := strconv.Atoi(strings.TrimSpace(out[i+len(shellExitMarker):]))
 	if err != nil {
-		return "", -1, fmt.Errorf("adb shell %s: exit status %q", cmdline, out[i+len(marker):])
+		return "", -1, fmt.Errorf("adb shell %s: exit status %q", cmdline, out[i+len(shellExitMarker):])
 	}
 	return out[:i], status, nil
 }
@@ -452,10 +470,15 @@ func printDoctor(w io.Writer, r doctorReport) {
 	for _, reason := range r.Verdict.Reasons {
 		fmt.Fprintf(w, "  %s\n", reason)
 	}
-	if r.Smoke != nil {
+	printSmoke(w, r.Smoke)
+}
+
+// printSmoke writes smoke's results for a person, nothing when none ran.
+func printSmoke(w io.Writer, steps []smokeStep) {
+	if steps != nil {
 		fmt.Fprintf(w, "smoke\n")
 	}
-	for _, st := range r.Smoke {
+	for _, st := range steps {
 		result := "skip"
 		switch {
 		case st.OK == nil:

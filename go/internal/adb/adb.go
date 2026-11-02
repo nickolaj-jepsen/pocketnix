@@ -7,11 +7,17 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Device is one adb device; an empty Serial means adb's only device.
 type Device struct {
 	Serial string
+	// Trace, when set, is called on the caller's goroutine as each Run or Stream
+	// ends, also a failed one: the command's argv, when it started, its exit status
+	// (-1 if it didn't start or a signal ended it), and the stdout Run kept (Stream
+	// keeps none). Start's commands end out of sight, and aren't traced.
+	Trace func(argv []string, start time.Time, status int, stdout string)
 }
 
 func (d Device) cmd(args ...string) *exec.Cmd {
@@ -21,12 +27,22 @@ func (d Device) cmd(args ...string) *exec.Cmd {
 	return exec.Command("adb", args...)
 }
 
+func (d Device) trace(c *exec.Cmd, start time.Time, stdout string) {
+	if d.Trace != nil {
+		// A nil ProcessState's ExitCode is -1 too.
+		d.Trace(c.Args, start, c.ProcessState.ExitCode(), stdout)
+	}
+}
+
 // Run runs an adb command and returns its stdout.
 func (d Device) Run(args ...string) (string, error) {
 	var out, errb bytes.Buffer
 	c := d.cmd(args...)
 	c.Stdout, c.Stderr = &out, &errb
-	if err := c.Run(); err != nil {
+	start := time.Now()
+	err := c.Run()
+	d.trace(c, start, out.String())
+	if err != nil {
 		return out.String(), fmt.Errorf("adb %s: %w\n%s%s", strings.Join(args, " "), err, out.String(), errb.String())
 	}
 	return out.String(), nil
@@ -38,7 +54,10 @@ func (d Device) Stream(w io.Writer, args ...string) error {
 	var errb bytes.Buffer
 	c := d.cmd(args...)
 	c.Stdout, c.Stderr = w, &errb
-	if err := c.Run(); err != nil {
+	start := time.Now()
+	err := c.Run()
+	d.trace(c, start, "")
+	if err != nil {
 		return fmt.Errorf("adb %s: %w\n%s", strings.Join(args, " "), err, errb.String())
 	}
 	return nil
