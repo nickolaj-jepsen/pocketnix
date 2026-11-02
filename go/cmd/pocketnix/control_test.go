@@ -292,7 +292,7 @@ func fakeType(state string, tab int, input string, enter bool) {
 	}
 	appendFile(filepath.Join(state, "control", "typed"), fmt.Sprintf("%d\t%s\n", tab, input))
 	appendFile(fakeTabPath(state, tab), "$ "+input+"\n")
-	if input == "exit" {
+	if strings.TrimSpace(input) == "exit" {
 		putFile(fakeTabPath(state, tab)+".ended", "")
 		return
 	}
@@ -345,6 +345,7 @@ func slicesContainLine(s, v string) bool {
 
 // fakeDump is Vm.debugDump's text for the model.
 func fakeDump(state string, q url.Values) string {
+	appendFile(filepath.Join(state, "control", "dump-reads"), q.Encode()+"\n")
 	lines := 40
 	if n, err := strconv.Atoi(q.Get("lines")); err == nil {
 		lines = n

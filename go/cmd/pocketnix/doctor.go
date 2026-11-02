@@ -472,8 +472,9 @@ func printDoctor(w io.Writer, r doctorReport) {
 var smokeTimes = struct {
 	// cmd is a short guest command's output, and a tab's agent.
 	cmd time.Duration
-	// pty is the big output's end marker.
-	pty time.Duration
+	// pty is the big output's end marker, and ptyPoll how often the step looks
+	// for it: a dump runs on the main thread that drains the output, so it stalls it.
+	pty, ptyPoll time.Duration
 	// offer is the agent offering the listener.
 	offer time.Duration
 	// notify and wake are Android showing the guest's notification and wake lock.
@@ -488,7 +489,7 @@ var smokeTimes = struct {
 	// reboot is the VM going down after systemctl reboot, and boot its agent answering again.
 	reboot, boot time.Duration
 }{
-	cmd: 60 * time.Second, pty: 5 * time.Minute, offer: 20 * time.Second,
+	cmd: 60 * time.Second, pty: 10 * time.Minute, ptyPoll: 20 * time.Second, offer: 20 * time.Second,
 	notify: 20 * time.Second, wake: 20 * time.Second,
 	window: 60 * time.Second, frames: 20 * time.Second, gone: 20 * time.Second,
 	exit: 5 * time.Second, forward: 45 * time.Second,
@@ -502,6 +503,9 @@ const (
 	smokeForwardPort = 47613
 	// smokeListenSecs caps the forward step's listener, in case nothing connects.
 	smokeListenSecs = 120
+	// smokePTYFile is where the PTY step's guest command keeps its start and
+	// end times, one epoch per line, apart from the transcript it's measuring.
+	smokePTYFile = "/tmp/pocketnix-smoke-pty"
 	// smokeToken is what the listener answers.
 	smokeToken = "pocketnix-smoke-forward"
 	// transcriptRows mirrors Tabs.TRANSCRIPT_ROWS: a dump of that many lines holds a whole transcript.
@@ -544,14 +548,17 @@ const (
 		`for u in $(systemctl --user list-units --plain --no-legend --type=scope "app-pocketnix-*" | cut -d" " -f1); do ` +
 		`case "$u" in "app-pocketnix-$e-"*) pkill --cgroup "$(systemctl --user show -P ControlGroup "$u")" && n=$((n+1));; esac; done; ` +
 		`echo @-killed=$n; echo @-exit=0`
-	rebootScript = `systemctl reboot || sudo -n systemctl reboot; echo @-exit=$?`
+	rebootScript   = `systemctl reboot || sudo -n systemctl reboot; echo @-exit=$?`
+	ptyTimeScript  = `set -- $(cat ` + smokePTYFile + ` 2>/dev/null); echo @-start=$1; echo @-end=$2; echo @-now=$(date +%s); echo @-exit=0`
+	ptyCleanScript = `rm -f ` + smokePTYFile + `; echo @-exit=$?`
 )
 
 // shLine is the command line that runs script with args under sh in a
 // tab, whatever the user's shell. fish reads \' and \\ even inside single
-// quotes, so neither may hold a quote or a backslash.
+// quotes, so neither may hold a quote or a backslash. Its leading space
+// keeps it out of fish's history.
 func shLine(script string, args ...string) (string, error) {
-	line := "sh -c '" + script + "' sh"
+	line := " sh -c '" + script + "' sh"
 	for _, a := range append([]string{script}, args...) {
 		if strings.ContainsAny(a, `'\`) {
 			return "", fmt.Errorf("%q holds a quote or a backslash, which a tab's shell may read otherwise", a)
@@ -577,6 +584,8 @@ type smoker struct {
 	// short commands, -1 until opened.
 	tabs []int
 	util int
+	// ptyTab is the PTY step's tab, -1 until opened.
+	ptyTab int
 	// launched are the apps smoke launched and hasn't killed.
 	launched []string
 	// forwarded is set once smoke allowed its forward.
@@ -612,7 +621,7 @@ var smokeSteps = []string{"forward", "pty", "notification", "inhibitor", "gpu", 
 // progress to progress. Cleanup runs even once ctx is done (an interrupt),
 // and the guest reboot comes last.
 func runSmoke(ctx context.Context, dev adb.Device, pkg string, gpuApps []string, progress io.Writer) []smokeStep {
-	s := &smoker{ctx: ctx, dev: dev, pkg: pkg, ctl: control{provider{dev: dev, authority: pkg + ".control"}}, gpuApps: gpuApps, util: -1}
+	s := &smoker{ctx: ctx, dev: dev, pkg: pkg, ctl: control{provider{dev: dev, authority: pkg + ".control"}}, gpuApps: gpuApps, util: -1, ptyTab: -1}
 	skipAll := func(format string, args ...any) []smokeStep {
 		var steps []smokeStep
 		for _, name := range smokeSteps {
@@ -760,8 +769,13 @@ var markerLine = regexp.MustCompile(`^(smoke-\d+)-(\w+)=(.*?)\s*$`)
 // await waits until tab shows p's line for key, and returns every value
 // p's lines gave so far.
 func (s *smoker) await(tab int, p, key string, timeout time.Duration) (map[string]string, error) {
+	return s.awaitEvery(tab, p, key, timeout, controlPoll)
+}
+
+// awaitEvery is await, reading the tab every every.
+func (s *smoker) awaitEvery(tab int, p, key string, timeout, every time.Duration) (map[string]string, error) {
 	vals := map[string]string{}
-	_, err := s.ctl.until(s.ctx, tab, 0, timeout, func(dump string) bool {
+	_, err := s.ctl.untilEvery(s.ctx, tab, 0, timeout, every, func(dump string) bool {
 		prefix := fmt.Sprintf("|%d| ", tab)
 		for _, l := range strings.Split(dump, "\n") {
 			t, ok := strings.CutPrefix(l, prefix)
@@ -877,18 +891,21 @@ func (s *smoker) pty() smokeStep {
 	p := s.marker()
 	start := time.Now()
 	// base64 makes 4 bytes of 3. Random lines differ, so outputState can see them move.
-	tab, err := s.start(p, fmt.Sprintf(`head -c %d /dev/urandom | base64; echo @-exit=$?`, smokePTYBytes/4*3))
+	script := fmt.Sprintf(`date +%%s > %s; head -c %d /dev/urandom | base64; s=$?; date +%%s >> %s; echo @-exit=$s`, smokePTYFile, smokePTYBytes/4*3, smokePTYFile)
+	tab, err := s.start(p, script)
 	if err != nil {
 		return stepFail(name, "opening a tab: %v", err)
 	}
-	vals, err := s.await(tab, p, "exit", smokeTimes.pty)
-	if err != nil {
-		return stepFail(name, "%v; %s", err, s.outputState(tab))
-	}
-	if vals["exit"] != "0" {
-		return stepFail(name, "the output ended with status %s", vals["exit"])
-	}
+	s.ptyTab = tab
+	vals, err := s.awaitEvery(tab, p, "exit", smokeTimes.pty, smokeTimes.ptyPoll)
 	took := time.Since(start).Round(time.Second)
+	if err != nil {
+		return stepFail(name, "%v; %s; %s", err, s.ptyGuest(), s.outputState(tab))
+	}
+	guest := s.ptyGuest()
+	if vals["exit"] != "0" {
+		return stepFail(name, "the output ended with status %s; %s", vals["exit"], guest)
+	}
 	dump, err := s.ctl.dump(tab, 1)
 	if err != nil {
 		return stepFail(name, "after the output: %v", err)
@@ -899,7 +916,29 @@ func (s *smoker) pty() smokeStep {
 	if _, running := tabRunning(dump, tab); !running {
 		return stepFail(name, "tab %d's session ended with the output", tab)
 	}
-	return stepOK(name, "%d MiB of base64 in %s", smokePTYBytes>>20, took)
+	rate := float64(smokePTYBytes>>10) / max(took.Seconds(), 1)
+	return stepOK(name, "%d MiB of base64 seen in %s (%.0f KiB/s, read every %s); %s", smokePTYBytes>>20, took, rate, smokeTimes.ptyPoll, guest)
+}
+
+// ptyGuest says how long the PTY command's base64 ran by the guest's clock.
+// It exits about when its last bytes are through the guest's buffers, ahead
+// of the app showing them, so the gap to the marker is the app's lag.
+func (s *smoker) ptyGuest() string {
+	vals, err := s.guest(ptyTimeScript)
+	if err != nil {
+		return "no timing from the guest: " + err.Error()
+	}
+	start, err := strconv.Atoi(vals["start"])
+	if err != nil {
+		return "no timing file in the guest"
+	}
+	if end, err := strconv.Atoi(vals["end"]); err == nil {
+		return fmt.Sprintf("base64 exited after %ds in the guest", end-start)
+	}
+	if now, err := strconv.Atoi(vals["now"]); err == nil {
+		return fmt.Sprintf("base64 was still running %ds after it started in the guest", now-start)
+	}
+	return "no timing from the guest"
 }
 
 // outputState says whether tab's last lines still change, which tells output
@@ -919,14 +958,19 @@ func (s *smoker) outputState(tab int) string {
 	if err != nil {
 		return "couldn't read the tab: " + err.Error()
 	}
-	_, err = s.ctl.until(s.ctx, tab, 3, smokeTimes.exit, func(dump string) bool { return tail(dump) != tail(first) })
-	switch {
-	case err == nil:
-		return "the output was still moving: slow, not stuck"
-	case errors.Is(err, errNotYet):
-		return "the output had stopped moving"
+	select {
+	case <-s.ctx.Done():
+		return "interrupted before the output could be compared"
+	case <-time.After(smokeTimes.exit):
 	}
-	return "couldn't read the tab: " + err.Error()
+	second, err := s.ctl.dump(tab, 3)
+	switch {
+	case err != nil:
+		return "couldn't read the tab: " + err.Error()
+	case tail(first) != tail(second):
+		return "the output was still moving: slow, not stuck"
+	}
+	return "the output had stopped moving"
 }
 
 // notificationPosted is whether dumpsys notification's lines show a
@@ -1230,6 +1274,17 @@ func (s *smoker) cleanup() smokeStep {
 		}
 	}
 	tabs := len(s.tabs)
+	if s.ptyTab >= 0 {
+		// Hung up first: base64's end would write the file again.
+		if err := s.closeTab(s.ptyTab); err != nil {
+			left = append(left, fmt.Sprintf("tab %d: %v", s.ptyTab, err))
+		}
+		if vals, err := s.guest(ptyCleanScript); err != nil || vals["exit"] != "0" {
+			left = append(left, fmt.Sprintf("%s: rm exited %s: %v", smokePTYFile, vals["exit"], err))
+		} else {
+			ended = append(ended, "the PTY timing file")
+		}
+	}
 	for _, tab := range slices.Clone(s.tabs) {
 		if err := s.closeTab(tab); err != nil {
 			left = append(left, fmt.Sprintf("tab %d: %v", tab, err))
@@ -1274,7 +1329,7 @@ func (s *smoker) closeTab(tab int) error {
 		return err
 	}
 	if _, running := tabRunning(dump, tab); running {
-		if _, err := s.ctl.call("type", strconv.Itoa(tab), inputExtras("exit", true)...); err != nil {
+		if _, err := s.ctl.call("type", strconv.Itoa(tab), inputExtras(" exit", true)...); err != nil {
 			return err
 		}
 		s.ctl.until(s.ctx, tab, 1, smokeTimes.exit, func(dump string) bool {

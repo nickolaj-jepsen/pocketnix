@@ -336,6 +336,9 @@ func fastSmoke(t *testing.T) {
 	s := time.Second
 	smokeTimes.cmd, smokeTimes.pty, smokeTimes.offer, smokeTimes.notify, smokeTimes.wake = s, s, s, s, s
 	smokeTimes.window, smokeTimes.frames, smokeTimes.gone, smokeTimes.exit = s, s, s, s
+	smokeTimes.ptyPoll = controlPoll
+	// outputState waits this long once, between its two reads.
+	smokeTimes.exit = 50 * time.Millisecond
 	smokeTimes.forward, smokeTimes.reboot, smokeTimes.boot = s, s, s
 }
 
@@ -358,7 +361,8 @@ func writeCanned(cmdline, out string, status int) map[string]string {
 var (
 	reactListen = fakeReaction{Typed: `echo (smoke-\d+)-tool=socat;.*' sh '(\d+)' '([^']+)'`,
 		Output: []string{"${1}-tool=socat"}, Write: map[string]string{"control/listening/${2}": "${3}"}}
-	reactPTY    = fakeReaction{Typed: `head -c \d+ /dev/urandom \| base64; echo (smoke-\d+)-exit=`, Output: []string{"AAAAAAAAAAAA", "${1}-exit=0"}}
+	reactPTY = fakeReaction{Typed: `head -c \d+ /dev/urandom \| base64; .*echo (smoke-\d+)-exit=`, Output: []string{"AAAAAAAAAAAA", "${1}-exit=0"},
+		Write: map[string]string{"control/guest-pty": "1000\n"}}
 	reactNotify = fakeReaction{Typed: `notify-send -p .*echo (smoke-\d+)-exit=\$s' sh '[^']*' '([^']+)'`, Output: []string{"${1}-id=7", "${1}-exit=0"},
 		Write: writeCanned(notifications, "  NotificationRecord(0x0abc1234: pkg=dev.nickolaj.pocketnix.debug user=UserHandle{0} id=7 tag=guest importance=3 key=0|dev.nickolaj.pocketnix.debug|7|guest|10200: Notification(channel=guest))\n        android.text=String (${2})\n", 0)}
 	reactUnnotify = fakeReaction{Typed: `CloseNotification u "\$1"; echo (smoke-\d+)-exit=\$\?' sh '7'`, Output: []string{"${1}-exit=0"},
@@ -398,7 +402,18 @@ func smokeDevice(t *testing.T, rs ...fakeReaction) *fakeDevice {
 	return d
 }
 
-var everyTool = []fakeReaction{reactListen, reactPTY, reactNotify, reactUnnotify, reactInhibit, reactUninhibit, reactKill, reactReboot}
+// The guest's PTY timing file: base64 ran for 100 s, read 130 s after it started.
+var (
+	reactPTYTime = fakeReaction{Typed: `set -- \$\(cat .*echo (smoke-\d+)-exit=0`,
+		Output: []string{"${1}-start=1000", "${1}-end=1100", "${1}-now=1130", "${1}-exit=0"}}
+	// base64 hasn't exited by the time the file is read.
+	reactPTYRunning = fakeReaction{Typed: reactPTYTime.Typed,
+		Output: []string{"${1}-start=1000", "${1}-end=", "${1}-now=1600", "${1}-exit=0"}}
+	reactPTYClean = fakeReaction{Typed: `rm -f [^;]*; echo (smoke-\d+)-exit=\$\?`, Output: []string{"${1}-exit=0"},
+		Remove: []string{"control/guest-pty"}}
+)
+
+var everyTool = []fakeReaction{reactListen, reactPTY, reactPTYTime, reactPTYClean, reactNotify, reactUnnotify, reactInhibit, reactUninhibit, reactKill, reactReboot}
 
 func stepNamed(steps []smokeStep, name string) (smokeStep, bool) {
 	for _, s := range steps {
@@ -427,6 +442,9 @@ func leftovers(d *fakeDevice) []string {
 	if b, _ := os.ReadFile(filepath.Join(d.state, cannedPath(powerLocks))); strings.Contains(string(b), "WAKE_LOCK") {
 		left = append(left, "wake lock")
 	}
+	if exists(filepath.Join(d.state, "control", "guest-pty")) {
+		left = append(left, "the guest's PTY timing file")
+	}
 	return left
 }
 
@@ -441,7 +459,8 @@ func exitedEveryTab(t *testing.T, d *fakeDevice) {
 		if strings.Contains(lines[0], "systemctl reboot") {
 			continue
 		}
-		if !slices.Contains(lines, "exit") {
+		// A leading space keeps a line out of fish's history.
+		if !slices.Contains(lines, " exit") {
 			t.Errorf("tab %d got no exit: %q", tab, lines)
 		}
 	}
@@ -475,6 +494,16 @@ func TestSmokeRunsEveryStep(t *testing.T) {
 		t.Errorf("smoke left %q", left)
 	}
 	exitedEveryTab(t, d)
+	for tab, lines := range d.typed() {
+		for _, l := range lines {
+			if !strings.HasPrefix(l, " ") {
+				t.Errorf("tab %d: %q would land in the shell's history", tab, l)
+			}
+		}
+	}
+	if st, _ := stepNamed(r.Smoke, "pty"); !strings.Contains(st.Detail, "100s") {
+		t.Errorf("pty: %+v, want base64's time in the guest", st)
+	}
 	console, _ := os.ReadFile(fakeTabPath(d.state, 0))
 	if !strings.Contains(string(console), rebootLine) {
 		t.Error("the guest never rebooted")
@@ -482,6 +511,53 @@ func TestSmokeRunsEveryStep(t *testing.T) {
 	for _, e := range []string{"uninstall", "am force-stop"} {
 		if hasEvent(d.events(), e) {
 			t.Errorf("smoke ran %s:\n%s", e, d.events())
+		}
+	}
+}
+
+// ptyTab is the tab the PTY command was typed into, -1 if none.
+func ptyTab(d *fakeDevice) int {
+	for tab, lines := range d.typed() {
+		if strings.Contains(lines[0], "base64") {
+			return tab
+		}
+	}
+	return -1
+}
+
+// A dump stalls the app's terminal output, so the PTY step reads few of them.
+func TestSmokePTYPollsSlowly(t *testing.T) {
+	d := smokeDevice(t, append(without(everyTool, reactPTY), reactPTYRunning)...)
+	smokeTimes.pty = 400 * time.Millisecond
+	smokeTimes.ptyPoll = 150 * time.Millisecond
+	if _, _, err := doctorJSON(t, "--smoke"); err == nil {
+		t.Error("a PTY step without its marker passed")
+	}
+	reads, _ := os.ReadFile(filepath.Join(d.state, "control", "dump-reads"))
+	want := fmt.Sprintf("tab=%d", ptyTab(d))
+	n := 0
+	for _, l := range strings.Split(string(reads), "\n") {
+		if l == want {
+			n++
+		}
+	}
+	// One at once, one per poll in the limit, and one more past it.
+	if n == 0 || n > 6 {
+		t.Errorf("the PTY step read tab %s's dump %d times", want, n)
+	}
+}
+
+// A PTY step that times out still says what it found in the guest and the app.
+func TestSmokePTYTimeoutSaysWhatItFound(t *testing.T) {
+	smokeDevice(t, append(without(without(everyTool, reactPTY), reactPTYTime), reactPTYRunning)...)
+	r, _, _ := doctorJSON(t, "--smoke")
+	st, _ := stepNamed(r.Smoke, "pty")
+	if st.OK == nil || *st.OK {
+		t.Errorf("pty: %+v, want a failure", st)
+	}
+	for _, token := range []string{"still running", "600s", "stopped"} {
+		if !strings.Contains(st.Detail, token) {
+			t.Errorf("pty detail lacks %q: %s", token, st.Detail)
 		}
 	}
 }
@@ -542,7 +618,7 @@ func TestSmokeSkipsWithoutInputs(t *testing.T) {
 	}
 	toolless := []fakeReaction{
 		none(`echo (smoke-\d+)-tool=socat;`), none(`notify-send -p .*echo (smoke-\d+)-exit=\$s'`), none(`systemd-inhibit --what=sleep .*echo (smoke-\d+)-exit=0' sh$`),
-		reactPTY, reactKill, reactReboot,
+		reactPTY, reactPTYTime, reactPTYClean, reactKill, reactReboot,
 	}
 	gpuApps := []string{"--gpu-apps", strings.Join(smokeApps, ",")}
 	for _, tc := range []struct {

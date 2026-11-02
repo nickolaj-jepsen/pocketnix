@@ -428,6 +428,11 @@ var errNotYet = errors.New("not within the timeout")
 // until polls dump(tab, lines) until done holds for it, and returns the last
 // dump either way: an error wrapping errNotYet after timeout, or ctx's error.
 func (c control) until(ctx context.Context, tab, lines int, timeout time.Duration, done func(dump string) bool) (string, error) {
+	return c.untilEvery(ctx, tab, lines, timeout, controlPoll, done)
+}
+
+// untilEvery is until, reading the dump every every.
+func (c control) untilEvery(ctx context.Context, tab, lines int, timeout, every time.Duration, done func(dump string) bool) (string, error) {
 	deadline := time.Now().Add(timeout)
 	for {
 		out, err := c.dump(tab, lines)
@@ -443,7 +448,7 @@ func (c control) until(ctx context.Context, tab, lines int, timeout time.Duratio
 		select {
 		case <-ctx.Done():
 			return out, ctx.Err()
-		case <-time.After(controlPoll):
+		case <-time.After(every):
 		}
 	}
 }
