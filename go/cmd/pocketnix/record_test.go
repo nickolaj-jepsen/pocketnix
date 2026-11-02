@@ -427,7 +427,7 @@ func TestRecordScrcpyFails(t *testing.T) {
 				t.Errorf("screen.mp4 exists = %t, want %t", got, tc.kept)
 			}
 			log := readBundle(t, bundle, "commands.log")
-			if !regexp.MustCompile(`(?m) exit=` + tc.status + ` scrcpy `).MatchString(log) || !regexp.MustCompile(`(?m) note .*Server connection failed`).MatchString(log) {
+			if !regexp.MustCompile(`(?m) exit=`+tc.status+` scrcpy `).MatchString(log) || !regexp.MustCompile(`(?m) note .*Server connection failed`).MatchString(log) {
 				t.Errorf("no note about scrcpy's failure in commands.log:\n%s", log)
 			}
 			if tc.kept && !regexp.MustCompile(`(?m) note .*cut short`).MatchString(log) {

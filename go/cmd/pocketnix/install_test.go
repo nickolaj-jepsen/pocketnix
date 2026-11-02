@@ -464,9 +464,9 @@ func TestInstallRestoreOverAnAppThatDoesntAnswer(t *testing.T) {
 	const crash = "Exception occurred while executing 'call':\n"
 	statusCall := "content call --uri content://" + debugPackage + ".provision --method status"
 	for _, tc := range []struct {
-		name     string
-		setup    func(d *fakeDevice)
-		refused  bool
+		name    string
+		setup   func(d *fakeDevice)
+		refused bool
 		// want is the refusal's token.
 		want string
 	}{
