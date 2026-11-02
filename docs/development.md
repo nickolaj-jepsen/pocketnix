@@ -152,6 +152,38 @@ debug-only ones on `BuildConfig.DEBUG`.
 In debug builds, `pocketnix control` opens tabs, types into them and reads
 them back (`pocketnix control -h`; `.agents/skills/pocketnix-control/SKILL.md`).
 
+## Swapping an app build
+
+`provision` sets up a phone. To put another build of the app on a phone that
+already has a VM, use `pocketnix install` (`pocketnix install -h`):
+
+```bash
+nix run .#gradle -- assembleDebug
+pocketnix install --debug app/build/outputs/apk/debug/app-debug.apk
+pocketnix install --debug --restore    # back to the build the phone had
+```
+
+`install` never touches the VM's disk. Replacing the app kills its process,
+and the VM dies with it as if the power were cut, so a running VM is stopped
+first: `install` sends `ControlActivity` a STOP and waits until the app's
+status says the guest is down. Then it installs over the old build,
+re-grants the AVF permissions, and starts the VM again if it was running.
+That START carries no extras, so the settings saved in the app stay as they
+were.
+
+Before the first swap, `install` pulls the installed APK into Go's
+`os.UserCacheDir()`, under `pocketnix/backup/<serial>/<package>.apk`. Later
+installs leave that backup alone, so after any number of dev builds
+`--restore` brings back the one the phone started with. `--restore`
+reinstalls it, deletes it and starts the VM.
+
+When the install fails after the VM was stopped, the VM stays stopped and
+the error names the `--restore` command that undoes the swap. A build signed
+with another key fails this way too: getting past that takes an uninstall,
+which deletes the disk image, and `install` leaves that to you. It refuses,
+before stopping anything, a split install and an APK too big for one pull
+(`maxPull`, for the USB transfer trap in `AGENTS.md`).
+
 ## Benchmarks
 
 `pocketnix bench` measures the GUI pipeline: frame rate, latency, and what
