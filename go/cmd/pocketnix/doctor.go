@@ -649,7 +649,7 @@ type smoker struct {
 	ptyTab int
 	// launched are the apps smoke launched and hasn't killed.
 	launched []string
-	// forwarded is set once smoke allowed its forward.
+	// forwarded is set once smoke tried to allow its forward.
 	forwarded bool
 	// inhibitor is systemd-inhibit's pid; wakeOurs that the wake lock came from it.
 	inhibitor string
@@ -877,6 +877,13 @@ func (s *smoker) guest(script string, args ...string) (map[string]string, error)
 	return vals, err
 }
 
+// guestToEnd is guest for a script that starts something only its output lets
+// cleanup end: an interrupt waits for that output, which comes within seconds.
+func (s *smoker) guestToEnd(script string, args ...string) (vals map[string]string, err error) {
+	s.uninterrupted(func() { vals, err = s.guest(script, args...) })
+	return vals, err
+}
+
 var offerLine = regexp.MustCompile(`(?m)^port=(\d+) state=(\w+) phone=(\S+)$`)
 
 // offer is guest port's offer state and phone port, "" when it isn't offered.
@@ -922,10 +929,11 @@ func (s *smoker) forward() smokeStep {
 	if err != nil {
 		return stepFail(name, "%s listens on guest port %s, but it wasn't offered: %v (is pocketnix.guest.forwardOffers.enable on?)", tool, port, err)
 	}
+	// Before the call: the app can act on an allow whose answer never arrives.
+	s.forwarded = true
 	if _, err := s.ctl.call("offer", port, "answer:s:allow"); err != nil {
 		return stepFail(name, "allowing guest port %s: %v", port, err)
 	}
-	s.forwarded = true
 	_, phone, err := s.offer(smokeForwardPort)
 	if err != nil {
 		return stepFail(name, "offers: %v", err)
@@ -1078,7 +1086,8 @@ func (s *smoker) notify() smokeStep {
 	b := make([]byte, 4)
 	rand.Read(b)
 	text := "smoke-" + hex.EncodeToString(b)
-	vals, err := s.guest(notifyScript, "pocketnix smoke", text)
+	vals, err := s.guestToEnd(notifyScript, "pocketnix smoke", text)
+	s.notification = vals["id"]
 	switch {
 	case err != nil:
 		return stepFail(name, "%v", err)
@@ -1087,7 +1096,6 @@ func (s *smoker) notify() smokeStep {
 	case vals["exit"] != "0":
 		return stepFail(name, "notify-send exited %s", vals["exit"])
 	}
-	s.notification = vals["id"]
 	// Selects only this app's records and the token: other apps' text mustn't leave the phone.
 	cmdline := "dumpsys notification --noredact | grep -e " + adb.ShellQuote("NotificationRecord.*pkg="+s.pkg+" ") + " -e " + text
 	err = pollUntil(s.ctx, smokeTimes.notify, func() (bool, error) {
@@ -1128,7 +1136,10 @@ func (s *smoker) inhibit() smokeStep {
 	} else if held {
 		return stepSkip(name, "the app holds its %s wake lock already, for an inhibitor of the guest's own", wakeLockTag)
 	}
-	vals, err := s.guest(inhibitScript)
+	vals, err := s.guestToEnd(inhibitScript)
+	if vals["pid"] != "gone" {
+		s.inhibitor = vals["pid"]
+	}
 	switch {
 	case err != nil:
 		return stepFail(name, "%v", err)
@@ -1137,7 +1148,6 @@ func (s *smoker) inhibit() smokeStep {
 	case vals["pid"] == "gone":
 		return stepFail(name, "systemd-inhibit exited at once: may the guest's user take inhibitors (pocketnix.guest.power.wakeLocks.enable)?")
 	}
-	s.inhibitor = vals["pid"]
 	err = pollUntil(s.ctx, smokeTimes.wake, func() (bool, error) { return s.wakeLock(uid) })
 	if err != nil {
 		return stepFail(name, "the guest holds a sleep inhibitor, but the app took no %s wake lock: %v (wake locks off in the guest, or refused in the app's settings?)", wakeLockTag, err)
