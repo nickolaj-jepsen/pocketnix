@@ -182,6 +182,11 @@ func (c *cleanups) run() {
 }
 
 func (o *provisionOpts) run() error {
+	if o.apk != "" {
+		if err := checkAPKPackage(o.apk, o.pkg()); err != nil {
+			return err
+		}
+	}
 	dev := adb.Device{Serial: o.serial}
 	if state, err := dev.State(); err != nil || state != "device" {
 		return fmt.Errorf("no usable adb device (state %q): %v", state, err)

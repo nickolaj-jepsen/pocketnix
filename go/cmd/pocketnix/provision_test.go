@@ -36,8 +36,7 @@ func provisionFor(t *testing.T, args ...string) error {
 func TestProvision(t *testing.T) {
 	d := newFakeDevice(t)
 	img, want := testImage(t)
-	apk := filepath.Join(t.TempDir(), "app-debug.apk")
-	os.WriteFile(apk, []byte("apk"), 0o644)
+	apk := fakeAPKFile(t, "app-debug.apk", "apk")
 
 	err := provisionFor(t, "--image", img, "--apk", apk, "--debug", "--no-network", "--memory", "1024", "--cpus", "one")
 	if err != nil {
@@ -85,8 +84,7 @@ func TestProvision(t *testing.T) {
 func TestProvisionKeepsExistingDisk(t *testing.T) {
 	d := newFakeDevice(t)
 	img, want := testImage(t)
-	apk := filepath.Join(t.TempDir(), "app.apk")
-	os.WriteFile(apk, []byte("apk"), 0o644)
+	apk := fakeAPKFile(t, "app.apk", "apk")
 	if err := provisionFor(t, "--image", img, "--apk", apk, "--no-start"); err != nil {
 		t.Fatal(err)
 	}
@@ -118,8 +116,7 @@ func TestProvisionRefusesWhileRunning(t *testing.T) {
 	d := newFakeDevice(t)
 	t.Setenv("FAKE_ADB_RUNNING", "1")
 	img, _ := testImage(t)
-	apk := filepath.Join(t.TempDir(), "app.apk")
-	os.WriteFile(apk, []byte("apk"), 0o644)
+	apk := fakeAPKFile(t, "app.apk", "apk")
 	if err := provisionFor(t, "--image", img, "--apk", apk, "--replace"); err == nil {
 		t.Error("provision pushed while the VM runs")
 	}
@@ -162,14 +159,27 @@ func TestProvisionChecksThePhoneFirst(t *testing.T) {
 	}
 }
 
+func TestProvisionRefusesTheOtherPackage(t *testing.T) {
+	d := newFakeDevice(t)
+	d.installAPKAs(debugPackage, []byte("the owner's build"))
+	d.setRunning(true)
+	img, _ := testImage(t)
+	err := provisionFor(t, "--image", img, "--apk", fakeAPKFile(t, "app-debug.apk", "a dev build"), "--replace")
+	if err == nil || !strings.Contains(err.Error(), "--debug") {
+		t.Errorf("got %v, want a refusal naming --debug", err)
+	}
+	if ev := d.events(); hasEvent(ev, "install ") || hasEvent(ev, "vm killed") {
+		t.Errorf("acted on the device; events:\n%s", ev)
+	}
+}
+
 // A device that definitely can't run a VM stops provision before the
 // install, unless --force.
 func TestProvisionRefusesFailingDevice(t *testing.T) {
 	d := newFakeDevice(t)
 	d.can("pm has-feature android.software.virtualization_framework", "false\n", 1)
 	img, _ := testImage(t)
-	apk := filepath.Join(t.TempDir(), "app.apk")
-	os.WriteFile(apk, []byte("apk"), 0o644)
+	apk := fakeAPKFile(t, "app.apk", "apk")
 	if err := provisionFor(t, "--image", img, "--apk", apk, "--no-start"); err == nil || !strings.Contains(err.Error(), "--force") {
 		t.Errorf("got %v, want a refusal naming --force", err)
 	}
@@ -200,8 +210,7 @@ func TestProvisionNeedsAnAPKWithoutARelease(t *testing.T) {
 func TestProvisionCleansUpAfterAFailure(t *testing.T) {
 	d := newFakeDevice(t)
 	img, _ := testImage(t)
-	apk := filepath.Join(t.TempDir(), "app.apk")
-	os.WriteFile(apk, []byte("apk"), 0o644)
+	apk := fakeAPKFile(t, "app.apk", "apk")
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
 	t.Setenv("FAKE_ADB_FULL", "1")

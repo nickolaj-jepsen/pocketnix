@@ -181,8 +181,10 @@ When the install fails after the VM was stopped, the VM stays stopped and
 the error names the `--restore` command that undoes the swap. A build signed
 with another key fails this way too: getting past that takes an uninstall,
 which deletes the disk image, and `install` leaves that to you. It refuses,
-before stopping anything, a split install and an APK too big for one pull
-(`maxPull`, for the USB transfer trap in `AGENTS.md`).
+before stopping anything, an APK of the other package than the one it targets
+(`--debug`, which would replace that build and kill its VM), a split install
+and an APK too big for one pull (`maxPull`, for the USB transfer trap in
+`AGENTS.md`).
 
 ## Deploying a dev build to a phone guest
 
