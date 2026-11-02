@@ -35,10 +35,10 @@ func field(raw map[string]any, path string) any {
 }
 
 // cannedPixel makes the fake device answer like the maintainer's Pixel 8 Pro
-// on GrapheneOS.
+// on GrapheneOS, with its real answers.
 func cannedPixel(d *fakeDevice) {
 	for name, v := range map[string]string{
-		"ro.build.fingerprint":                      "google/husky/husky:17/BP4A.251205.006/2025120600:user/release-keys",
+		"ro.build.fingerprint":                      "google/husky/husky:17/CP3A.261005.005/2026101601:user/release-keys",
 		"ro.product.model":                          "Pixel 8 Pro",
 		"ro.product.manufacturer":                   "Google",
 		"ro.soc.manufacturer":                       "Google",
@@ -47,24 +47,28 @@ func cannedPixel(d *fakeDevice) {
 		"ro.build.version.release":                  "17",
 		"ro.boot.hypervisor.vm.supported":           "1",
 		"ro.boot.hypervisor.protected_vm.supported": "1",
-		"ro.boot.hypervisor.version":                "pkvm-1.0",
+		"ro.boot.hypervisor.version":                "kvm.arm-protected",
 	} {
 		d.setProp(name, v)
 	}
 	d.addPackages("app.grapheneos.apps")
 	d.addFile("/apex/com.android.virt/etc/u-boot.bin", []byte("u-boot"))
 	d.can("pm has-feature android.software.virtualization_framework", "true\n", 0)
-	d.can("uname -r", "6.1.145-android14-11-g0c1d2e3f4a5b\n", 0)
+	d.can("uname -r", "6.1.177-android14-11-ga001019bb34e\n", 0)
 	d.can("/apex/com.android.virt/bin/vm info", `Both protected and non-protected VMs are supported.
-Hypervisor version: pkvm-1.0
+Hypervisor version: kvm.arm-protected
 /dev/kvm exists.
 /dev/vfio/vfio does not exist.
 VFIO-platform is not supported.
 Assignable devices: []
 Available OS list: ["microdroid"]
-Debug policy: none
+Debug policy: Ok(DebugPolicy { log: false, ramdump: false, adb: false })
+Updatable VM is supported.
 `, 0)
-	d.can("pm list packages --apex-only --show-versioncode", "package:com.android.virt versionCode:360000000\n", 0)
+	d.can("pm list packages --apex-only --show-versioncode", `package:com.android.hardware.biometrics.fingerprint.virtual versionCode:1
+package:com.android.virt versionCode:370399999
+package:com.android.hardware.biometrics.face.virtual versionCode:2
+`, 0)
 }
 
 func TestDoctorJSON(t *testing.T) {
@@ -77,6 +81,7 @@ func TestDoctorJSON(t *testing.T) {
 	for path, want := range map[string]any{
 		"schema": float64(1), "device.os": "grapheneos", "avf.vmSupported": true,
 		"avf.protectedVmSupported": true, "verdict.level": "ok",
+		"avf.apexVersion": "370399999", "device.soc": "Google Tensor G3", "avf.uboot": true,
 	} {
 		if got := field(raw, path); got != want {
 			t.Errorf("%s = %v, want %v", path, got, want)
@@ -128,7 +133,7 @@ func TestDoctorVerdicts(t *testing.T) {
 		{name: "protected-only", level: levelFail, token: "protected", setup: func(d *fakeDevice) {
 			cannedPixel(d)
 			d.setProp("ro.boot.hypervisor.vm.supported", "0")
-			d.can("/apex/com.android.virt/bin/vm info", "Only protected VMs are supported.\nHypervisor version: pkvm-1.0\n", 0)
+			d.can("/apex/com.android.virt/bin/vm info", "Only protected VMs are supported.\nHypervisor version: kvm.arm-protected\n", 0)
 		}},
 		// The props alone are definite too.
 		{name: "protected-only-props", level: levelFail, token: "vm.supported", setup: func(d *fakeDevice) {
@@ -155,7 +160,7 @@ func TestDoctorVerdicts(t *testing.T) {
 		{name: "no-virtmgr", level: levelWarn, token: "virtmgr", setup: func(d *fakeDevice) {
 			cannedPixel(d)
 			d.can("/apex/com.android.virt/bin/vm info", `Both protected and non-protected VMs are supported.
-Hypervisor version: pkvm-1.0
+Hypervisor version: kvm.arm-protected
 /dev/kvm exists.
 /dev/vfio/vfio does not exist.
 VFIO-platform is not supported.
