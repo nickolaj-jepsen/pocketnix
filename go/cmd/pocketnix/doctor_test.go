@@ -730,3 +730,22 @@ func TestSmokeNoGPULaunchFails(t *testing.T) {
 		t.Errorf("gpu: %+v, want a failure naming the app", st)
 	}
 }
+
+// With its transcript's ring wrapped, the terminal joins the marker to the row
+// before or after it (TerminalRow.clear keeps mLineWrap), as a phone's 64 MiB does.
+func TestSmokePTYFindsAJoinedMarker(t *testing.T) {
+	for name, line := range map[string]string{
+		"to-the-row-before": "AAAAAAAAAAAAAAAAAAAAAAAAAAAA            ${1}-exit=0",
+		"to-the-row-after":  "${1}-exit=0                          ~ > ",
+	} {
+		t.Run(name, func(t *testing.T) {
+			joined := reactPTY
+			joined.Output = []string{"AAAAAAAAAAAA", line}
+			smokeDevice(t, append([]fakeReaction{joined}, without(everyTool, reactPTY)...)...)
+			r, _, _ := doctorJSON(t, "--smoke")
+			if st, _ := stepNamed(r.Smoke, "pty"); st.OK == nil || !*st.OK {
+				t.Errorf("pty: %+v, want it to find the marker", st)
+			}
+		})
+	}
+}

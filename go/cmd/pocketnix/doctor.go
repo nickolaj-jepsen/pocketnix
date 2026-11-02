@@ -472,8 +472,9 @@ func printDoctor(w io.Writer, r doctorReport) {
 var smokeTimes = struct {
 	// cmd is a short guest command's output, and a tab's agent.
 	cmd time.Duration
-	// pty is the big output's end marker, and ptyPoll how often the step looks
-	// for it: a dump runs on the main thread that drains the output, so it stalls it.
+	// pty is the big output's end marker: a Pixel 8 Pro's debug build, in front,
+	// takes 210 s; ptyPoll is how often the step looks for it, since a dump runs
+	// on the main thread that drains the output.
 	pty, ptyPoll time.Duration
 	// offer is the agent offering the listener.
 	offer time.Duration
@@ -489,7 +490,7 @@ var smokeTimes = struct {
 	// reboot is the VM going down after systemctl reboot, and boot its agent answering again.
 	reboot, boot time.Duration
 }{
-	cmd: 60 * time.Second, pty: 10 * time.Minute, ptyPoll: 20 * time.Second, offer: 20 * time.Second,
+	cmd: 60 * time.Second, pty: 6 * time.Minute, ptyPoll: 20 * time.Second, offer: 20 * time.Second,
 	notify: 20 * time.Second, wake: 20 * time.Second,
 	window: 60 * time.Second, frames: 20 * time.Second, gone: 20 * time.Second,
 	exit: 5 * time.Second, forward: 45 * time.Second,
@@ -503,6 +504,8 @@ const (
 	smokeForwardPort = 47613
 	// smokeListenSecs caps the forward step's listener, in case nothing connects.
 	smokeListenSecs = 120
+	// smokeTailBytes is how much of a tab's last lines a PTY failure quotes.
+	smokeTailBytes = 200
 	// smokePTYFile is where the PTY step's guest command keeps its start and
 	// end times, one epoch per line, apart from the transcript it's measuring.
 	smokePTYFile = "/tmp/pocketnix-smoke-pty"
@@ -769,13 +772,8 @@ var markerLine = regexp.MustCompile(`^(smoke-\d+)-(\w+)=(.*?)\s*$`)
 // await waits until tab shows p's line for key, and returns every value
 // p's lines gave so far.
 func (s *smoker) await(tab int, p, key string, timeout time.Duration) (map[string]string, error) {
-	return s.awaitEvery(tab, p, key, timeout, controlPoll)
-}
-
-// awaitEvery is await, reading the tab every every.
-func (s *smoker) awaitEvery(tab int, p, key string, timeout, every time.Duration) (map[string]string, error) {
 	vals := map[string]string{}
-	_, err := s.ctl.untilEvery(s.ctx, tab, 0, timeout, every, func(dump string) bool {
+	_, err := s.ctl.until(s.ctx, tab, 0, timeout, func(dump string) bool {
 		prefix := fmt.Sprintf("|%d| ", tab)
 		for _, l := range strings.Split(dump, "\n") {
 			t, ok := strings.CutPrefix(l, prefix)
@@ -897,14 +895,21 @@ func (s *smoker) pty() smokeStep {
 		return stepFail(name, "opening a tab: %v", err)
 	}
 	s.ptyTab = tab
-	vals, err := s.awaitEvery(tab, p, "exit", smokeTimes.pty, smokeTimes.ptyPoll)
+	// Unanchored: once the transcript's ring has wrapped, the terminal can join
+	// the marker to the row before or after it. The typed line has `$s` here, never digits.
+	exit := regexp.MustCompile(regexp.QuoteMeta(p) + `-exit=(\d+)`)
+	var status []string
+	_, err = s.ctl.untilEvery(s.ctx, tab, 0, smokeTimes.pty, smokeTimes.ptyPoll, func(dump string) bool {
+		status = tabLine(dump, tab, exit)
+		return status != nil
+	})
 	took := time.Since(start).Round(time.Second)
 	if err != nil {
-		return stepFail(name, "%v; %s; %s", err, s.ptyGuest(), s.outputState(tab))
+		return stepFail(name, "no %s-exit line after %s: %v; %s; %s", p, took, err, s.ptyGuest(), s.outputState(tab))
 	}
 	guest := s.ptyGuest()
-	if vals["exit"] != "0" {
-		return stepFail(name, "the output ended with status %s; %s", vals["exit"], guest)
+	if status[1] != "0" {
+		return stepFail(name, "the output ended with status %s; %s", status[1], guest)
 	}
 	dump, err := s.ctl.dump(tab, 1)
 	if err != nil {
@@ -970,7 +975,11 @@ func (s *smoker) outputState(tab int) string {
 	case tail(first) != tail(second):
 		return "the output was still moving: slow, not stuck"
 	}
-	return "the output had stopped moving"
+	end := tail(second)
+	if len(end) > smokeTailBytes {
+		end = end[len(end)-smokeTailBytes:]
+	}
+	return fmt.Sprintf("the output had stopped moving, at %q", end)
 }
 
 // notificationPosted is whether dumpsys notification's lines show a
