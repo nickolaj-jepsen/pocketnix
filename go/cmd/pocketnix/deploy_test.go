@@ -2,9 +2,12 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -42,10 +45,32 @@ exit $status
 `
 
 const fakeDesktopNix = `#!/bin/sh
+# A store path's closure, one "path size" line each: canned, or the path alone.
+closure() {
+  if [ -e "$FAKE_DESKTOP/closures/${1##*/}" ]; then
+    cat "$FAKE_DESKTOP/closures/${1##*/}"
+  else
+    echo "$1 1048576"
+  fi
+}
 case $1 in
 build)
+  case " $* " in
+  *" --expr "*)
+    # nix/deploy-rewrite.nix: the cross package's binaries, rewritten.
+    out=/nix/store/fakehash-pocketnix-compositor-guest-libs
+    mkdir -p "$FAKE_DESKTOP$out/bin"
+    touch "$FAKE_DESKTOP$out/bin/pocketnix-compositor" "$FAKE_DESKTOP$out/bin/pocketnix-gui-bench"
+    echo "$out"
+    exit 0
+    ;;
+  esac
   for a; do inst=$a; done
   echo "/nix/store/fakehash-${inst#*#}"
+  ;;
+path-info)
+  for a; do p=$a; done
+  closure "$p"
   ;;
 copy)
   shift
@@ -72,7 +97,10 @@ copy)
   # Nix splits NIX_SSHOPTS as a shell would; sudo -n true stands in for the daemon.
   eval "set -- $NIX_SSHOPTS"
   ssh "$@" "$host" "sudo -n true" || exit 1
-  mkdir -p "$FAKE_GUEST/store/${path##*/}"
+  closure "$path" | while read -r p size; do
+    mkdir -p "$FAKE_GUEST$p"
+    [ ! -d "$FAKE_DESKTOP$p" ] || cp -R "$FAKE_DESKTOP$p/." "$FAKE_GUEST$p/"
+  done
   ;;
 *)
   echo "fake nix: $1 not modelled" >&2
@@ -95,6 +123,11 @@ FAKE_UID=0 exec "$@"
 `
 
 const fakeGuestNixStore = `#!/bin/sh
+if [ "$1" = --query ] && [ "$2" = --requisites ]; then
+  [ -e "$FAKE_GUEST$3" ] || { echo "error: path '$3' is not valid" >&2; exit 1; }
+  cat "$FAKE_GUEST/closures/${3##*/}" 2>/dev/null || echo "$3"
+  exit 0
+fi
 [ "$FAKE_UID" = 0 ] || { echo "nix-store: permission denied" >&2; exit 1; }
 path= root=
 while [ $# -gt 0 ]; do
@@ -104,8 +137,18 @@ while [ $# -gt 0 ]; do
     *) path=$1; shift ;;
   esac
 done
-[ -e "$FAKE_GUEST/store/${path##*/}" ] || { echo "error: path '$path' is not valid" >&2; exit 1; }
+[ -e "$FAKE_GUEST$path" ] || { echo "error: path '$path' is not valid" >&2; exit 1; }
 ln -sfn "$path" "$root" && echo "$root"
+`
+
+// fakeGuestLoader is the model guest's dynamic loader: --list resolves a binary,
+// unless the guest's libraries lack a symbol version it needs.
+const fakeGuestLoader = `#!/bin/sh
+[ "$1" = --list ] && [ -e "$2" ] || { echo "$2: cannot open shared object file" >&2; exit 127; }
+if [ -e "$FAKE_GUEST/loader-lacks-version" ]; then
+  echo "$2: version \` + "`GLIBC_2.99'" + ` not found (required by $2)" >&2
+fi
+echo "	libc.so.6 => (resolved)"
 `
 
 const fakeGuestSystemctl = `#!/bin/sh
@@ -173,14 +216,16 @@ const systemAgent = "/nix/store/system-pocketnix-0.1.0/bin/pocketnix-agent --gue
 // fakeGuest is a model of a guest, and of the desktop's ssh and nix that reach
 // it, in a directory: the tests assert through its files.
 type fakeGuest struct {
-	t   *testing.T
-	dir string
+	t *testing.T
+	// dir is the guest's root; desktop holds the desktop's canned closures and
+	// the store paths that have files.
+	dir, desktop string
 }
 
 func newFakeGuest(t *testing.T) *fakeGuest {
 	t.Helper()
 	base := t.TempDir()
-	g := &fakeGuest{t: t, dir: filepath.Join(base, "guest")}
+	g := &fakeGuest{t: t, dir: filepath.Join(base, "guest"), desktop: filepath.Join(base, "desktop")}
 	desktopBin, guestBin := filepath.Join(base, "desktop-bin"), filepath.Join(base, "guest-bin")
 	for path, script := range map[string]string{
 		filepath.Join(desktopBin, "ssh"):     fakeDesktopSSH,
@@ -199,14 +244,87 @@ func newFakeGuest(t *testing.T) *fakeGuest {
 	g.write("state/system/pocketnix-agent.service.loaded", systemAgent+"\n")
 	t.Setenv("PATH", desktopBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("FAKE_GUEST", g.dir)
+	t.Setenv("FAKE_DESKTOP", g.desktop)
 	t.Setenv("FAKE_GUEST_BIN", guestBin)
 	t.Setenv("FAKE_GUEST_HOST", deployHost)
 	t.Setenv("FAKE_SSH_CONFIG", "")
 	t.Setenv("NIX_SSHOPTS", "")
-	old := deployGuestRoot
+	old, oldELF := deployGuestRoot, deployReadELF
 	deployGuestRoot = g.dir
-	t.Cleanup(func() { deployGuestRoot = old })
+	deployReadELF = func(string) (elfNeeds, error) { return crossCompositorNeeds, nil }
+	t.Cleanup(func() { deployGuestRoot, deployReadELF = old, oldELF })
 	return g
+}
+
+// crossCompositorNeeds is what the cross compositor's binaries load, as its
+// build links them.
+var crossCompositorNeeds = elfNeeds{
+	bins:   []string{"pocketnix-compositor", "pocketnix-gui-bench"},
+	interp: "ld-linux-aarch64.so.1",
+	needed: []string{"libxkbcommon.so.0", "libgcc_s.so.1", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
+}
+
+// The model guest's system compositor, and the store paths of its closure.
+const (
+	guestCompositorPkg = "/nix/store/0000000000000000000000000000comp-pocketnix-compositor-0.1.0"
+	guestGlibc         = "/nix/store/0000000000000000000000000000libc-glibc-2.42-100"
+	guestXkbcommon     = "/nix/store/00000000000000000000000000000xkb-libxkbcommon-1.13.1"
+	guestGccLib        = "/nix/store/00000000000000000000000000gcclib-gcc-15.3.0-lib"
+	systemCompositor   = guestCompositorPkg + "/bin/pocketnix-compositor --guest-socket /run/pocketnix/guest.sock"
+)
+
+// guestCompositorClosures are canned closures of the system compositor: each
+// store path with the files in its lib directory.
+var guestCompositorClosures = map[string][]guestLibDir{
+	"matching": {
+		{guestCompositorPkg, nil},
+		{guestXkbcommon, []string{"libxkbcommon.so", "libxkbcommon.so.0", "libxkbcommon.so.0.13.1"}},
+		{guestGlibc, []string{"ld-linux-aarch64.so.1", "libc.so.6", "libm.so.6", "libpthread.so.0"}},
+		{guestGccLib, []string{"libgcc_s.so.1", "libstdc++.so.6"}},
+	},
+	// The guest's libxkbcommon has another soname than the one the cross build linked.
+	"missing-soname": {
+		{guestCompositorPkg, nil},
+		{guestXkbcommon, []string{"libxkbcommon.so.1"}},
+		{guestGlibc, []string{"ld-linux-aarch64.so.1", "libc.so.6", "libm.so.6"}},
+		{guestGccLib, []string{"libgcc_s.so.1"}},
+	},
+}
+
+type guestLibDir struct {
+	path  string
+	files []string
+}
+
+// withCompositor gives the guest a system compositor unit whose package has the
+// named canned closure.
+func (g *fakeGuest) withCompositor(closure string) {
+	g.t.Helper()
+	g.write("etc/systemd/user/pocketnix-compositor.service", "[Service]\nExecStart="+systemCompositor+"\n")
+	g.write("state/user/pocketnix-compositor.service.loaded", systemCompositor+"\n")
+	var paths []string
+	for _, d := range guestCompositorClosures[closure] {
+		paths = append(paths, d.path)
+		os.MkdirAll(g.path(d.path), 0o755)
+		for _, f := range d.files {
+			content, mode := "", os.FileMode(0o644)
+			if f == "ld-linux-aarch64.so.1" {
+				content, mode = fakeGuestLoader, 0o755
+			}
+			g.write(d.path+"/lib/"+f, content)
+			os.Chmod(g.path(d.path+"/lib/"+f), mode)
+		}
+	}
+	g.write("closures/"+path.Base(guestCompositorPkg), strings.Join(paths, "\n")+"\n")
+}
+
+// desktopClosure cans the desktop's closure of a store path, as "path size" lines.
+func (g *fakeGuest) desktopClosure(p string, lines ...string) {
+	g.t.Helper()
+	os.MkdirAll(filepath.Join(g.desktop, "closures"), 0o755)
+	if err := os.WriteFile(filepath.Join(g.desktop, "closures", path.Base(p)), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		g.t.Fatal(err)
+	}
 }
 
 func (g *fakeGuest) path(rel string) string { return filepath.Join(g.dir, rel) }
@@ -230,10 +348,24 @@ func (g *fakeGuest) running() string {
 	return strings.TrimSpace(string(b))
 }
 
+// compositorRunning is the command line the compositor unit's last restart started.
+func (g *fakeGuest) compositorRunning() string {
+	b, _ := os.ReadFile(g.path("state/user/pocketnix-compositor.service.running"))
+	return strings.TrimSpace(string(b))
+}
+
 const (
 	agentDropIn = "run/systemd/system/pocketnix-agent.service.d/pocketnix-deploy.conf"
 	agentRoot   = "run/pocketnix-deploy/agent"
+	// The compositor's drop-in, under the user's runtime directory.
+	compositorDropIn   = "pocketnix-compositor.service.d/pocketnix-deploy.conf"
+	compositorRoot     = "run/pocketnix-deploy/compositor"
+	compositorLibsRoot = "run/pocketnix-deploy/compositor-libs"
 )
+
+func userDropIn(rel string) string {
+	return fmt.Sprintf("run/user/%d/systemd/user/%s", os.Getuid(), rel)
+}
 
 // stderrOf runs f and returns what it wrote to os.Stderr.
 func stderrOf(t *testing.T, f func() error) (string, error) {
@@ -317,7 +449,7 @@ func TestDeployAgentAndRemove(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "sudo") {
 			t.Fatalf("err = %v, want a refusal naming sudo", err)
 		}
-		for _, rel := range []string{"store", agentDropIn, agentRoot} {
+		for _, rel := range []string{"nix/store", agentDropIn, agentRoot} {
 			if g.exists(rel) {
 				t.Errorf("a refused deploy left %s", rel)
 			}
@@ -331,7 +463,7 @@ func TestDeployAgentAndRemove(t *testing.T) {
 		if err := runDeploy(append([]string{"--ssh-config", cfg}, deployAgent...)); err != nil {
 			t.Fatal(err)
 		}
-		if !g.exists("store/fakehash-pocketnix-cross-aarch64") {
+		if !g.exists("nix/store/fakehash-pocketnix-cross-aarch64") {
 			t.Error("the agent never reached the guest's store")
 		}
 	})
@@ -346,4 +478,154 @@ func TestDeployAgentAndRemove(t *testing.T) {
 			t.Errorf("the agent runs %q, want %q", got, want)
 		}
 	})
+}
+
+func TestDeployCompositor(t *testing.T) {
+	deployCompositor := []string{"--host", deployHost, "--flake", "/fake/flake", "compositor"}
+	const (
+		crossCompositor  = "/nix/store/fakehash-pocketnix-compositor-cross-aarch64"
+		crossGlibc       = "/nix/store/000000000000000000000000000cross-glibc-aarch64-unknown-linux-gnu-2.42-100"
+		rewritten        = "/nix/store/fakehash-pocketnix-compositor-guest-libs"
+		nativeCompositor = "/nix/store/fakehash-packages.aarch64-linux.pocketnix-compositor"
+		args             = " --guest-socket /run/pocketnix/guest.sock"
+	)
+	newGuest := func(t *testing.T, closure string) *fakeGuest {
+		g := newFakeGuest(t)
+		g.withCompositor(closure)
+		// The cross build links its own glibc, which the guest lacks.
+		g.desktopClosure(crossCompositor, crossCompositor+" 10495240", crossGlibc+" 46706312")
+		// The flake's native package shares the guest's libraries.
+		g.desktopClosure(nativeCompositor, nativeCompositor+" 10485760", guestGlibc+" 46706312", guestXkbcommon+" 1520544")
+		return g
+	}
+
+	t.Run("matching takes the rewrite", func(t *testing.T) {
+		g := newGuest(t, "matching")
+		out, err := stderrOf(t, func() error { return runDeploy(deployCompositor) })
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		if got, want := g.compositorRunning(), rewritten+"/bin/pocketnix-compositor"+args; got != want {
+			t.Errorf("the compositor runs %q, want %q", got, want)
+		}
+		// pocketnix bench takes the client beside the unit's ExecStart.
+		if !g.exists(rewritten + "/bin/pocketnix-gui-bench") {
+			t.Error("no pocketnix-gui-bench beside the deployed compositor")
+		}
+		for _, p := range []string{crossCompositor, crossGlibc} {
+			if g.exists(p) {
+				t.Errorf("the copy carried %s into the guest", p)
+			}
+		}
+		if !g.exists(userDropIn(compositorDropIn)) {
+			t.Errorf("no drop-in at %s", userDropIn(compositorDropIn))
+		}
+		for root, want := range map[string]string{compositorRoot: rewritten, compositorLibsRoot: guestCompositorPkg} {
+			if got, err := os.Readlink(g.path(root)); err != nil || got != want {
+				t.Errorf("GC root %s = %q, %v; want %s", root, got, err, want)
+			}
+		}
+		if !strings.Contains(out, path.Base(rewritten)) || !strings.Contains(out, "MiB") {
+			t.Errorf("the rewritten copy's size isn't logged:\n%s", out)
+		}
+	})
+
+	t.Run("missing-soname takes the native fallback and says so", func(t *testing.T) {
+		g := newGuest(t, "missing-soname")
+		out, err := stderrOf(t, func() error { return runDeploy(deployCompositor) })
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		if got, want := g.compositorRunning(), nativeCompositor+"/bin/pocketnix-compositor"+args; got != want {
+			t.Errorf("the compositor runs %q, want %q", got, want)
+		}
+		if !strings.Contains(out, "libxkbcommon.so.0") || !strings.Contains(out, "native") {
+			t.Errorf("no word of the missing libxkbcommon.so.0 and the native fallback:\n%s", out)
+		}
+		if g.exists(compositorLibsRoot) {
+			t.Errorf("the native package left %s", compositorLibsRoot)
+		}
+	})
+
+	t.Run("a loader refusing the rewrite takes the native fallback", func(t *testing.T) {
+		g := newGuest(t, "matching")
+		g.write("loader-lacks-version", "")
+		out, err := stderrOf(t, func() error { return runDeploy(deployCompositor) })
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		if got, want := g.compositorRunning(), nativeCompositor+"/bin/pocketnix-compositor"+args; got != want {
+			t.Errorf("the compositor runs %q, want %q", got, want)
+		}
+		if !strings.Contains(out, "GLIBC_2.99") {
+			t.Errorf("no word of the loader's refusal:\n%s", out)
+		}
+	})
+
+	t.Run("a rewrite still referring to the cross closure refuses before the copy", func(t *testing.T) {
+		g := newGuest(t, "matching")
+		g.desktopClosure(rewritten, rewritten+" 10555968", crossGlibc+" 46706312")
+		err := runDeploy(deployCompositor)
+		if err == nil || !strings.Contains(err.Error(), crossGlibc) {
+			t.Fatalf("err = %v, want a refusal naming %s", err, crossGlibc)
+		}
+		for _, p := range []string{rewritten, crossGlibc, userDropIn(compositorDropIn)} {
+			if g.exists(p) {
+				t.Errorf("a refused deploy left %s", p)
+			}
+		}
+	})
+
+	t.Run("a closure over deployMaxCopy refuses before the copy", func(t *testing.T) {
+		g := newGuest(t, "matching")
+		g.desktopClosure(nativeCompositor, nativeCompositor+" 10485760", "/nix/store/000000000000000000000000000other-glibc-2.41 104857600")
+		err := runDeploy(append([]string{"--native"}, deployCompositor...))
+		if err == nil || !strings.Contains(err.Error(), "deployMaxCopy") {
+			t.Fatalf("err = %v, want a refusal naming deployMaxCopy", err)
+		}
+		if g.exists(nativeCompositor) {
+			t.Errorf("a refused deploy copied %s", nativeCompositor)
+		}
+	})
+
+	t.Run("remove restores the system's compositor", func(t *testing.T) {
+		g := newGuest(t, "matching")
+		if err := runDeploy(deployCompositor); err != nil {
+			t.Fatal(err)
+		}
+		if err := runDeploy([]string{"--host", deployHost, "--remove", "compositor"}); err != nil {
+			t.Fatal(err)
+		}
+		for _, rel := range []string{userDropIn(compositorDropIn), compositorRoot, compositorLibsRoot} {
+			if g.exists(rel) {
+				t.Errorf("%s survived --remove", rel)
+			}
+		}
+		if got := g.compositorRunning(); got != systemCompositor {
+			t.Errorf("after --remove the compositor runs %q, want the system's %q", got, systemCompositor)
+		}
+	})
+}
+
+func TestDeployCompositorLibraryMatch(t *testing.T) {
+	const other = "/nix/store/00000000000000000000000000000old-glibc-2.40"
+	libs := []guestLib{
+		{other, "libc.so.6"},
+		{guestXkbcommon, "libxkbcommon.so.0"},
+		{guestGlibc, "ld-linux-aarch64.so.1"},
+		{guestGlibc, "libc.so.6"},
+		{guestGlibc, "libm.so.6"},
+		{guestGccLib, "libgcc_s.so.1"},
+	}
+	interp, rpath, err := matchGuestLibs(crossCompositorNeeds, libs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := guestGlibc + "/lib/ld-linux-aarch64.so.1"; interp != want {
+		t.Errorf("interpreter = %q, want %q", interp, want)
+	}
+	// libc comes from the loader's glibc, not the first one in the closure.
+	if want := []string{guestXkbcommon + "/lib", guestGccLib + "/lib", guestGlibc + "/lib"}; !reflect.DeepEqual(rpath, want) {
+		t.Errorf("rpath = %q, want %q", rpath, want)
+	}
 }
