@@ -261,6 +261,154 @@ runs its `pocketnix-gui-bench` with no flag. Restarting the compositor closes
 the guest's GUI windows, and restarts `pocketnix-clipboard`, which is bound to
 it.
 
+## Testing on a rented phone
+
+[Android device streaming](https://developer.android.com/studio/run/android-device-streaming)
+rents real phones by the minute, billed to a Firebase project, and the
+devshell's `android` CLI reserves them. Use it to see how pocketnix does on a
+phone you don't own. A person runs these steps, or an agent whose current
+message from the owner says to; nothing automates a reservation. They haven't
+met a rented phone yet, so expect to correct them after the first session.
+
+Firebase gives each project 30 free minutes a month, then charges $0.15 a
+minute ([pricing](https://firebase.google.com/docs/test-lab/usage-quotas-pricing#device-streaming)).
+The bill grows when a session is left running, so a run is one session, of 15
+minutes by default, removed at the end even after a failure. The phone is factory
+reset when a session ends, so each one starts with no app, no grants and no
+disk.
+
+### Prerequisites
+
+These are the owner's, and no tool here sets them up:
+
+- `android auth login`, which opens a browser. The token goes to the keyring
+  through `secret-tool`, which the devshell's `android` has, or to a plain file
+  with `--no-use-keyring`.
+- A Firebase project with billing enabled and a budget alert.
+  `android device remote projects --all` says whether a project is ready.
+- The project's id, as `--project=<id>` on each `android device remote`
+  command below, or once in `~/.androidrc` as `device remote --project <id>`.
+
+`nix/android-cli.nix` packages the launcher, which downloads the real CLI into
+`~/.android` on its first run; `android update` updates that copy. The CLI
+falls under the Android SDK terms, so it stays out of the flake's checks and
+the public cache. It sends usage data to Google unless `--no-metrics` comes
+first on the command line.
+
+### Before reserving
+
+The clock starts at `create`, and everything here is free:
+
+```bash
+nix run .#gradle -- assembleDebug   # --smoke's cleanup needs a build from this tree
+pocketnix doctor --json             # the tooling works, against a phone of your own
+android device remote models        # pick <codename>/<api>
+```
+
+Choose a directory for the bundles (`<dir>` below), and take your own phone off
+adb, so that no command can reach its VM.
+
+### The session
+
+```bash
+android device remote create <codename>/<api>   # prints the reservation's id and end time, then connects adb
+adb devices                                     # <serial> below
+```
+
+Keep the id where you can see it. `create` takes no duration, so go by the end
+time it prints. If adb loses the phone, `android device remote connect <id>`
+connects it again.
+
+Then go through these in order, cheapest finding first, and stop as soon as one
+rules the phone out:
+
+1. The probe, which runs `vm info` among its checks. A `fail` verdict ends the
+   session here:
+
+   ```bash
+   pocketnix doctor --serial <serial> --debug --record <dir>
+   ```
+
+2. The debug app, the base image and a boot. The app downloads the image
+   itself, so nothing pushes gigabytes over the remote link:
+
+   ```bash
+   pkg=dev.nickolaj.pocketnix.debug
+   pocketnix install --serial <serial> --debug app/build/outputs/apk/debug/app-debug.apk
+   adb -s <serial> shell pm grant $pkg android.permission.POST_NOTIFICATIONS   # or the app asks, over everything else
+   adb -s <serial> shell am start -n $pkg/dev.nickolaj.pocketnix.MainActivity
+   adb -s <serial> shell am start -n $pkg/dev.nickolaj.pocketnix.ControlActivity -a dev.nickolaj.pocketnix.action.DEBUG_SETUP
+   until pocketnix control --serial <serial> dump | grep -e phase=Running -e setup=Failed; do sleep 5; done
+   ```
+
+   Setup fetches the release matching `VERSION`; for a `VERSION` not released
+   yet, see the end of [Releasing from a fork](#releasing-from-a-fork) and pass
+   the URL with `--es releaseUrl <url>`. A refused `pm grant` from `install` is
+   a finding too: it says rented phones can't run AVF apps this way. The first
+   connect also starts the guest's first rebuild, which `dump`'s `updates` lines
+   show, and smoke's timings then share the phone with it.
+
+3. The smoke check, with the phone unlocked and pocketnix in front:
+
+   ```bash
+   pocketnix doctor --serial <serial> --smoke --record <dir>
+   ```
+
+   It took about 6.5 minutes on a Pixel 8 Pro, so don't start it with less than
+   that left on the clock. A locked phone gives `ok: null` for GPU and pages,
+   and so does a guest with no GUI, which is how setup leaves it without
+   `--es services gui`. `--gpu-apps` needs two ids from `dump`'s `apps=`, when
+   the guest has them.
+
+   To bring pocketnix forward, repeat the `am start` of `MainActivity`. The app
+   has two launcher entries, so `resolve-activity` opens the system's chooser
+   instead.
+
+`--record` covers the doctor runs only. Setup and boot reach no video, but their
+lines stay in the phone's log, and the next bundle's `logcat.txt` picks them up
+from its buffers. So when a session never reaches `--smoke`, run step 1's command
+once more before removing it. Recording also costs the phone memory: on one with
+little free, `MemAvailable` fell to 320 MiB in a sample, so weigh that before
+blaming the phone for a killed process.
+
+Whatever happened (a failure, a dropped connection, no time left), end with:
+
+```bash
+android device remote disconnect <id>
+android device remote remove <id>     # this is what stops the bill
+android device remote list            # should show nothing of yours
+```
+
+If the id is gone, `android device remote list --short` prints it. Any minutes
+left go back to the project.
+
+### Going past one session
+
+`android device remote extend --duration=<minutes> <id>` adds time, and a second
+`create` starts a new session. Both need the owner's OK at that moment. A guest
+with GUI on (`--es services gui`) needs a rebuild that may not fit in one
+session, so ask before planning on it.
+
+`vm run` ([Booting the image without the app](#booting-the-image-without-the-app))
+stays on the Pixel: it means pushing a whole image over the remote link.
+
+### What a Pixel 9 can and can't tell
+
+The Pixel 9 family runs android14-6.1, like the Pixel 8 Pro. So a rented one
+tests stock Android and another SoC, but can't settle `app/AGENTS.md`'s reading
+that android15-6.6 and later restrict only protected VMs. That needs a Pixel 10
+on 6.6, which device streaming's documentation doesn't list; `models` has what
+it offers today.
+
+### Afterwards
+
+- Review a bundle before sharing it: it can show notifications and whatever was
+  on screen, the guest's terminal included. The tooling never uploads one.
+- A phone that booted can get a row in
+  [Tested devices](getting-started.md#tested-devices).
+- When the session was an agent's, run `android auth logout`, which also revokes
+  the token. The project and its billing stay with the owner.
+
 ## Benchmarks
 
 `pocketnix bench` measures the GUI pipeline: frame rate, latency, and what
