@@ -47,6 +47,13 @@ that cross directories.
   only after a reboot or `pocketnix deploy --remove`. Look for
   `pocketnix-deploy.conf` drop-ins under `/run` when a switch's change is
   missing.
+- `deploy-rewrite.nix` points binaries at a guest's library paths, which
+  aren't its inputs, so Nix records no reference to them: in the guest a GC
+  root on the rewritten path alone keeps none of its libraries, and the
+  agent's GC after a switch would delete them under it. `pocketnix deploy`
+  also roots the system compositor the libraries came from (`compositor-libs`
+  under `/run/pocketnix-deploy`). Its `allowedReferences = []` fails the build
+  if a cross store path survives in the binaries.
 - The Nix build sandbox has no `/dev/vhost-vsock`, so the NixOS test reaches the
   agent over TCP; `nix run .#boot-example` (outside the sandbox) covers vsock.
 - The CLI's pure-Go resolver asks DNS before /etc/hosts under NixOS's nsswitch
