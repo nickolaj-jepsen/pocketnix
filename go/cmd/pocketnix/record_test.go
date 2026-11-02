@@ -566,8 +566,7 @@ func doctorProcess(t *testing.T, d *fakeDevice, ready func() bool, args ...strin
 	}
 	t.Cleanup(func() { c.Process.Kill() })
 	deadline := time.Now().Add(20 * time.Second)
-	pty := regexp.MustCompile(reactPTY.Typed)
-	for !typedInto(d, pty.MatchString) || !ready() {
+	for !typedInto(d, reactPTY.matches) || !ready() {
 		if time.Now().After(deadline) {
 			t.Fatalf("smoke didn't reach its PTY step: typed %v", d.typed())
 		}

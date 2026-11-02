@@ -390,23 +390,45 @@ func writeCanned(cmdline, out string, status int) map[string]string {
 	return map[string]string{cannedPath(cmdline): out, cannedPath(cmdline) + ".status": strconv.Itoa(status)}
 }
 
+// typedScript is a fakeReaction's Typed for script as smoke types it into a
+// tab, through shLine, with smokePrelude or without. Its first marker is ${1},
+// and args are regexps for its arguments, whose groups come next. Only a
+// script's output is the fake's business: real sh runs what a script does.
+func typedScript(script string, args ...string) string {
+	holes := make([]string, len(args))
+	for i := range args {
+		holes[i] = fmt.Sprintf("<arg-%d>", i)
+	}
+	line, err := shLine(script, holes...)
+	if err != nil {
+		panic(err)
+	}
+	head, tail, _ := strings.Cut(line, script)
+	re := "^" + regexp.QuoteMeta(head) + "(?:" + regexp.QuoteMeta(smokePrelude) + ")?" + regexp.QuoteMeta(script+tail) + "$"
+	for i, a := range args {
+		re = strings.Replace(re, holes[i], a, 1)
+	}
+	re = strings.Replace(re, "@", `(smoke-\d+)`, 1)
+	return strings.ReplaceAll(re, "@", `smoke-\d+`)
+}
+
 // Reactions of a guest with every tool smoke uses.
 var (
-	reactListen = fakeReaction{Typed: `echo (smoke-\d+)-tool=socat;.*' sh '(\d+)' '([^']+)'`,
+	reactListen = fakeReaction{Typed: typedScript(listenScript, `(\d+)`, `([^']+)`, `\d+`),
 		Output: []string{"${1}-tool=socat"}, Write: map[string]string{"control/listening/${2}": "${3}"}}
-	reactPTY = fakeReaction{Typed: `head -c \d+ /dev/urandom.*\| base64; .*echo (smoke-\d+)-exit=`, Output: []string{"AAAAAAAAAAAA", "${1}-exit=0"},
+	reactPTY = fakeReaction{Typed: typedScript(ptyScript(smokePTYFile, smokePTYHead)), Output: []string{"AAAAAAAAAAAA", "${1}-exit=0"},
 		Write: map[string]string{"control/guest-pty": "1000\n"}}
-	reactNotify = fakeReaction{Typed: `notify-send -p .*echo (smoke-\d+)-exit=\$s' sh '[^']*' '([^']+)'`, Output: []string{"${1}-id=7", "${1}-exit=0"},
+	reactNotify = fakeReaction{Typed: typedScript(notifyScript, `[^']*`, `([^']+)`), Output: []string{"${1}-id=7", "${1}-exit=0"},
 		Append: map[string]string{"notifications": "  NotificationRecord(0x0abc1234: pkg=dev.nickolaj.pocketnix.debug user=UserHandle{0} id=7 tag=guest importance=3 key=0|dev.nickolaj.pocketnix.debug|7|guest|10200: Notification(channel=guest))\n        android.text=String (${2})\n"}}
-	reactUnnotify = fakeReaction{Typed: `CloseNotification u "\$1"; echo (smoke-\d+)-exit=\$\?' sh '7'`, Output: []string{"${1}-exit=0"},
+	reactUnnotify = fakeReaction{Typed: typedScript(unnotifyScript, "7"), Output: []string{"${1}-exit=0"},
 		Write: map[string]string{"notifications": ""}}
-	reactInhibit = fakeReaction{Typed: `systemd-inhibit --what=sleep .*echo (smoke-\d+)-exit=0' sh$`, Output: []string{"${1}-pid=4242", "${1}-exit=0"},
+	reactInhibit = fakeReaction{Typed: typedScript(inhibitScript), Output: []string{"${1}-pid=4242", "${1}-exit=0"},
 		Write: writeCanned(powerLocks, "    PARTIAL_WAKE_LOCK              'pocketnix:guest'                          ACQ=-1s2ms (uid=10200 pid=31337)\n", 0)}
-	reactUninhibit = fakeReaction{Typed: `kill "\$1"; echo (smoke-\d+)-exit=\$\?' sh '4242'`, Output: []string{"${1}-exit=0"},
+	reactUninhibit = fakeReaction{Typed: typedScript(uninhibitScript, "4242"), Output: []string{"${1}-exit=0"},
 		Write: writeCanned(powerLocks, powerHistory, 0)}
-	reactKill = fakeReaction{Typed: `echo (smoke-\d+)-killed=\$n; echo smoke-\d+-exit=0' sh '([^']+)'`, Output: []string{"${1}-killed=1", "${1}-exit=0"},
+	reactKill = fakeReaction{Typed: typedScript(killAppScript, `([^']+)`), Output: []string{"${1}-killed=1", "${1}-exit=0"},
 		Remove: []string{"control/windows/${2}"}}
-	reactReboot = fakeReaction{Typed: `systemctl reboot`, Reboot: true}
+	reactReboot = fakeReaction{Typed: typedScript(rebootScript), Reboot: true}
 )
 
 // smokeApps are the guest's GPU apps in smokeDevice.
@@ -436,12 +458,12 @@ func smokeDevice(t *testing.T, rs ...fakeReaction) *fakeDevice {
 
 // The guest's PTY timing file: base64 ran for 100 s, read 130 s after it started.
 var (
-	reactPTYTime = fakeReaction{Typed: `set -- \$\(cat .*echo (smoke-\d+)-exit=0`,
+	reactPTYTime = fakeReaction{Typed: typedScript(ptyTimeScript),
 		Output: []string{"${1}-start=1000", "${1}-end=1100", "${1}-now=1130", "${1}-exit=0"}}
 	// base64 hasn't exited by the time the file is read.
 	reactPTYRunning = fakeReaction{Typed: reactPTYTime.Typed,
 		Output: []string{"${1}-start=1000", "${1}-end=", "${1}-now=1600", "${1}-exit=0"}}
-	reactPTYClean = fakeReaction{Typed: `rm -f [^;]*; echo (smoke-\d+)-exit=\$\?`, Output: []string{"${1}-exit=0"},
+	reactPTYClean = fakeReaction{Typed: typedScript(ptyCleanScript), Output: []string{"${1}-exit=0"},
 		Remove: []string{"control/guest-pty"}}
 )
 
@@ -488,7 +510,7 @@ func exitedEveryTab(t *testing.T, d *fakeDevice) {
 		t.Fatal("smoke typed into no tab")
 	}
 	for tab, lines := range typed {
-		if strings.Contains(lines[0], "systemctl reboot") {
+		if isReboot(lines[0]) {
 			continue
 		}
 		// A leading space keeps a line out of fish's history.
@@ -549,7 +571,7 @@ func TestSmokeRunsEveryStep(t *testing.T) {
 // ptyTab is the tab the PTY command was typed into, -1 if none.
 func ptyTab(d *fakeDevice) int {
 	for tab, lines := range d.typed() {
-		if strings.Contains(lines[0], "base64") {
+		if reactPTY.matches(lines[0]) {
 			return tab
 		}
 	}
@@ -711,7 +733,7 @@ func TestSmokeInterruptCleansUp(t *testing.T) {
 	smokeTimes.pty = time.Minute
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	cancelOnTyped(ctx, cancel, d, func(line string) bool { return strings.Contains(line, "base64") })
+	cancelOnTyped(ctx, cancel, d, reactPTY.matches)
 	steps, _ := runSmoke(ctx, adb.Device{}, debugPackage, smokeApps, io.Discard)
 	for _, name := range []string{"notification", "inhibitor", "gpu", "pages", "reboot"} {
 		if st, _ := stepNamed(steps, name); st.OK != nil || !strings.Contains(st.Detail, "interrupted") {
@@ -741,7 +763,7 @@ func typedInto(d *fakeDevice, match func(line string) bool) bool {
 
 func isExit(line string) bool { return line == " exit" }
 
-func isReboot(line string) bool { return strings.Contains(line, "systemctl reboot") }
+func isReboot(line string) bool { return reactReboot.matches(line) }
 
 // cancelOnTyped cancels ctx once a line that match accepts was typed into a tab.
 func cancelOnTyped(ctx context.Context, cancel context.CancelFunc, d *fakeDevice, match func(line string) bool) {
@@ -798,7 +820,7 @@ func TestSmokeInterruptEndsTheRebootsWait(t *testing.T) {
 
 // Every way the reboot step fails still closes the tab it opened.
 func TestSmokeFailedRebootClosesItsTab(t *testing.T) {
-	typed := reactReboot.Typed + `.*echo (smoke-\d+)-exit=`
+	typed := reactReboot.Typed
 	for _, tc := range []struct {
 		name  string
 		react *fakeReaction
@@ -877,7 +899,7 @@ func TestSmokeInterruptDuringInhibitEndsIt(t *testing.T) {
 	slow.Output = nil
 	d := smokeDevice(t, append(without(everyTool, reactInhibit), slow)...)
 	smokeTimes.cmd = 30 * time.Second
-	isInhibit := func(line string) bool { return strings.Contains(line, "systemd-inhibit --what=sleep") }
+	isInhibit := reactInhibit.matches
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
@@ -990,11 +1012,11 @@ func TestSmokePTYScriptReportsAFailingHead(t *testing.T) {
 }
 
 func TestSmokeSkipsWithoutInputs(t *testing.T) {
-	none := func(re string) fakeReaction {
-		return fakeReaction{Typed: re, Output: []string{"${1}-tool=none", "${1}-exit=0"}}
+	none := func(r fakeReaction) fakeReaction {
+		return fakeReaction{Typed: r.Typed, Output: []string{"${1}-tool=none", "${1}-exit=0"}}
 	}
 	toolless := []fakeReaction{
-		none(`echo (smoke-\d+)-tool=socat;`), none(`notify-send -p .*echo (smoke-\d+)-exit=\$s'`), none(`systemd-inhibit --what=sleep .*echo (smoke-\d+)-exit=0' sh$`),
+		none(reactListen), none(reactNotify), none(reactInhibit),
 		reactPTY, reactPTYTime, reactPTYClean, reactKill, reactReboot,
 	}
 	gpuApps := []string{"--gpu-apps", strings.Join(smokeApps, ",")}

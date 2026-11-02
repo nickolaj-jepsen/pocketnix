@@ -565,6 +565,8 @@ var smokeTimes = smokeWaits{
 const (
 	// smokePTYBytes is how much base64 the PTY step prints.
 	smokePTYBytes = 64 << 20
+	// smokePTYHead is how much random data makes that: base64 makes 4 bytes of 3.
+	smokePTYHead = smokePTYBytes / 4 * 3
 	// smokeForwardPort is the guest port the forward step listens on: unprivileged, and rarely taken.
 	smokeForwardPort = 47613
 	// smokeListenSecs caps the forward step's listener, in case nothing connects.
@@ -979,8 +981,8 @@ func (s *smoker) pty() smokeStep {
 	const name = "pty"
 	p := s.marker()
 	start := time.Now()
-	// base64 makes 4 bytes of 3. Random lines differ, so outputState can see them move.
-	tab, err := s.start(p, ptyScript(smokePTYFile, smokePTYBytes/4*3))
+	// Random lines differ, so outputState can see them move.
+	tab, err := s.start(p, ptyScript(smokePTYFile, smokePTYHead))
 	if err != nil {
 		return stepFail(name, "opening a tab: %v", err)
 	}
