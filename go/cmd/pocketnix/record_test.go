@@ -437,6 +437,27 @@ func TestRecordScrcpyFails(t *testing.T) {
 	}
 }
 
+// A smoke run that couldn't start exits 1 and still leaves its bundle, with the report.
+func TestRecordSmokeThatCouldntRun(t *testing.T) {
+	d := recordDevice(t)
+	dir := t.TempDir()
+	_, err := stdoutOf(t, func() error { return runDoctor([]string{"--smoke", "--record", dir}) })
+	var status exitStatus
+	if !errors.As(err, &status) || status != 1 {
+		t.Errorf("run returned %v, want exit status 1", err)
+	}
+	var r doctorReport
+	if err := json.Unmarshal([]byte(readBundle(t, onlyBundle(t, dir), "doctor.json")), &r); err != nil {
+		t.Fatal(err)
+	}
+	if st, ok := stepNamed(r.Smoke, "pty"); !ok || st.OK != nil {
+		t.Errorf("doctor.json's pty step: %+v, want ok null", st)
+	}
+	if ev := d.events(); hasEvent(ev, "am start") {
+		t.Errorf("smoke acted on the device; events:\n%s", ev)
+	}
+}
+
 func TestRecordScrcpyFlags(t *testing.T) {
 	for _, tc := range []struct {
 		name, help string

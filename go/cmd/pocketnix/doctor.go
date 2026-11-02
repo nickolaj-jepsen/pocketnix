@@ -28,8 +28,8 @@ import (
 const doctorUsage = `usage: pocketnix doctor [--serial <s>] [--debug] [--json] [--smoke] [--gpu-apps <id>,<id>] [--record <dir>]
 
 Probes a phone for what pocketnix needs (AVF, its kernel, u-boot, the app)
-and prints a verdict: ok, warn or fail. It exits 1 only on fail, which means
-the phone definitely can't run the VM.
+and prints a verdict: ok, warn or fail. Without --smoke it exits 1 only on
+fail, which means the phone definitely can't run the VM.
 
 flags:
   --json             print the report as JSON, for a device report
@@ -37,8 +37,10 @@ flags:
   --smoke            also run the end-to-end checks against the debug build's
                      running VM (implies --debug; the phone unlocked, pocketnix in
                      front). They open tabs, a forward, a notification, an
-                     inhibitor and apps, end them all, and reboot the guest last;
-                     a failing check also exits 1
+                     inhibitor and apps, end them all, and reboot the guest last.
+                     A failing check also exits 1, and so does a run where none
+                     could start (the app missing or silent, its VM not running);
+                     a single check that doesn't apply is reported and exits 0
   --gpu-apps <ids>   two app ids from pocketnix control dump's apps=, for the GPU step
   --record <dir>     record the run into a new bundle under dir: the screen (with
                      scrcpy, if it's on PATH), logcat, every command and the report.
@@ -102,8 +104,9 @@ func (o *doctorOpts) pkg() string {
 	return releasePackage
 }
 
-// runDoctor prints the report, and returns exitStatus(1) on a fail verdict
-// so that main adds nothing to it.
+// runDoctor prints the report, and returns exitStatus(1) on a fail verdict, a
+// failed smoke step or a smoke run that couldn't start, so that main adds
+// nothing to it.
 func runDoctor(args []string) error {
 	o, err := parseDoctor(args)
 	if err != nil {
@@ -131,14 +134,15 @@ func runDoctor(args []string) error {
 		secrets = append(secrets, rec.secrets...)
 	}
 	r := probe(dev, o.pkg())
+	smokeRan := true
 	if o.smoke {
 		if rec != nil {
-			r.Smoke = runSmoke(rec.ctx, dev, o.pkg(), o.gpuApps, rec.smokeProgress())
+			r.Smoke, smokeRan = runSmoke(rec.ctx, dev, o.pkg(), o.gpuApps, rec.smokeProgress())
 		} else {
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 			// After the first interrupt smoke cleans up; a second one kills it as usual.
 			context.AfterFunc(ctx, stop)
-			r.Smoke = runSmoke(ctx, dev, o.pkg(), o.gpuApps, os.Stderr)
+			r.Smoke, smokeRan = runSmoke(ctx, dev, o.pkg(), o.gpuApps, os.Stderr)
 			stop()
 		}
 	}
@@ -156,7 +160,7 @@ func runDoctor(args []string) error {
 	} else {
 		printDoctor(os.Stdout, r)
 	}
-	if r.Verdict.Level == levelFail {
+	if r.Verdict.Level == levelFail || !smokeRan {
 		return exitStatus(1)
 	}
 	for _, st := range r.Smoke {
@@ -681,15 +685,16 @@ var smokeSteps = []string{"forward", "pty", "notification", "inhibitor", "gpu", 
 
 // runSmoke runs the end-to-end checks against pkg's running VM, printing
 // progress to progress. Cleanup runs even once ctx is done (an interrupt),
-// and the guest reboot comes last.
-func runSmoke(ctx context.Context, dev adb.Device, pkg string, gpuApps []string, progress io.Writer) []smokeStep {
+// and the guest reboot comes last. It returns every step, and false when the
+// app or its VM wasn't there to run any of them on.
+func runSmoke(ctx context.Context, dev adb.Device, pkg string, gpuApps []string, progress io.Writer) ([]smokeStep, bool) {
 	s := &smoker{ctx: ctx, dev: dev, pkg: pkg, ctl: control{provider{dev: dev, authority: pkg + ".control"}}, gpuApps: gpuApps, util: -1, ptyTab: -1}
-	skipAll := func(format string, args ...any) []smokeStep {
+	skipAll := func(format string, args ...any) ([]smokeStep, bool) {
 		var steps []smokeStep
 		for _, name := range smokeSteps {
 			steps = append(steps, stepSkip(name, format, args...))
 		}
-		return steps
+		return steps, false
 	}
 	dump, err := s.ctl.dump(-1, 1)
 	if err != nil {
@@ -723,7 +728,7 @@ func runSmoke(ctx context.Context, dev adb.Device, pkg string, gpuApps []string,
 	fmt.Fprintf(progress, "smoke: cleanup\n")
 	s.uninterrupted(func() { steps = append(steps, s.cleanup()) })
 	run([]string{"reboot"}, one(s.reboot))
-	return steps
+	return steps, true
 }
 
 // uninterrupted runs f with s's waits outlasting an interrupt.
