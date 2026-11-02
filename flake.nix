@@ -180,7 +180,11 @@
       in {
         go = pkgs.callPackage ./nix/go.nix {withTests = true;};
         compositor = pkgs.callPackage ./nix/compositor.nix {withTests = true;};
-        avf-boot = pkgs.callPackage ./nix/avf-boot-test.nix {image = own.example-image;};
+        avf-boot = pkgs.callPackage ./nix/avf-boot-test.nix {
+          name = "avf-boot";
+          image = own.example-image;
+          prompt = ''@[^ ]+:~\]\$'';
+        };
         format = (import ./nix/treefmt.nix {inherit pkgs;}).check self;
         options-doc = pkgs.runCommand "pocketnix-options-doc-check" {} ''
           diff -u ${./docs/options.md} ${own.options-doc} || { echo "docs/options.md is stale: nix run .#options-doc" >&2; exit 1; }
