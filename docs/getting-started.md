@@ -23,10 +23,38 @@ adb shell pm grant dev.nickolaj.pocketnix android.permission.USE_CUSTOM_VIRTUAL_
 They last until the app is uninstalled; USB or wireless debugging can be
 turned off again afterwards.
 
+### Granting the permissions without a PC
+
+This is Podroid's route (its [v1.2.0 release
+notes](https://github.com/ExTV/Podroid/releases)); it is untested with
+pocketnix. [Shizuku](https://github.com/RikkaApps/Shizuku) runs as the adb
+shell user, so its `rish` shell can run the same `pm grant`s from a terminal
+app on the phone:
+
+1. Start Shizuku over Wireless debugging, as its [setup
+   guide](https://shizuku.rikka.app/guide/setup/) describes. You pair it once,
+   but have to start it again after every reboot. On GrapheneOS, Shizuku may
+   only start with Settings > Security > Secure app spawning turned off.
+2. In Shizuku, "Use Shizuku in terminal apps" > "Export files" writes `rish`
+   and `rish_shizuku.dex`. Move both into the terminal app's own home
+   directory: on Android 14+ the dex has to be read-only, and `rish` can't
+   `chmod` it on shared storage.
+3. Tell `rish` which app it runs in, then grant both permissions. The terminal
+   app asks for Shizuku's permission the first time:
+
+   ```bash
+   export RISH_APPLICATION_ID=com.termux   # the terminal app's package id
+   sh rish -c 'pm grant dev.nickolaj.pocketnix android.permission.MANAGE_VIRTUAL_MACHINE'
+   sh rish -c 'pm grant dev.nickolaj.pocketnix android.permission.USE_CUSTOM_VIRTUAL_MACHINE'
+   ```
+
+The grants last as long as the adb ones; Shizuku can be stopped afterwards.
+
 ## Requirements
 
-- A phone whose AVF runs non-protected custom VMs. Tested on a Pixel 8 Pro with
-  GrapheneOS (Android 17). The app's first screen lists anything missing.
+- A phone whose AVF runs non-protected custom VMs (see [Tested
+  devices](#tested-devices)). The app's first screen lists anything missing,
+  and `pocketnix doctor` checks a phone over adb before anything is installed.
 - USB debugging on the phone, and `adb` on your machine (provisioning needs it
   once).
 - Nix with flakes, on a machine that can build `aarch64-linux`:
@@ -43,6 +71,28 @@ turned off again afterwards.
   nixpkgs builds the agent and compositor itself.
 - Free space on the phone for the guest. The disk takes only what the guest
   writes ([Storage](configuration.md#storage)).
+
+### Tested devices
+
+A phone is listed here once it has a `pocketnix doctor` report and has booted
+a VM in the app.
+
+| Phone | OS | Android | Kernel | doctor | Boots |
+|---|---|---|---|---|---|
+| Pixel 8 Pro | GrapheneOS | 17 | android14-6.1 | ok | yes |
+
+To add your phone, run the doctor with the phone on adb and the app
+installed:
+
+```bash
+nix run github:nickolaj-jepsen/pocketnix -- doctor --json
+```
+
+`pocketnix doctor -h` explains the verdict and lists the other flags. Then
+try a boot, and file a [device
+report](https://github.com/nickolaj-jepsen/pocketnix/issues/new?template=device-report.yml)
+with the JSON and what happened. A phone that fails is worth a report too,
+though it won't get a row.
 
 ## 1. Describe the guest
 
