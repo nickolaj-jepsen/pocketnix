@@ -700,6 +700,70 @@ func TestSmokeInterruptCleansUp(t *testing.T) {
 	}
 }
 
+// typedInto is whether a line that match accepts was typed into any tab.
+func typedInto(d *fakeDevice, match func(line string) bool) bool {
+	for _, lines := range d.typed() {
+		if slices.ContainsFunc(lines, match) {
+			return true
+		}
+	}
+	return false
+}
+
+func isExit(line string) bool { return line == " exit" }
+
+func isReboot(line string) bool { return strings.Contains(line, "systemctl reboot") }
+
+// cancelOnTyped cancels ctx once a line that match accepts was typed into a tab.
+func cancelOnTyped(ctx context.Context, cancel context.CancelFunc, d *fakeDevice, match func(line string) bool) {
+	go func() {
+		for ctx.Err() == nil && !typedInto(d, match) {
+			time.Sleep(time.Millisecond)
+		}
+		cancel()
+	}()
+}
+
+// Cleanup finishes after an interrupt it took during its run, and the guest stays up.
+func TestSmokeInterruptDuringCleanupSkipsTheReboot(t *testing.T) {
+	d := smokeDevice(t, everyTool...)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cancelOnTyped(ctx, cancel, d, isExit)
+	steps := runSmoke(ctx, adb.Device{}, debugPackage, nil, io.Discard)
+	if st, _ := stepNamed(steps, "reboot"); st.OK != nil || !strings.Contains(st.Detail, "interrupted") {
+		t.Errorf("reboot: %+v, want it skipped", st)
+	}
+	if st, _ := stepNamed(steps, "cleanup"); st.OK == nil || !*st.OK {
+		t.Errorf("cleanup: %+v", st)
+	}
+	if typedInto(d, isReboot) {
+		t.Error("the guest was told to reboot after the interrupt")
+	}
+	if left := leftovers(d); len(left) > 0 {
+		t.Errorf("smoke left %q", left)
+	}
+}
+
+// An interrupt ends the reboot step's waits, which are minutes long.
+func TestSmokeInterruptEndsTheRebootsWait(t *testing.T) {
+	d := smokeDevice(t, without(everyTool, reactReboot)...)
+	smokeTimes.reboot = 10 * time.Minute
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cancelOnTyped(ctx, cancel, d, isReboot)
+	done := make(chan []smokeStep)
+	go func() { done <- runSmoke(ctx, adb.Device{}, debugPackage, nil, io.Discard) }()
+	select {
+	case steps := <-done:
+		if st, _ := stepNamed(steps, "reboot"); st.OK == nil || *st.OK || !strings.Contains(st.Detail, "interrupted") {
+			t.Errorf("reboot: %+v, want a failure saying it was interrupted", st)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the reboot step kept waiting after the interrupt")
+	}
+}
+
 func TestSmokeSkipsWithoutInputs(t *testing.T) {
 	none := func(re string) fakeReaction {
 		return fakeReaction{Typed: re, Output: []string{"${1}-tool=none", "${1}-exit=0"}}
