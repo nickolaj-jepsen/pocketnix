@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // deployHost never resolves, should a call miss the fakes.
@@ -111,7 +112,12 @@ esac
 
 // The guest's side: sudo with a knob for a password, nix-store's roots, and
 // systemd's fragments, runtime drop-ins, what daemon-reload loaded and what a
-// restart started.
+// restart started. A unit's "fate" file (fakeGuest.unitFate) says how its next
+// restart turns out, as each later look at it finds it:
+//   - failed: never active.
+//   - dies: active once, then failed, with no new invocation (no Restart=).
+//   - crash-loop: active, but every look after the first finds a new invocation.
+//   - crashed-early: active and steady, its restarts already counted at the first look.
 const fakeGuestSudo = `#!/bin/sh
 [ "$1" = -n ] || { echo "fake sudo: would prompt" >&2; exit 1; }
 shift
@@ -186,8 +192,30 @@ show)
       loaded=$(cat "$s/$unit.loaded")
       echo "{ path=${loaded%% *} ; argv[]=$loaded ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }"
       ;;
-    InvocationID) cat "$s/$unit.invocation" 2>/dev/null || echo 0 ;;
-    ActiveState) echo active ;;
+    InvocationID)
+      n=$(cat "$s/$unit.invocation" 2>/dev/null || echo 0)
+      if [ "$(cat "$s/$unit.now" 2>/dev/null)" = crash-loop ]; then
+        if [ -e "$s/$unit.looked" ]; then
+          n=$((n + 1))
+          echo $n > "$s/$unit.invocation"
+          echo $(($(cat "$s/$unit.restarts") + 1)) > "$s/$unit.restarts"
+        fi
+        touch "$s/$unit.looked"
+      fi
+      echo $n
+      ;;
+    ActiveState)
+      case $(cat "$s/$unit.now" 2>/dev/null) in
+        failed) echo failed ;;
+        dies)
+          if [ -e "$s/$unit.looked" ]; then echo failed; else touch "$s/$unit.looked"; echo active; fi
+          ;;
+        *) echo active ;;
+      esac
+      ;;
+    NRestarts)
+      if [ -e "$G/no-nrestarts" ]; then echo; else cat "$s/$unit.restarts" 2>/dev/null || echo 0; fi
+      ;;
     *) echo "fake systemctl: property $prop not modelled" >&2; exit 1 ;;
   esac
   ;;
@@ -201,6 +229,13 @@ restart)
   n=$(cat "$s/$unit.invocation" 2>/dev/null || echo 0)
   echo $((n + 1)) > "$s/$unit.invocation"
   cp "$s/$unit.loaded" "$s/$unit.running"
+  rm -f "$s/$unit.now" "$s/$unit.looked"
+  # A manual restart flushes the unit's restart counter.
+  echo 0 > "$s/$unit.restarts"
+  if [ -e "$s/$unit.fate" ]; then
+    cp "$s/$unit.fate" "$s/$unit.now"
+    [ "$(cat "$s/$unit.fate")" != crashed-early ] || echo 2 > "$s/$unit.restarts"
+  fi
   [ "$unit" != pocketnix-agent.service ] || touch "$G/cut"
   ;;
 *)
@@ -250,10 +285,21 @@ func newFakeGuest(t *testing.T) *fakeGuest {
 	t.Setenv("FAKE_SSH_CONFIG", "")
 	t.Setenv("NIX_SSHOPTS", "")
 	old, oldELF := deployGuestRoot, deployReadELF
+	oldReconnect, oldRetry, oldSettle := deployReconnect, deployRetry, deploySettle
 	deployGuestRoot = g.dir
 	deployReadELF = func(string) (elfNeeds, error) { return crossCompositorNeeds, nil }
-	t.Cleanup(func() { deployGuestRoot, deployReadELF = old, oldELF })
+	deployRetry, deploySettle = 5*time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() {
+		deployGuestRoot, deployReadELF = old, oldELF
+		deployReconnect, deployRetry, deploySettle = oldReconnect, oldRetry, oldSettle
+	})
 	return g
+}
+
+// unitFate says how the unit's next restart turns out: see fakeGuestSystemctl.
+func (g *fakeGuest) unitFate(scope, unit, fate string) {
+	g.t.Helper()
+	g.write("state/"+scope+"/"+unit+".fate", fate)
 }
 
 // crossCompositorNeeds is what the cross compositor's binaries load, as its
@@ -476,6 +522,76 @@ func TestDeployAgentAndRemove(t *testing.T) {
 		want := "/nix/store/fakehash-packages.aarch64-linux.pocketnix/bin/pocketnix-agent --guest-socket /run/pocketnix/guest.sock --listen vsock:9100"
 		if got := g.running(); got != want {
 			t.Errorf("the agent runs %q, want %q", got, want)
+		}
+	})
+}
+
+// One look at an active unit proves little: a binary that dies at start looks
+// fine until its first crash.
+func TestDeployNoticesAUnitThatDoesntStayUp(t *testing.T) {
+	const (
+		agentUnit      = "pocketnix-agent.service"
+		compositorUnit = "pocketnix-compositor.service"
+	)
+	deployAgent := []string{"--host", deployHost, "--flake", "/fake/flake", "agent"}
+	deployCompositor := []string{"--host", deployHost, "--flake", "/fake/flake", "--native", "compositor"}
+	for _, tc := range []struct {
+		name, scope, unit, fate string
+		args                    []string
+		noNRestarts             bool
+		// want is the error's token.
+		want string
+	}{
+		{name: "crash-loop", scope: "system", unit: agentUnit, fate: "crash-loop", args: deployAgent, want: "stay up"},
+		{name: "crash-loop-without-nrestarts", scope: "system", unit: agentUnit, fate: "crash-loop", args: deployAgent, noNRestarts: true, want: "stay up"},
+		{name: "crashed-before-the-first-look", scope: "system", unit: agentUnit, fate: "crashed-early", args: deployAgent, want: "NRestarts"},
+		{name: "dies-without-a-restart", scope: "user", unit: compositorUnit, fate: "dies", args: deployCompositor, want: "stay up"},
+		{name: "never-comes-back", scope: "system", unit: agentUnit, fate: "failed", args: deployAgent, want: "come back"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newFakeGuest(t)
+			g.withCompositor("matching")
+			deployReconnect = 200 * time.Millisecond
+			g.unitFate(tc.scope, tc.unit, tc.fate)
+			if tc.noNRestarts {
+				g.write("no-nrestarts", "")
+			}
+			err := runDeploy(tc.args)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want a failure naming %q", err, tc.want)
+			}
+		})
+	}
+
+	t.Run("remove", func(t *testing.T) {
+		g := newFakeGuest(t)
+		if err := runDeploy(deployAgent); err != nil {
+			t.Fatal(err)
+		}
+		g.unitFate("system", agentUnit, "crash-loop")
+		err := runDeploy([]string{"--host", deployHost, "--remove", "agent"})
+		if err == nil || !strings.Contains(err.Error(), "stay up") {
+			t.Errorf("err = %v, want a failure naming %q", err, "stay up")
+		}
+	})
+}
+
+// A healthy unit passes whatever the restart counter can tell: it isn't always
+// readable, and its value from before the deploy says nothing about this binary.
+func TestDeployTrustsAUnitThatStaysUp(t *testing.T) {
+	deployAgent := []string{"--host", deployHost, "--flake", "/fake/flake", "agent"}
+	t.Run("without-nrestarts", func(t *testing.T) {
+		g := newFakeGuest(t)
+		g.write("no-nrestarts", "")
+		if err := runDeploy(deployAgent); err != nil {
+			t.Error(err)
+		}
+	})
+	t.Run("after-earlier-crashes", func(t *testing.T) {
+		g := newFakeGuest(t)
+		g.write("state/system/pocketnix-agent.service.restarts", "3\n")
+		if err := runDeploy(deployAgent); err != nil {
+			t.Error(err)
 		}
 	})
 }
