@@ -16,7 +16,9 @@ data class Caps(
     val autoMemoryBalloon: Boolean,
     /** This process's last launch, null before one. */
     val launched: Launched?,
-    val appVersion: String
+    val appVersion: String,
+    /** The memory the settings give the VM at its next start. */
+    val memoryMb: Int
 )
 
 /**
@@ -31,7 +33,8 @@ fun capsAnswer(caps: Caps): List<Pair<String, String>> = listOf(
     "rawConfigBinder" to caps.rawConfigBinder.toString(),
     "autoMemoryBalloon" to caps.autoMemoryBalloon.toString(),
     "engine" to URLEncoder.encode(engineLine(caps.launched), "UTF-8"),
-    "appVersion" to URLEncoder.encode(caps.appVersion, "UTF-8")
+    "appVersion" to URLEncoder.encode(caps.appVersion, "UTF-8"),
+    "memoryMb" to caps.memoryMb.toString()
 )
 
 /**

@@ -3,10 +3,10 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -347,7 +347,8 @@ func fakeProviderPackage(line string) string {
 // fakeCannedKey names a canned answer's file: the command's words, as sh
 // splits them, so quoting doesn't matter.
 func fakeCannedKey(line string) string {
-	return url.PathEscape(strings.Join(shellWords(line), " "))
+	// Hashed, as a long script would overrun a file name.
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(shellWords(line), " "))))
 }
 
 func fakeShell(state, line string, logEvent func(string, ...any)) (string, int) {

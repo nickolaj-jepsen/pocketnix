@@ -62,7 +62,8 @@ class ProvisionProvider : ContentProvider() {
             rawConfigBinder = probe.rawConfigBinder,
             autoMemoryBalloon = probe.autoMemoryBalloon,
             launched = ctx.vm.engine.value.launched,
-            appVersion = BuildConfig.VERSION_NAME
+            appVersion = BuildConfig.VERSION_NAME,
+            memoryMb = ctx.vm.settings.memoryMb
         )
     }
 

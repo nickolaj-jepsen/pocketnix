@@ -16,6 +16,7 @@ type doctorReport struct {
 	Device  doctorDevice  `json:"device"`
 	AVF     doctorAVF     `json:"avf"`
 	App     doctorApp     `json:"app"`
+	Memory  doctorMemory  `json:"memory"`
 	Verdict doctorVerdict `json:"verdict"`
 	// Smoke is absent unless --smoke ran.
 	Smoke []smokeStep `json:"smoke,omitempty"`
@@ -58,6 +59,42 @@ type doctorApp struct {
 	Caps map[string]string `json:"caps"`
 	// CapsError is why Caps is nil, empty when it isn't.
 	CapsError string `json:"capsError"`
+}
+
+// doctorMemory is Android's per-app memory limit and the app's standing against
+// it (app/AGENTS.md, MemoryLimiter).
+type doctorMemory struct {
+	// Limiter is nil when the phone's Android has none to ask.
+	Limiter *doctorLimiter `json:"limiter"`
+	// Process is nil when the app isn't running.
+	Process *doctorAppMemory `json:"process"`
+	// LimiterKills is the exit records MemoryLimiter caused, never nil.
+	LimiterKills []string `json:"limiterKills"`
+}
+
+// doctorLimiter is `memory-limiter status`; a disabled limiter fills only Enabled.
+type doctorLimiter struct {
+	Enabled bool `json:"enabled"`
+	Limits  bool `json:"limits"`
+	Killing bool `json:"killing"`
+	// Ignored is the uid, or "all", exempted by adb; empty for none.
+	Ignored string `json:"ignored"`
+	// AppIgnored says Ignored covers the app.
+	AppIgnored        bool `json:"appIgnored"`
+	VisibleMiB        *int `json:"visibleMiB"`
+	NotVisibleMiB     *int `json:"notVisibleMiB"`
+	VisibleSwapMiB    *int `json:"visibleSwapMiB"`
+	NotVisibleSwapMiB *int `json:"notVisibleSwapMiB"`
+}
+
+// doctorAppMemory holds the running app's proc state and its cgroup files as they read.
+type doctorAppMemory struct {
+	State      string `json:"state"`
+	High       string `json:"high"`
+	SwapMax    string `json:"swapMax"`
+	Current    string `json:"current"`
+	Peak       string `json:"peak"`
+	HighEvents string `json:"highEvents"`
 }
 
 type doctorVerdict struct {

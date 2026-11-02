@@ -18,7 +18,8 @@ class CapsTest {
         rawConfigBinder = true,
         autoMemoryBalloon = true,
         launched = Launched(gpu = "gfxstream", gpuAsked = true, gpuRefused = false, guestRam = true, virtioSnd = false),
-        appVersion = "0.4.0-debug"
+        appVersion = "0.4.0-debug",
+        memoryMb = 4096
     )
 
     // What `pocketnix`'s provider.call reads from `content call`'s output (its bundleField).
@@ -36,6 +37,7 @@ class CapsTest {
         assertEquals("true", got["rawConfigBinder"])
         assertEquals("true", got["autoMemoryBalloon"])
         assertEquals("0.4.0-debug", got["appVersion"])
+        assertEquals("4096", got["memoryMb"])
         assertEquals("true", got["ok"])
     }
 

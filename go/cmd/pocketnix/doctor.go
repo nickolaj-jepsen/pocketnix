@@ -27,8 +27,8 @@ import (
 
 const doctorUsage = `usage: pocketnix doctor [--serial <s>] [--debug] [--json] [--smoke] [--gpu-apps <id>,<id>] [--record <dir>]
 
-Probes a phone for what pocketnix needs (AVF, its kernel, u-boot, the app)
-and prints a verdict: ok, warn or fail. Without --smoke it exits 1 only on
+Probes a phone for what pocketnix needs (AVF, its kernel, u-boot, the app,
+Android's memory limit) and prints a verdict: ok, warn or fail. Without --smoke it exits 1 only on
 fail, which means the phone definitely can't run the VM.
 
 flags:
@@ -179,9 +179,11 @@ func probe(dev adb.Device, pkg string) doctorReport {
 		Device: probeDevice(dev),
 		AVF:    probeAVF(dev),
 		App:    probeApp(dev, pkg),
+		Memory: probeMemory(dev, pkg),
 	}
 	r.Verdict = shellVerdict(r.Device, r.AVF)
 	appVerdict(&r.Verdict, r.App)
+	memoryVerdict(&r.Verdict, r.Memory, r.App)
 	return r
 }
 
@@ -504,6 +506,7 @@ func printDoctor(w io.Writer, r doctorReport) {
 		}
 		fmt.Fprintf(w, "caps         %s\n", caps)
 	}
+	printMemory(w, r.Memory)
 	fmt.Fprintf(w, "verdict      %s\n", r.Verdict.Level)
 	for _, reason := range r.Verdict.Reasons {
 		fmt.Fprintf(w, "  %s\n", reason)
