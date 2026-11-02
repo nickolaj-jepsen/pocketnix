@@ -794,7 +794,7 @@ true
 
 
 
-CPU that evaluating and building the guest’s system may use (systemd’s ` CPUQuota= `, 100% per core): the guest’s vCPUs are the phone’s\.
+CPU that evaluating and building the guest’s system may use (systemd’s ` CPUQuota= `, 100% per core): the guest’s vCPUs are the phone’s\. Without ` managed.enable `, an AVF guest’s Nix daemon still defaults to it\.
 
 
 
