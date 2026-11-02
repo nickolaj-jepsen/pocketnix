@@ -38,6 +38,29 @@ func crashingAPKFile(t *testing.T) string {
 	return p
 }
 
+// versionedAPKFile writes fakeVersionedAPK to a file named as gradle's are.
+func versionedAPKFile(t *testing.T, pkg, build string, code uint32, debuggable bool) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "app.apk")
+	if err := os.WriteFile(p, fakeVersionedAPK(pkg, build, code, debuggable), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// installLogged runs install, and returns what it logged too.
+func installLogged(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	o, err := parseInstall(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var log strings.Builder
+	o.log = &log
+	err = o.run()
+	return log.String(), err
+}
+
 // backups lists install's backup files under the fake device's cache dir.
 func (d *fakeDevice) backups() []string {
 	m, _ := filepath.Glob(filepath.Join(d.cache, "pocketnix", "backup", "*", "*.apk"))
@@ -218,6 +241,10 @@ func TestInstallFailureThatReplacedNothing(t *testing.T) {
 		err := runInstall([]string{"--debug", fakeAPKFile(t, "app-debug.apk", "a dev build")})
 		if err == nil || !strings.Contains(err.Error(), "INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
 			t.Fatalf("got %v, want pm's reason", err)
+		}
+		// Nobody may take the way past a signature mismatch lightly.
+		if !strings.Contains(err.Error(), "uninstall") || !strings.Contains(err.Error(), "everything in the guest") {
+			t.Errorf("got %v, want it to say an uninstall deletes everything in the guest", err)
 		}
 		if !strings.Contains(err.Error(), "untouched") || strings.Contains(err.Error(), "--restore") {
 			t.Errorf("got %v, want it to say the old build is untouched, with no --restore advice", err)
@@ -503,6 +530,185 @@ func TestInstallRestoreOverAnAppThatDoesntAnswer(t *testing.T) {
 			}
 			if d.running() != wasRunning {
 				t.Errorf("the VM's running state became %t", d.running())
+			}
+		})
+	}
+}
+
+// A release build on a user build's phone: Android won't take an older one over
+// it with -d, so install says so before the VM goes down, not after.
+func TestInstallRefusesADowngradeAndroidWouldRefuse(t *testing.T) {
+	d := newFakeDevice(t)
+	d.setProp("ro.debuggable", "0")
+	d.installAPKAs(releasePackage, fakeVersionedAPK(releasePackage, "version 2", 20000, false))
+	d.setRunning(true)
+	err := runInstall([]string{versionedAPKFile(t, releasePackage, "version 1", 10000, false)})
+	if err == nil || !strings.Contains(err.Error(), "10000") || !strings.Contains(err.Error(), "20000") {
+		t.Errorf("got %v, want a refusal naming both versionCodes", err)
+	}
+	ev := d.events()
+	if hasEvent(ev, "install ") || hasEvent(ev, "am start") || hasEvent(ev, "pull ") {
+		t.Errorf("acted on the device; events:\n%s", ev)
+	}
+	if !d.running() {
+		t.Error("the VM stopped")
+	}
+	if b := d.backups(); len(b) != 0 {
+		t.Errorf("backups = %v, want none from a refused run", b)
+	}
+}
+
+// A newer release build closes --restore's way back: the log says so when it
+// goes on, and the restore itself refuses before anything changes.
+func TestInstallRestoreRefusesADowngrade(t *testing.T) {
+	d := newFakeDevice(t)
+	d.setProp("ro.debuggable", "0")
+	d.installAPKAs(releasePackage, fakeVersionedAPK(releasePackage, "version 1", 10000, false))
+	d.setRunning(true)
+	log, err := installLogged(t, versionedAPKFile(t, releasePackage, "version 2", 20000, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(log, "--restore") {
+		t.Errorf("no word of --restore going away in the log:\n%s", log)
+	}
+	if !d.running() {
+		t.Fatal("the VM isn't running again")
+	}
+	stops := strings.Count(d.events(), "action.STOP")
+
+	err = runInstall([]string{"--restore"})
+	if err == nil || !strings.Contains(err.Error(), "10000") || !strings.Contains(err.Error(), "20000") {
+		t.Errorf("got %v, want a refusal naming both versionCodes", err)
+	}
+	if got := string(d.installedAPK()); got != "version 2" {
+		t.Errorf("installed APK = %q", got)
+	}
+	if !d.running() {
+		t.Error("the VM stopped")
+	}
+	if got := strings.Count(d.events(), "action.STOP"); got != stops {
+		t.Errorf("sent another STOP; events:\n%s", d.events())
+	}
+	if b := d.backups(); len(b) != 1 {
+		t.Errorf("backups = %v, want it left in place", b)
+	}
+}
+
+// Nothing refuses a downgrade over a debuggable build, or on a debuggable OS.
+func TestInstallAllowsADowngradeAndroidAllows(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		pkg          string
+		installedDbg bool
+		osDebuggable string
+	}{
+		{name: "debuggable-build", pkg: debugPackage, installedDbg: true, osDebuggable: "0"},
+		{name: "debuggable-os", pkg: releasePackage, osDebuggable: "1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newFakeDevice(t)
+			d.setProp("ro.debuggable", tc.osDebuggable)
+			d.installAPKAs(tc.pkg, fakeVersionedAPK(tc.pkg, "version 2", 20000, tc.installedDbg))
+			d.setRunning(true)
+			args := []string{versionedAPKFile(t, tc.pkg, "version 1", 10000, tc.installedDbg)}
+			if tc.pkg == debugPackage {
+				args = append([]string{"--debug"}, args...)
+			}
+			if err := runInstall(args); err != nil {
+				t.Fatal(err)
+			}
+			if got := string(d.installedAPK()); got != "version 1" {
+				t.Errorf("installed APK = %q", got)
+			}
+			if !d.running() {
+				t.Error("the VM isn't running again")
+			}
+		})
+	}
+}
+
+// What can't be read is no reason to refuse: adb decides, and when Android
+// refuses after all, nothing was replaced and the VM comes back.
+func TestInstallLetsAdbDecideWithoutTheFacts(t *testing.T) {
+	const dumpsys = "dumpsys package " + releasePackage
+	older := func(t *testing.T) string { return versionedAPKFile(t, releasePackage, "version 1", 10000, false) }
+	for _, tc := range []struct {
+		name  string
+		setup func(d *fakeDevice)
+		apk   func(t *testing.T) string
+		// refused is Android's own verdict on what install sends it.
+		refused bool
+	}{
+		{name: "os-debuggable-unreadable", setup: func(d *fakeDevice) {
+			d.setProp("ro.debuggable", "")
+		}, apk: older, refused: true},
+		{name: "installed-build-unreadable", setup: func(d *fakeDevice) {
+			d.can(dumpsys, "Can't find service: package\n", 1)
+		}, apk: older, refused: true},
+		{name: "installed-version-missing", setup: func(d *fakeDevice) {
+			d.can(dumpsys, "Packages:\n  Package ["+releasePackage+"] (a1b2c3):\n    flags=[ HAS_CODE ]\n", 0)
+		}, apk: older, refused: true},
+		{name: "installed-flags-missing", setup: func(d *fakeDevice) {
+			d.can(dumpsys, "Packages:\n  Package ["+releasePackage+"] (a1b2c3):\n    versionCode=20000 minSdk=34\n", 0)
+		}, apk: older, refused: true},
+		{name: "apk-version-unreadable", apk: func(t *testing.T) string {
+			return fakeAPKFile(t, "app-release.apk", "no version to read")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newFakeDevice(t)
+			d.setProp("ro.debuggable", "0")
+			d.installAPKAs(releasePackage, fakeVersionedAPK(releasePackage, "version 2", 20000, false))
+			d.setRunning(true)
+			if tc.setup != nil {
+				tc.setup(d)
+			}
+			err := runInstall([]string{tc.apk(t)})
+			if !hasEvent(d.events(), "install ") {
+				t.Errorf("refused on a guess: %v", err)
+			}
+			if tc.refused != (err != nil) {
+				t.Errorf("got %v, want refused by Android = %t", err, tc.refused)
+			}
+			if tc.refused && (err == nil || !strings.Contains(err.Error(), "INSTALL_FAILED_VERSION_DOWNGRADE")) {
+				t.Errorf("got %v, want Android's refusal", err)
+			}
+			if !d.running() {
+				t.Error("the VM didn't come back")
+			}
+		})
+	}
+}
+
+// The warning about --restore is for the one case where it'll really be refused.
+func TestInstallWarnsOnlyWhenARestoreWouldBeRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		pkg          string
+		code         uint32
+		debuggable   bool
+		osDebuggable string
+	}{
+		{name: "same-version", pkg: releasePackage, code: 10000, osDebuggable: "0"},
+		{name: "debuggable-apk", pkg: debugPackage, code: 20000, debuggable: true, osDebuggable: "0"},
+		{name: "debuggable-os", pkg: releasePackage, code: 20000, osDebuggable: "1"},
+		{name: "os-unreadable", pkg: releasePackage, code: 20000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newFakeDevice(t)
+			d.setProp("ro.debuggable", tc.osDebuggable)
+			d.installAPKAs(tc.pkg, fakeVersionedAPK(tc.pkg, "version 1", 10000, tc.debuggable))
+			args := []string{versionedAPKFile(t, tc.pkg, "another", tc.code, tc.debuggable)}
+			if tc.pkg == debugPackage {
+				args = append([]string{"--debug"}, args...)
+			}
+			log, err := installLogged(t, args...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(log, "--restore") {
+				t.Errorf("warned about --restore:\n%s", log)
 			}
 		})
 	}
