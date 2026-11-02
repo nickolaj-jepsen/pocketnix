@@ -1,0 +1,61 @@
+name: Device report
+description: Report how pocketnix does on a phone, so it can join the tested devices.
+title: "Device report: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Run `pocketnix doctor --json` with the phone on adb and the app installed
+        ([Tested devices](https://github.com/nickolaj-jepsen/pocketnix/blob/main/docs/getting-started.md#tested-devices)
+        has the command). Its report leaves out the adb serial, account names and
+        the phone number; check anything else you paste here for them.
+  - type: input
+    id: phone
+    attributes:
+      label: Phone
+      description: Maker and model.
+      placeholder: Pixel 8 Pro
+    validations:
+      required: true
+  - type: input
+    id: os-build
+    attributes:
+      label: OS and build
+      description: The OS, its Android version and build number, from Settings > About phone.
+      placeholder: GrapheneOS, Android 17, build <number>
+    validations:
+      required: true
+  - type: textarea
+    id: doctor-json
+    attributes:
+      label: doctor --json output
+      description: The whole output of `pocketnix doctor --json`.
+      render: json
+    validations:
+      required: true
+  - type: dropdown
+    id: boot
+    attributes:
+      label: Did a VM boot?
+      options:
+        - Yes, to a shell in the app
+        - It started but never reached a shell
+        - It didn't start
+        - I didn't try
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What you tried
+      description: >-
+        Which app build, how you granted the permissions, and the app's setup or
+        `pocketnix provision` with your own flake. Say where it stopped, if it did.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Errors and logs
+      description: The error the app showed, or logcat lines from around the failure.
+      render: text
