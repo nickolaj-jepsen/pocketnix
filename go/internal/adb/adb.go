@@ -3,12 +3,18 @@ package adb
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
+
+// ShellExitMarker comes before a shell command's exit status in the stdout of
+// ShellStatus's adb command, which is the stdout Trace gets.
+const ShellExitMarker = "pocketnix-exit="
 
 // Device is one adb device; an empty Serial means adb's only device.
 type Device struct {
@@ -18,9 +24,9 @@ type Device struct {
 	// (-1 if it didn't start or a signal ended it), and the stdout Run kept (Stream
 	// keeps none). Start's commands end out of sight, and aren't traced.
 	Trace func(argv []string, start time.Time, status int, stdout string)
-	// QuietErrors keeps a command's stdout out of the errors Run and Shell return,
-	// for errors that go into a report: it can hold other apps' text. adb's own
-	// stderr stays in them.
+	// QuietErrors keeps a command's stdout out of the errors Run, Shell and
+	// ShellStatus return, for errors that go into a report: it can hold other apps'
+	// text. adb's own stderr stays in them.
 	QuietErrors bool
 }
 
@@ -83,22 +89,41 @@ func (d Device) Start(w io.Writer, args ...string) (*exec.Cmd, error) {
 	return c, c.Start()
 }
 
-// Shell runs a command line in the device's shell. adb itself doesn't report
-// a failing command through every Android version's adb, so this appends an
-// exit marker and checks it.
-func (d Device) Shell(cmdline string) (string, error) {
-	out, err := d.Run("shell", cmdline+"; echo pocketnix-exit=$?")
+var errNoStatus = errors.New("no exit status in output")
+
+// ShellStatus runs a command line in the device's shell and returns its stdout
+// and exit status. adb itself doesn't report a failing command through every
+// Android version's adb, so this appends an exit marker and reads it. An error
+// is adb's own failure, or output without a readable status, and never the
+// command's: its status is -1 then, with what stdout there is.
+func (d Device) ShellStatus(cmdline string) (string, int, error) {
+	out, err := d.Run("shell", cmdline+"; echo "+ShellExitMarker+"$?")
 	if err != nil {
-		return out, err
+		return out, -1, err
 	}
-	body, status, ok := cutLast(out, "pocketnix-exit=")
+	body, tail, ok := cutLast(out, ShellExitMarker)
 	if !ok {
-		return out, fmt.Errorf("adb shell %s: no exit status in output:\n%s", cmdline, d.inError(out))
+		return out, -1, fmt.Errorf("adb shell %s: %w", cmdline, errNoStatus)
 	}
-	if strings.TrimSpace(status) != "0" {
-		return body, fmt.Errorf("adb shell %s: exit %s:\n%s", cmdline, strings.TrimSpace(status), d.inError(body))
+	status, err := strconv.Atoi(strings.TrimSpace(tail))
+	if err != nil {
+		return body, -1, fmt.Errorf("adb shell %s: exit status %q", cmdline, d.inError(tail))
 	}
-	return body, nil
+	return body, status, nil
+}
+
+// Shell is ShellStatus with a command that exits non-zero as an error too.
+func (d Device) Shell(cmdline string) (string, error) {
+	out, status, err := d.ShellStatus(cmdline)
+	switch {
+	case errors.Is(err, errNoStatus):
+		return out, fmt.Errorf("%w:\n%s", err, d.inError(out))
+	case err != nil:
+		return out, err
+	case status != 0:
+		return out, fmt.Errorf("adb shell %s: exit %d:\n%s", cmdline, status, d.inError(out))
+	}
+	return out, nil
 }
 
 func cutLast(s, sep string) (before, after string, ok bool) {

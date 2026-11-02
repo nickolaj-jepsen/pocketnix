@@ -22,7 +22,7 @@ var limitWait = 5 * time.Second
 // on success.
 func limiter(dev adb.Device, args ...string) error {
 	line := "cmd activity memory-limiter " + strings.Join(args, " ")
-	out, status, err := shellStatus(dev, line)
+	out, status, err := dev.ShellStatus(line)
 	if err != nil {
 		return err
 	}
