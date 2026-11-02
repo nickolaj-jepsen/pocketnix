@@ -39,8 +39,8 @@ func TestProvisionFailedInstallSaysWhatAnUninstallCosts(t *testing.T) {
 	d.failInstalls("Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match]")
 	img, _ := testImage(t)
 	err := provisionFor(t, "--image", img, "--apk", fakeAPKFile(t, "app-debug.apk", "apk"), "--debug")
-	if err == nil || !strings.Contains(err.Error(), "uninstall") || !strings.Contains(err.Error(), "everything in the guest") {
-		t.Errorf("got %v, want it to say an uninstall deletes everything in the guest", err)
+	if err == nil || !strings.Contains(err.Error(), uninstallCost) {
+		t.Errorf("got %v, want it to say what an uninstall costs", err)
 	}
 }
 

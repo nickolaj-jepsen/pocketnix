@@ -86,12 +86,12 @@ package:com.android.hardware.biometrics.face.virtual versionCode:2
 func TestDoctorJSON(t *testing.T) {
 	d := newFakeDevice(t)
 	cannedPixel(d)
-	r, raw, err := doctorJSON(t)
+	_, raw, err := doctorJSON(t)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for path, want := range map[string]any{
-		"schema": float64(1), "device.os": "grapheneos", "avf.vmSupported": true,
+		"schema": float64(1), "device.model": "Pixel 8 Pro", "device.os": "grapheneos", "avf.vmSupported": true,
 		"avf.protectedVmSupported": true, "verdict.level": "ok",
 		"avf.apexVersion": "370399999", "device.soc": "Google Tensor G3", "avf.uboot": true,
 	} {
@@ -101,21 +101,6 @@ func TestDoctorJSON(t *testing.T) {
 	}
 	if _, ok := field(raw, "verdict.reasons").([]any); !ok {
 		t.Errorf("verdict.reasons isn't a list: %v", field(raw, "verdict.reasons"))
-	}
-	if r.Schema != doctorSchema {
-		t.Errorf("schema = %d", r.Schema)
-	}
-	if r.Device.Model == nil || *r.Device.Model != "Pixel 8 Pro" {
-		t.Errorf("device.model = %v", r.Device.Model)
-	}
-	if r.Device.OS != osGrapheneOS {
-		t.Errorf("device.os = %q", r.Device.OS)
-	}
-	if r.AVF.VMSupported == nil || !*r.AVF.VMSupported {
-		t.Errorf("avf.vmSupported = %v", r.AVF.VMSupported)
-	}
-	if r.Verdict.Level != levelOK {
-		t.Errorf("verdict = %+v", r.Verdict)
 	}
 }
 
@@ -390,7 +375,8 @@ func fastSmoke(t *testing.T) {
 func cannedPath(cmdline string) string { return filepath.Join("canned", fakeCannedKey(cmdline)) }
 
 const (
-	powerLocks = "dumpsys power | grep -F pocketnix:guest"
+	powerLocks  = "dumpsys power | grep -F pocketnix:guest"
+	wakefulness = "dumpsys power | grep -m1 mWakefulness="
 	// powerHistory is what dumpsys power keeps of a wake lock after its release, as a Pixel prints it.
 	powerHistory = "  11-02 16:59:16.878 - 10200 (dev.nickolaj.pocketnix.debug) - ACQ pocketnix:guest (partial)\n  11-02 17:00:12.971 - 10200 (dev.nickolaj.pocketnix.debug) - REL pocketnix:guest\n"
 )
@@ -436,7 +422,7 @@ func smokeDevice(t *testing.T, rs ...fakeReaction) *fakeDevice {
 	d.can(powerLocks, powerHistory, 0)
 	// One uid per Android user, as on a phone with a work profile or Private space.
 	d.can("pm list packages -U dev.nickolaj.pocketnix.debug", "package:dev.nickolaj.pocketnix.debug uid:10200,1010200,1110200\n", 0)
-	d.can("dumpsys power | grep -m1 mWakefulness=", "  mWakefulness=Awake\n", 0)
+	d.can(wakefulness, "  mWakefulness=Awake\n", 0)
 	d.can("dumpsys window | grep -E 'mDreamingLockscreen=|isKeyguardShowing=|mShowingLockscreen=' || true", "    isKeyguardShowing=false\n", 0)
 	d.can("date +%s", "1762000000\n", 0)
 	// An earlier boot's GPU failure, before smoke ran.
@@ -722,13 +708,7 @@ func TestSmokeInterruptCleansUp(t *testing.T) {
 	smokeTimes.pty = time.Minute
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// Interrupted once the PTY step's tab is open: the console, the listener's and its own.
-	go func() {
-		for len(fakeTabs(d.state)) < 3 && ctx.Err() == nil {
-			time.Sleep(time.Millisecond)
-		}
-		cancel()
-	}()
+	cancelOnTyped(ctx, cancel, d, func(line string) bool { return strings.Contains(line, "base64") })
 	steps, _ := runSmoke(ctx, adb.Device{}, debugPackage, smokeApps, io.Discard)
 	for _, name := range []string{"notification", "inhibitor", "gpu", "pages", "reboot"} {
 		if st, _ := stepNamed(steps, name); st.OK != nil || !strings.Contains(st.Detail, "interrupted") {
@@ -997,7 +977,7 @@ func TestSmokeSkipsWithoutInputs(t *testing.T) {
 			os.Remove(filepath.Join(d.state, "control", "gui"))
 		}, tokens: map[string]string{"gpu": "GUI", "pages": "GUI"}},
 		{name: "locked", args: gpuApps, setup: func(d *fakeDevice) {
-			d.can("dumpsys power | grep -m1 mWakefulness=", "  mWakefulness=Asleep\n", 0)
+			d.can(wakefulness, "  mWakefulness=Asleep\n", 0)
 		}, tokens: map[string]string{"gpu": "locked", "pages": "locked"}},
 		{name: "unknown-app", args: []string{"--gpu-apps", "org.example.Cube,org.example.Missing"}, tokens: map[string]string{"gpu": "org.example.Missing"}},
 		{name: "no-guest-ram", args: gpuApps, setup: func(d *fakeDevice) {
@@ -1078,7 +1058,11 @@ func TestSmokeNeedsTheDebugApp(t *testing.T) {
 
 // Without a GPU or guest RAM there's nothing to judge, but the launches still run.
 func TestSmokeNoGPUStillLaunches(t *testing.T) {
-	d := smokeDevice(t, everyTool...)
+	rs := slices.Clone(everyTool)
+	for _, app := range smokeApps {
+		rs = append(rs, fakeReaction{Launch: app, Write: map[string]string{"launched/" + app: ""}})
+	}
+	d := smokeDevice(t, rs...)
 	head := strings.Replace(fakeRunningHead, "gpu=gfxstream", "gpu=2d", 1)
 	d.setHead(strings.Replace(head, "guestRam=true", "guestRam=false", 1))
 	r, _, err := doctorJSON(t, "--smoke", "--gpu-apps", strings.Join(smokeApps, ","))
@@ -1091,7 +1075,7 @@ func TestSmokeNoGPUStillLaunches(t *testing.T) {
 		}
 	}
 	for _, app := range smokeApps {
-		if !strings.Contains(d.events(), "DEBUG_LAUNCH --es app '"+app+"'") {
+		if !exists(filepath.Join(d.state, "launched", app)) {
 			t.Errorf("%s was never launched:\n%s", app, d.events())
 		}
 	}
@@ -1119,10 +1103,10 @@ func TestSmokeNoGPULaunchFails(t *testing.T) {
 // before or after it (TerminalRow.clear keeps mLineWrap), as a phone's 64 MiB does.
 func TestSmokePTYFindsAJoinedMarker(t *testing.T) {
 	for name, tc := range map[string]struct{ line, want string }{
-		"own-row":           {"${1}-exit=0", "on its own row"},
-		"to-the-row-before": {"AAAAAAAAAAAAAAAAAAAAAAAAAAAA            ${1}-exit=0", "joined to the row before"},
-		"to-the-row-after":  {"${1}-exit=0                          ~ > ", "joined to the row after"},
-		"to-both":           {"AAAA    ${1}-exit=0    ~ > ", "joined to the rows before and after"},
+		"own-row":           {"${1}-exit=0", "own row"},
+		"to-the-row-before": {"AAAAAAAAAAAAAAAAAAAAAAAAAAAA            ${1}-exit=0", "row before"},
+		"to-the-row-after":  {"${1}-exit=0                          ~ > ", "row after"},
+		"to-both":           {"AAAA    ${1}-exit=0    ~ > ", "rows before and after"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			joined := reactPTY

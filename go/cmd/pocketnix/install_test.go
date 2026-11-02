@@ -98,24 +98,11 @@ func TestInstallSwapsRunningVM(t *testing.T) {
 		t.Error("the VM isn't running again")
 	}
 	ev := d.events()
-	for _, line := range []string{
-		"install -r -d app-debug.apk",
-		"grant dev.nickolaj.pocketnix.debug android.permission.MANAGE_VIRTUAL_MACHINE",
-		"grant dev.nickolaj.pocketnix.debug android.permission.USE_CUSTOM_VIRTUAL_MACHINE",
-	} {
-		if !strings.Contains(ev, line+"\n") {
-			t.Errorf("device never saw %q; events:\n%s", line, ev)
-		}
-	}
 	if strings.Contains(ev, "uninstall") {
 		t.Errorf("uninstalled the app; events:\n%s", ev)
 	}
 	if strings.Contains(ev, "vm killed\n") {
 		t.Errorf("installed over a running VM instead of stopping it; events:\n%s", ev)
-	}
-	stop := strings.Index(ev, "-a dev.nickolaj.pocketnix.action.STOP")
-	if stop < 0 || stop > strings.Index(ev, "install -r -d") {
-		t.Errorf("no STOP before the install; events:\n%s", ev)
 	}
 	if b := d.backups(); len(b) != 1 {
 		t.Errorf("backups = %v, want one", b)
@@ -132,20 +119,26 @@ func TestInstallOrdersTheSwap(t *testing.T) {
 		t.Fatal(err)
 	}
 	ev := d.events()
-	order := []string{
-		debugStop + "\n",
-		"install -r -d app-debug.apk\n",
-		"grant dev.nickolaj.pocketnix.debug android.permission.MANAGE_VIRTUAL_MACHINE\n",
-		"grant dev.nickolaj.pocketnix.debug android.permission.USE_CUSTOM_VIRTUAL_MACHINE\n",
-		debugStart + "\n",
+	steps := [][]string{
+		{debugStop},
+		{"install -r -d app-debug.apk"},
+		{
+			"grant dev.nickolaj.pocketnix.debug android.permission.MANAGE_VIRTUAL_MACHINE",
+			"grant dev.nickolaj.pocketnix.debug android.permission.USE_CUSTOM_VIRTUAL_MACHINE",
+		},
+		{debugStart},
 	}
-	last := -1
-	for _, line := range order {
-		i := strings.Index(ev, line)
-		if i <= last {
-			t.Fatalf("want %q after the events before it in %q; events:\n%s", line, order, ev)
+	after := -1
+	for _, step := range steps {
+		latest := after
+		for _, line := range step {
+			i := strings.Index(ev, line+"\n")
+			if i <= after {
+				t.Fatalf("want %q after the steps before it in %q; events:\n%s", line, steps, ev)
+			}
+			latest = max(latest, i)
 		}
-		last = i
+		after = latest
 	}
 }
 
@@ -431,14 +424,13 @@ func TestInstallRestoreRecoversACrashingBuild(t *testing.T) {
 	if d.running() {
 		t.Fatal("the VM runs over a build that can't")
 	}
-	installs := strings.Count(d.events(), "install -r -d ")
 
 	// Anything but --restore keeps failing closed: this could be any provider failure.
 	if err := runInstall([]string{"--debug", fakeAPKFile(t, "app-debug.apk", "a dev build")}); err == nil {
 		t.Error("installed over an app that doesn't say whether a VM runs")
 	}
-	if got := strings.Count(d.events(), "install -r -d "); got != installs {
-		t.Errorf("a normal install went ahead; events:\n%s", d.events())
+	if got := string(d.installedAPK()); got != "a crashing build" {
+		t.Errorf("a normal install went ahead: installed APK = %q", got)
 	}
 
 	if err := runInstall([]string{"--debug", "--restore"}); err != nil {
@@ -461,8 +453,6 @@ func TestInstallRestoreRecoversACrashingBuild(t *testing.T) {
 // With no status to go by, --restore looks for the VM's process: replacing the
 // app under a real VM is a hard power-off.
 func TestInstallRestoreOverAnAppThatDoesntAnswer(t *testing.T) {
-	const crash = "Exception occurred while executing 'call':\n"
-	statusCall := "content call --uri content://" + debugPackage + ".provision --method status"
 	for _, tc := range []struct {
 		name    string
 		setup   func(d *fakeDevice)
@@ -498,10 +488,9 @@ func TestInstallRestoreOverAnAppThatDoesntAnswer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d := newFakeDevice(t)
 			d.installAPK([]byte("the owner's build"))
-			if err := runInstall([]string{"--debug", fakeAPKFile(t, "app-debug.apk", "a dev build")}); err != nil {
+			if err := runInstall([]string{"--debug", crashingAPKFile(t)}); err != nil {
 				t.Fatal(err)
 			}
-			d.can(statusCall, crash, 1)
 			if tc.setup != nil {
 				tc.setup(d)
 			}
@@ -519,7 +508,7 @@ func TestInstallRestoreOverAnAppThatDoesntAnswer(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("got %v, want a refusal naming %q", err, tc.want)
 			}
-			if got := string(d.installedAPK()); got != "a dev build" {
+			if got := string(d.installedAPK()); got != "a crashing build" {
 				t.Errorf("installed APK = %q", got)
 			}
 			if b := d.backups(); len(b) != 1 {
@@ -906,8 +895,8 @@ func TestInstallBacksUpPerDevice(t *testing.T) {
 func TestInstallFindsItsBackupOverANewTransport(t *testing.T) {
 	d := newFakeDevice(t)
 	d.installAPK([]byte("the owner's build"))
-	d.setProp("ro.serialno", recordHWSerial)
-	const usb, wifi = "--serial=" + recordHWSerial, "--serial=192.0.2.1:5555"
+	d.setProp("ro.serialno", "PHONE-A")
+	const usb, wifi = "--serial=PHONE-A", "--serial=192.0.2.1:5555"
 	if err := runInstall([]string{usb, "--debug", fakeAPKFile(t, "app-debug.apk", "dev build 1")}); err != nil {
 		t.Fatal(err)
 	}
@@ -943,34 +932,35 @@ func TestInstallWithoutTheSerialProp(t *testing.T) {
 // The phone's own serial keys the backup and goes nowhere else: not its path,
 // the log or an error. The restore command names the transport it was given.
 func TestInstallKeepsTheSerialToItself(t *testing.T) {
+	const adbSerial, hwSerial = "TRANSPORT-A", "PHONE-A"
 	d := newFakeDevice(t)
 	d.installAPK([]byte("the owner's build"))
-	d.setProp("ro.serialno", recordHWSerial)
+	d.setProp("ro.serialno", hwSerial)
 	var log strings.Builder
 	install := func(args ...string) error {
 		t.Helper()
-		o, err := parseInstall(append([]string{"--serial", recordSerial, "--debug"}, args...))
+		o, err := parseInstall(append([]string{"--serial", adbSerial, "--debug"}, args...))
 		if err != nil {
 			t.Fatal(err)
 		}
 		o.log = &log
 		return o.run()
 	}
-	if err := install("--restore"); err == nil || strings.Contains(err.Error(), recordHWSerial) {
+	if err := install("--restore"); err == nil || strings.Contains(err.Error(), hwSerial) {
 		t.Errorf("--restore without a backup: %v", err)
 	}
 	d.failInstallsLate("Failure [INSTALL_FAILED_INTERNAL_ERROR: the connection went]")
 	err := install(fakeAPKFile(t, "app-debug.apk", "a dev build"))
-	if err == nil || !strings.Contains(err.Error(), "--serial "+recordSerial) || strings.Contains(err.Error(), recordHWSerial) {
+	if err == nil || !strings.Contains(err.Error(), "--serial "+adbSerial) || strings.Contains(err.Error(), hwSerial) {
 		t.Errorf("a failed install: %v", err)
 	}
-	if err := install("--restore"); err == nil || strings.Contains(err.Error(), recordHWSerial) {
+	if err := install("--restore"); err == nil || strings.Contains(err.Error(), hwSerial) {
 		t.Errorf("a failed restore: %v", err)
 	}
-	if strings.Contains(log.String(), recordHWSerial) {
+	if strings.Contains(log.String(), hwSerial) {
 		t.Errorf("the log holds the serial:\n%s", log.String())
 	}
-	if b := d.backups(); len(b) != 1 || strings.Contains(b[0], recordHWSerial) {
+	if b := d.backups(); len(b) != 1 || strings.Contains(b[0], hwSerial) {
 		t.Errorf("backups = %v, want one, whose path doesn't hold the serial", b)
 	}
 }

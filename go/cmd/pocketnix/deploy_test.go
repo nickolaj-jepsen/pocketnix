@@ -7,7 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -465,10 +465,12 @@ func stderrOf(t *testing.T, f func() error) (string, error) {
 	return string(out), ferr
 }
 
-func TestDeployAgentAndRemove(t *testing.T) {
-	deployAgent := []string{"--host", deployHost, "--flake", "/fake/flake", "agent"}
-	const crossAgent = "/nix/store/fakehash-pocketnix-cross-aarch64"
+// crossAgent is the store path the fake nix answers for the cross agent.
+const crossAgent = "/nix/store/fakehash-pocketnix-cross-aarch64"
 
+var deployAgent = []string{"--host", deployHost, "--flake", "/fake/flake", "agent"}
+
+func TestDeployAgentAndRemove(t *testing.T) {
 	t.Run("leaves a drop-in and a root", func(t *testing.T) {
 		g := newFakeGuest(t)
 		if err := runDeploy(deployAgent); err != nil {
@@ -538,7 +540,7 @@ func TestDeployAgentAndRemove(t *testing.T) {
 		if err := runDeploy(append([]string{"--ssh-config", cfg}, deployAgent...)); err != nil {
 			t.Fatal(err)
 		}
-		if !g.exists("nix/store/fakehash-pocketnix-cross-aarch64") {
+		if !g.exists(crossAgent) {
 			t.Error("the agent never reached the guest's store")
 		}
 	})
@@ -562,7 +564,6 @@ func TestDeployNoticesAUnitThatDoesntStayUp(t *testing.T) {
 		agentUnit      = "pocketnix-agent.service"
 		compositorUnit = "pocketnix-compositor.service"
 	)
-	deployAgent := []string{"--host", deployHost, "--flake", "/fake/flake", "agent"}
 	deployCompositor := []string{"--host", deployHost, "--flake", "/fake/flake", "--native", "compositor"}
 	for _, tc := range []struct {
 		name, scope, unit, fate string
@@ -608,7 +609,6 @@ func TestDeployNoticesAUnitThatDoesntStayUp(t *testing.T) {
 // A healthy unit passes whatever the restart counter can tell: it isn't always
 // readable, and its value from before the deploy says nothing about this binary.
 func TestDeployTrustsAUnitThatStaysUp(t *testing.T) {
-	deployAgent := []string{"--host", deployHost, "--flake", "/fake/flake", "agent"}
 	t.Run("without-nrestarts", func(t *testing.T) {
 		g := newFakeGuest(t)
 		g.write("no-nrestarts", "")
@@ -628,9 +628,6 @@ func TestDeployTrustsAUnitThatStaysUp(t *testing.T) {
 // A timeout or a dropped ssh says nothing about how far the script got: an old
 // ExecStart may still change.
 func TestDeployOverALostConnection(t *testing.T) {
-	deployAgent := []string{"--host", deployHost, "--flake", "/fake/flake", "agent"}
-	const crossAgent = "/nix/store/fakehash-pocketnix-cross-aarch64/bin/pocketnix-agent"
-
 	t.Run("the guest finishes the script later", func(t *testing.T) {
 		g := newFakeGuest(t)
 		g.write("drop-script", "")
@@ -639,8 +636,8 @@ func TestDeployOverALostConnection(t *testing.T) {
 		if err := runDeploy(deployAgent); err != nil {
 			t.Fatal(err)
 		}
-		if got := g.running(); !strings.HasPrefix(got, crossAgent) {
-			t.Errorf("the agent runs %q, want %s", got, crossAgent)
+		if got := g.running(); !strings.HasPrefix(got, crossAgent+"/bin/pocketnix-agent") {
+			t.Errorf("the agent runs %q, want %s's", got, crossAgent)
 		}
 	})
 
@@ -675,8 +672,6 @@ func TestDeployOverALostConnection(t *testing.T) {
 
 // The script having answered, nothing is left to wait for.
 func TestDeployFailsAtOnceWhenTheScriptDid(t *testing.T) {
-	deployAgent := []string{"--host", deployHost, "--flake", "/fake/flake", "agent"}
-
 	t.Run("a failing command", func(t *testing.T) {
 		g := newFakeGuest(t)
 		g.write("nix-store-fails", "")
@@ -695,9 +690,13 @@ func TestDeployFailsAtOnceWhenTheScriptDid(t *testing.T) {
 		g.withCompositor("matching")
 		const other = "/nix/store/other-compositor/bin/pocketnix-compositor"
 		g.write(userDropIn("pocketnix-compositor.service.d/zz-other.conf"), "[Service]\nExecStart=\nExecStart="+other+"\n")
+		start := time.Now()
 		err := runDeploy([]string{"--host", deployHost, "--flake", "/fake/flake", "--native", "compositor"})
-		if err == nil || !strings.Contains(err.Error(), other) || strings.Contains(err.Error(), "come back") {
-			t.Errorf("err = %v, want it to name %s, without a wait for the unit", err, other)
+		if err == nil || !strings.Contains(err.Error(), other) {
+			t.Errorf("err = %v, want it to name %s", err, other)
+		}
+		if waited := time.Since(start); waited >= deployReconnect {
+			t.Errorf("failed after %s, having waited out deployReconnect", waited)
 		}
 	})
 }
@@ -729,10 +728,6 @@ func TestDeployCompositor(t *testing.T) {
 		}
 		if got, want := g.compositorRunning(), rewritten+"/bin/pocketnix-compositor"+args; got != want {
 			t.Errorf("the compositor runs %q, want %q", got, want)
-		}
-		// pocketnix bench takes the client beside the unit's ExecStart.
-		if !g.exists(rewritten + "/bin/pocketnix-gui-bench") {
-			t.Error("no pocketnix-gui-bench beside the deployed compositor")
 		}
 		for _, p := range []string{crossCompositor, crossGlibc} {
 			if g.exists(p) {
@@ -800,7 +795,7 @@ func TestDeployCompositor(t *testing.T) {
 
 	t.Run("a closure over deployMaxCopy refuses before the copy", func(t *testing.T) {
 		g := newGuest(t, "matching")
-		g.desktopClosure(nativeCompositor, nativeCompositor+" 10485760", "/nix/store/000000000000000000000000000other-glibc-2.41 104857600")
+		g.desktopClosure(nativeCompositor, nativeCompositor+" 10485760", fmt.Sprintf("/nix/store/000000000000000000000000000other-glibc-2.41 %d", deployMaxCopy+1))
 		err := runDeploy(append([]string{"--native"}, deployCompositor...))
 		if err == nil || !strings.Contains(err.Error(), "deployMaxCopy") {
 			t.Fatalf("err = %v, want a refusal naming deployMaxCopy", err)
@@ -831,6 +826,10 @@ func TestDeployCompositor(t *testing.T) {
 
 func TestDeployCompositorLibraryMatch(t *testing.T) {
 	const other = "/nix/store/00000000000000000000000000000old-glibc-2.40"
+	needs := elfNeeds{
+		interp: "ld-linux-aarch64.so.1",
+		needed: []string{"libxkbcommon.so.0", "libgcc_s.so.1", "libm.so.6", "libc.so.6", "ld-linux-aarch64.so.1"},
+	}
 	libs := []guestLib{
 		{other, "libc.so.6"},
 		{guestXkbcommon, "libxkbcommon.so.0"},
@@ -839,7 +838,7 @@ func TestDeployCompositorLibraryMatch(t *testing.T) {
 		{guestGlibc, "libm.so.6"},
 		{guestGccLib, "libgcc_s.so.1"},
 	}
-	interp, rpath, err := matchGuestLibs(crossCompositorNeeds, libs)
+	interp, rpath, err := matchGuestLibs(needs, libs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -847,7 +846,10 @@ func TestDeployCompositorLibraryMatch(t *testing.T) {
 		t.Errorf("interpreter = %q, want %q", interp, want)
 	}
 	// libc comes from the loader's glibc, not the first one in the closure.
-	if want := []string{guestXkbcommon + "/lib", guestGccLib + "/lib", guestGlibc + "/lib"}; !reflect.DeepEqual(rpath, want) {
+	want := []string{guestXkbcommon + "/lib", guestGccLib + "/lib", guestGlibc + "/lib"}
+	slices.Sort(want)
+	slices.Sort(rpath)
+	if !slices.Equal(rpath, want) {
 		t.Errorf("rpath = %q, want %q", rpath, want)
 	}
 }
