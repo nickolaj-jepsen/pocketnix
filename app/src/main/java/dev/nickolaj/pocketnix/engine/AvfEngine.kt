@@ -68,6 +68,10 @@ class AvfEngine(private val context: Context) : VmEngine {
     @Volatile override var launched: Launched? = null
         private set
 
+    // Written on the lifecycle thread only.
+    @Volatile override var guestReboots = 0
+        private set
+
     override val dialer: AgentDialer?
         get() = vm?.let { v ->
             val up = agentUp
@@ -278,6 +282,7 @@ class AvfEngine(private val context: Context) : VmEngine {
         when {
             // A guest `reboot` (e.g. into a new generation) stops crosvm; boot it again.
             reason == AvfReasons.STOP_REASON_REBOOT && !stopRequested -> {
+                guestReboots++
                 console.append("\r\n[pocketnix: the guest rebooted; starting it again]\r\n")
                 _state.value = VmState.Starting
                 launch(settings, console)

@@ -605,15 +605,17 @@ class Vm(private val app: Context) {
     /**
      * Debug builds, over adb, on the main thread: the VM's state and [phase], the
      * terminal background and where it came from, the setup, what the last
-     * launch gave the VM and the guest sound's stream, the updates
-     * (with their log's last [lines]), the last [lines] of every tab's
-     * transcript (only tab [only]'s if given) and, for all tabs, the GUI windows.
+     * launch gave the VM and the guest sound's stream, [VmEngine.guestReboots]
+     * (the CLI's dumpReboots reads that line), the updates (with their log's
+     * last [lines]), the last [lines] of every tab's transcript (only tab
+     * [only]'s if given) and, for all tabs, the GUI windows.
      */
     fun debugDump(only: Int?, lines: Int): List<String> = buildList {
         add("state=${state.value} phase=${phase.value} link=${control.link.value} host=${control.config.value?.hostname}")
         add("theme background=#%06x source=$themeSource".format(TerminalTheme.background and 0xffffff))
         add("setup=${managed.setup.value} managed=${control.config.value?.managedFlake}")
         add("${engineLine(_engine.value.launched)} audio=${audio.status.name.lowercase()}")
+        add("guest reboots=${_engine.value.guestReboots}")
         updates.value?.let { u ->
             add("updates state=${u.state} op=${u.op} available=${u.available} plan=${u.plan} blocked=${u.blocked} error=${u.error}")
             add("updates packages=${u.packages} run=${u.run} generations=${u.generations.map { "${it.number}${if (it.current) "*" else ""}" }}")

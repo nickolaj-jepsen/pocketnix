@@ -532,9 +532,8 @@ func TestSmokeRunsEveryStep(t *testing.T) {
 	if st, _ := stepNamed(r.Smoke, "pty"); !strings.Contains(st.Detail, "100s") {
 		t.Errorf("pty: %+v, want base64's time in the guest", st)
 	}
-	console, _ := os.ReadFile(fakeTabPath(d.state, 0))
-	if !strings.Contains(string(console), rebootLine) {
-		t.Error("the guest never rebooted")
+	if fakeReboots(d.state) != 1 {
+		t.Errorf("the guest rebooted %d times", fakeReboots(d.state))
 	}
 	for _, e := range []string{"uninstall", "am force-stop"} {
 		if hasEvent(d.events(), e) {
@@ -721,7 +720,7 @@ func TestSmokeInterruptCleansUp(t *testing.T) {
 	if left := leftovers(d); len(left) > 0 {
 		t.Errorf("smoke left %q", left)
 	}
-	if console, _ := os.ReadFile(fakeTabPath(d.state, 0)); strings.Contains(string(console), rebootLine) {
+	if fakeReboots(d.state) != 0 {
 		t.Error("an interrupted smoke rebooted the guest")
 	}
 }
@@ -807,7 +806,8 @@ func TestSmokeFailedRebootClosesItsTab(t *testing.T) {
 		{name: "stays-running", setup: func() { smokeTimes.reboot = 50 * time.Millisecond }},
 		{name: "agent-stays-away", react: &fakeReaction{Typed: typed, Write: map[string]string{"control/booting": "1000000"}},
 			setup: func() { smokeTimes.boot = 50 * time.Millisecond }},
-		{name: "no-console-line", react: &fakeReaction{Typed: typed, Write: map[string]string{"control/booting": "1"}}},
+		// The VM stops and comes back, without the app counting a reboot.
+		{name: "vm-stopped-and-started", react: &fakeReaction{Typed: typed, Write: map[string]string{"control/booting": "1"}}},
 		{name: "interrupted", setup: func() { smokeTimes.reboot = 10 * time.Minute }, interrupt: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -832,6 +832,37 @@ func TestSmokeFailedRebootClosesItsTab(t *testing.T) {
 				t.Errorf("smoke left %q", left)
 			}
 		})
+	}
+}
+
+// An app without the reboot count can't show a reboot from a VM stop: the step
+// says so instead of passing, and the guest stays up.
+func TestSmokeRebootNeedsTheAppsCount(t *testing.T) {
+	d := smokeDevice(t, everyTool...)
+	d.predateRebootCount()
+	r, _, err := doctorJSON(t, "--smoke")
+	if err != nil {
+		t.Errorf("doctor --smoke: %v, want a skipped step to pass", err)
+	}
+	if st, ok := stepNamed(r.Smoke, "reboot"); !ok || st.OK != nil || !strings.Contains(st.Detail, "reboot count") {
+		t.Errorf("reboot: %+v, want ok null naming the reboot count", st)
+	}
+	if typedInto(d, isReboot) {
+		t.Error("the guest was told to reboot")
+	}
+	if left := leftovers(d); len(left) > 0 {
+		t.Errorf("smoke left %q", left)
+	}
+}
+
+// What a guest prints into a tab isn't the app's count.
+func TestSmokeReadsTheRebootCountFromTheDumpsOwnLines(t *testing.T) {
+	if got := parseVM("state=Running phase=Running\n|1| guest reboots=7\n").reboots; got != nil {
+		t.Errorf("reboots = %d from a transcript line", *got)
+	}
+	got := parseVM("state=Running phase=Running\nguest reboots=7\n|1| guest reboots=9\n").reboots
+	if got == nil || *got != 7 {
+		t.Errorf("reboots = %v, want 7", got)
 	}
 }
 

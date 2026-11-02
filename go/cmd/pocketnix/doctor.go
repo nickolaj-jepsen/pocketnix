@@ -576,10 +576,6 @@ const (
 	smokePTYFile = "/tmp/pocketnix-smoke-pty"
 	// smokeToken is what the listener answers.
 	smokeToken = "pocketnix-smoke-forward"
-	// transcriptRows mirrors Tabs.TRANSCRIPT_ROWS: a dump of that many lines holds a whole transcript.
-	transcriptRows = 5000
-	// rebootLine is the console's line in AvfEngine.onStopped for a guest reboot.
-	rebootLine = "[pocketnix: the guest rebooted; starting it again]"
 	// wakeLockTag mirrors VmService's wake lock tag.
 	wakeLockTag = "pocketnix:guest"
 	// guestNotificationTag mirrors GuestNotifications.TAG.
@@ -747,6 +743,8 @@ type smokeVM struct {
 	phase, gpu    string
 	gui, guestRam bool
 	apps          []string
+	// reboots is the guest reboots the app counted, nil from an app that predates the count.
+	reboots *int
 }
 
 var (
@@ -754,6 +752,8 @@ var (
 	dumpEngine = regexp.MustCompile(`^engine gpu=(\S+) .*\bguestRam=(\S+)`)
 	dumpGUI    = regexp.MustCompile(`^gui connected=true ready=true`)
 	dumpApps   = regexp.MustCompile(`^gui apps=\[(.*?)\] recent=`)
+	// dumpReboots matches the line Vm.debugDump adds for VmEngine.guestReboots.
+	dumpReboots = regexp.MustCompile(`^guest reboots=(\d+)$`)
 	// phaseRunning matches the state line once the agent answered (VmPhase.Running).
 	phaseRunning = regexp.MustCompile(`^state=\S+ phase=Running\b`)
 )
@@ -769,6 +769,11 @@ func parseVM(dump string) smokeVM {
 	v.gui = ownLine(dump, dumpGUI) != nil
 	if m := ownLine(dump, dumpApps); m != nil && m[1] != "" {
 		v.apps = strings.Split(m[1], ", ")
+	}
+	if m := ownLine(dump, dumpReboots); m != nil {
+		if n, err := strconv.Atoi(m[1]); err == nil {
+			v.reboots = &n
+		}
 	}
 	return v
 }
@@ -1457,29 +1462,19 @@ func (s *smoker) closeTab(tab int) error {
 	return nil
 }
 
-// countLine is how many of tab's transcript lines in dump hold text.
-func countLine(dump string, tab int, text string) int {
-	n := 0
-	prefix := fmt.Sprintf("|%d| ", tab)
-	for _, l := range strings.Split(dump, "\n") {
-		if strings.HasPrefix(l, prefix) && strings.Contains(l, text) {
-			n++
-		}
-	}
-	return n
-}
-
 // reboot reboots the guest from a tab, and waits for the app to boot it
 // again and its agent to answer.
 func (s *smoker) reboot() smokeStep {
 	const name = "reboot"
-	// Tab 0 is the console.
-	console, err := s.ctl.dump(0, transcriptRows)
+	dump, err := s.ctl.dump(-1, 1)
 	if err != nil {
-		return stepFail(name, "reading the console: %v", err)
+		return stepFail(name, "reading the app's reboot count: %v", err)
 	}
-	before := countLine(console, 0, rebootLine)
-	// That read can take seconds, and past here the guest goes down.
+	before := parseVM(dump).reboots
+	if before == nil {
+		return stepSkip(name, "the app's dump has no guest reboot count (a build older than this CLI?), so a reboot couldn't be told from a VM stop; the guest wasn't rebooted")
+	}
+	// Past here the guest goes down.
 	if s.ctx.Err() != nil {
 		return stepSkip(name, "interrupted")
 	}
@@ -1502,7 +1497,7 @@ func (s *smoker) reboot() smokeStep {
 	failed := regexp.MustCompile("^" + regexp.QuoteMeta(p) + `-exit=([1-9]\d*)\s*$`)
 	var status []string
 	// The agent goes before the VM stops, and the phase with it; small dumps
-	// keep the polling light, and the console is read once at the end.
+	// keep the polling light.
 	err = pollUntil(s.ctx, smokeTimes.reboot, func() (bool, error) {
 		dump, err := s.ctl.dump(-1, 1)
 		if err != nil || !parseVM(dump).running() {
@@ -1520,15 +1515,13 @@ func (s *smoker) reboot() smokeStep {
 	case err != nil:
 		return fail("the VM stayed Running after systemctl reboot: %v", err)
 	}
-	if _, _, err := s.ctl.waitDump(s.ctx, phaseRunning, smokeTimes.boot); err != nil {
+	_, dump, err = s.ctl.waitDump(s.ctx, phaseRunning, smokeTimes.boot)
+	if err != nil {
 		return fail("the guest went down, but its agent didn't answer again: %v", err)
 	}
 	took := time.Since(start).Round(time.Second)
-	if console, err = s.ctl.dump(0, transcriptRows); err != nil {
-		return fail("reading the console: %v", err)
-	}
-	if countLine(console, 0, rebootLine) <= before {
-		return fail("the agent answered again in %s, but the console has no new %q: the app didn't see a reboot", took, rebootLine)
+	if after := parseVM(dump).reboots; after == nil || *after <= *before {
+		return fail("the agent answered again in %s, but the app counted no guest reboot: the VM stopped and started some other way", took)
 	}
 	if err := s.closeTab(tab); err != nil {
 		return stepFail(name, "rebooted, Running again in %s, but its ended tab %d didn't close: %v", took, tab, err)
