@@ -256,10 +256,11 @@ printf %%s %[6]s | %[4]stee %[7]s >/dev/null
 `, adb.ShellQuote(deployGuestRoot+deployRoots), adb.ShellQuote(out), c.root(), c.sudo(),
 		c.dropInDir(), adb.ShellQuote(dropIn), c.dropIn(), c.systemctl(), adb.ShellQuote(c.unit), libsRoot)
 	// The restart may cut this session before it answers.
-	if _, err := g.run(script); err != nil && !errors.Is(err, errGuestUnreachable) {
+	_, err = g.run(script)
+	if err != nil && !errors.Is(err, errGuestUnreachable) {
 		return err
 	}
-	if err := g.awaitRestart(c, st, exe); err != nil {
+	if err := g.awaitRestart(c, st, exe, err != nil); err != nil {
 		return fmt.Errorf("%w\nIf ssh still reaches it, pocketnix deploy --remove %s brings back the system's build.", err, c.name)
 	}
 	fmt.Fprintf(o.log, "%s: %s runs %s until the guest reboots; pocketnix deploy --remove %s ends it\n", o.host, c.unit, exe, c.name)
@@ -563,11 +564,12 @@ func removeDeploy(o *deployOpts, g deployGuest, c deployComponent) error {
 		return err
 	}
 	script += fmt.Sprintf("%s --no-block restart %s\n", c.systemctl(), adb.ShellQuote(c.unit))
-	if _, err := g.run(script); err != nil && !errors.Is(err, errGuestUnreachable) {
+	_, err = g.run(script)
+	if err != nil && !errors.Is(err, errGuestUnreachable) {
 		return err
 	}
 	system, _, _ := strings.Cut(st.execStart, " ")
-	if err := g.awaitRestart(c, st, system); err != nil {
+	if err := g.awaitRestart(c, st, system, err != nil); err != nil {
 		return err
 	}
 	fmt.Fprintf(o.log, "%s: %s runs the system's %s again\n", o.host, c.unit, system)
@@ -803,8 +805,11 @@ func (c deployComponent) crashed(exe, why string) error {
 
 // awaitRestart waits until the unit runs a new invocation of exe, reconnecting
 // while the restart has cut ssh, and that invocation stays active for
-// deploySettle without the unit's NRestarts going up where it can be read.
-func (g deployGuest) awaitRestart(c deployComponent, before deployState, exe string) error {
+// deploySettle without the unit's NRestarts going up where it can be read. lost
+// says ssh dropped before the script that changes the unit answered, so that
+// until deployReconnect an ExecStart other than exe may still change; a script
+// that answered has done its part, and such an ExecStart fails at once.
+func (g deployGuest) awaitRestart(c deployComponent, before deployState, exe string, lost bool) error {
 	script := fmt.Sprintf("%[1]s show -P ExecStart %[2]s\necho \"invocation $(%[1]s show -P InvocationID %[2]s)\"\necho \"state $(%[1]s show -P ActiveState %[2]s)\"\necho \"restarts $(%[1]s show -P NRestarts %[2]s)\"\n",
 		c.systemctl(), adb.ShellQuote(c.unit))
 	deadline := time.Now().Add(deployReconnect)
@@ -834,10 +839,10 @@ func (g deployGuest) awaitRestart(c deployComponent, before deployState, exe str
 					restarts = parseRestarts(v)
 				}
 			}
-			if path != exe {
+			if path != exe && !lost {
 				return fmt.Errorf("%s's ExecStart runs %q, not %s", c.unit, path, exe)
 			}
-			active := invocation != before.invocation && state == "active"
+			active := path == exe && invocation != before.invocation && state == "active"
 			if settling != "" && (!active || invocation != settling) {
 				return c.crashed(exe, fmt.Sprintf("invocation %s gave way to %s, which is %s", settling, invocation, state))
 			}
@@ -859,9 +864,12 @@ func (g deployGuest) awaitRestart(c deployComponent, before deployState, exe str
 					return nil
 				}
 			}
-			err = fmt.Errorf("%s is %s, invocation %s", c.unit, state, invocation)
+			err = fmt.Errorf("%s runs %q and is %s, invocation %s", c.unit, path, state, invocation)
 		}
 		if time.Now().After(deadline) {
+			if lost {
+				return fmt.Errorf("%s didn't come back running %s in %s: %w\nssh dropped while the deploy's script ran, so the guest may still apply the change.\n%s", c.unit, exe, deployReconnect, err, deployRecovery)
+			}
 			return fmt.Errorf("%s didn't come back running %s in %s: %w\n%s", c.unit, exe, deployReconnect, err, deployRecovery)
 		}
 		time.Sleep(wait)

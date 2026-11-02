@@ -34,7 +34,29 @@ if [ "$host" != "$FAKE_GUEST_HOST" ] || { [ -n "$FAKE_SSH_CONFIG" ] && [ "$cfg" 
   echo "ssh: Could not resolve hostname $host" >&2
   exit 255
 fi
-PATH="$FAKE_GUEST_BIN:$PATH" FAKE_UID=1000 sh -c "$*"
+input=$(cat)
+# A dropped connection takes the script that changes the unit along, and the
+# guest finishes it after pending-after more calls, or with no such file, never.
+if [ -e "$FAKE_GUEST/pending-after" ] && [ -e "$FAKE_GUEST/pending-script" ]; then
+  n=$(cat "$FAKE_GUEST/pending-after")
+  if [ "$n" -le 0 ]; then
+    PATH="$FAKE_GUEST_BIN:$PATH" FAKE_UID=1000 sh "$FAKE_GUEST/pending-script"
+    rm -f "$FAKE_GUEST/pending-script" "$FAKE_GUEST/pending-after"
+  else
+    echo $((n - 1)) > "$FAKE_GUEST/pending-after"
+  fi
+fi
+case $input in
+*daemon-reload*)
+  if [ -e "$FAKE_GUEST/drop-script" ]; then
+    rm -f "$FAKE_GUEST/drop-script"
+    printf '%s\n' "$input" > "$FAKE_GUEST/pending-script"
+    echo "client_loop: send disconnect: Broken pipe" >&2
+    exit 255
+  fi
+  ;;
+esac
+printf '%s\n' "$input" | PATH="$FAKE_GUEST_BIN:$PATH" FAKE_UID=1000 sh -c "$*"
 status=$?
 # Restarting the agent cuts the session it rides.
 if [ -e "$FAKE_GUEST/cut" ]; then
@@ -129,6 +151,7 @@ FAKE_UID=0 exec "$@"
 `
 
 const fakeGuestNixStore = `#!/bin/sh
+[ ! -e "$FAKE_GUEST/nix-store-fails" ] || { echo "error: disk full" >&2; exit 1; }
 if [ "$1" = --query ] && [ "$2" = --requisites ]; then
   [ -e "$FAKE_GUEST$3" ] || { echo "error: path '$3' is not valid" >&2; exit 1; }
   cat "$FAKE_GUEST/closures/${3##*/}" 2>/dev/null || echo "$3"
@@ -189,6 +212,12 @@ show)
   case $prop in
     FragmentPath) echo "$frags/$unit" ;;
     ExecStart)
+      # While it reloads, systemd can answer with nothing at all.
+      if [ -e "$G/blank-execstart" ]; then
+        rm -f "$G/blank-execstart"
+        echo
+        exit 0
+      fi
       loaded=$(cat "$s/$unit.loaded")
       echo "{ path=${loaded%% *} ; argv[]=$loaded ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }"
       ;;
@@ -592,6 +621,83 @@ func TestDeployTrustsAUnitThatStaysUp(t *testing.T) {
 		g.write("state/system/pocketnix-agent.service.restarts", "3\n")
 		if err := runDeploy(deployAgent); err != nil {
 			t.Error(err)
+		}
+	})
+}
+
+// A timeout or a dropped ssh says nothing about how far the script got: an old
+// ExecStart may still change.
+func TestDeployOverALostConnection(t *testing.T) {
+	deployAgent := []string{"--host", deployHost, "--flake", "/fake/flake", "agent"}
+	const crossAgent = "/nix/store/fakehash-pocketnix-cross-aarch64/bin/pocketnix-agent"
+
+	t.Run("the guest finishes the script later", func(t *testing.T) {
+		g := newFakeGuest(t)
+		g.write("drop-script", "")
+		g.write("pending-after", "2\n")
+		g.write("blank-execstart", "")
+		if err := runDeploy(deployAgent); err != nil {
+			t.Fatal(err)
+		}
+		if got := g.running(); !strings.HasPrefix(got, crossAgent) {
+			t.Errorf("the agent runs %q, want %s", got, crossAgent)
+		}
+	})
+
+	t.Run("the guest never does", func(t *testing.T) {
+		g := newFakeGuest(t)
+		deployReconnect = 200 * time.Millisecond
+		g.write("drop-script", "")
+		err := runDeploy(deployAgent)
+		if err == nil || !strings.Contains(err.Error(), "come back") || !strings.Contains(err.Error(), "may still") {
+			t.Errorf("err = %v, want the deadline's failure saying the guest may still apply it", err)
+		}
+		if got := g.running(); got != "" {
+			t.Errorf("the agent was restarted, into %q", got)
+		}
+	})
+
+	t.Run("remove", func(t *testing.T) {
+		g := newFakeGuest(t)
+		if err := runDeploy(deployAgent); err != nil {
+			t.Fatal(err)
+		}
+		g.write("drop-script", "")
+		g.write("pending-after", "2\n")
+		if err := runDeploy([]string{"--host", deployHost, "--remove", "agent"}); err != nil {
+			t.Fatal(err)
+		}
+		if got := g.running(); got != systemAgent {
+			t.Errorf("after --remove the agent runs %q, want the system's %q", got, systemAgent)
+		}
+	})
+}
+
+// The script having answered, nothing is left to wait for.
+func TestDeployFailsAtOnceWhenTheScriptDid(t *testing.T) {
+	deployAgent := []string{"--host", deployHost, "--flake", "/fake/flake", "agent"}
+
+	t.Run("a failing command", func(t *testing.T) {
+		g := newFakeGuest(t)
+		g.write("nix-store-fails", "")
+		err := runDeploy(deployAgent)
+		if err == nil || !strings.Contains(err.Error(), "disk full") {
+			t.Errorf("err = %v, want the script's own failure", err)
+		}
+		if got := g.running(); got != "" {
+			t.Errorf("the agent was restarted, into %q", got)
+		}
+	})
+
+	// The compositor's restart doesn't cut ssh, so the script answers.
+	t.Run("another drop-in winning", func(t *testing.T) {
+		g := newFakeGuest(t)
+		g.withCompositor("matching")
+		const other = "/nix/store/other-compositor/bin/pocketnix-compositor"
+		g.write(userDropIn("pocketnix-compositor.service.d/zz-other.conf"), "[Service]\nExecStart=\nExecStart="+other+"\n")
+		err := runDeploy([]string{"--host", deployHost, "--flake", "/fake/flake", "--native", "compositor"})
+		if err == nil || !strings.Contains(err.Error(), other) || strings.Contains(err.Error(), "come back") {
+			t.Errorf("err = %v, want it to name %s, without a wait for the unit", err, other)
 		}
 	})
 }
