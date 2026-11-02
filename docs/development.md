@@ -50,6 +50,72 @@ opens with what it covers, and the NixOS VM tests run on x86_64 only.
 - A NixOS VM test runs interactively with
   `nix run .#checks.x86_64-linux.<test>.driverInteractive`.
 
+### Booting the image without the app
+
+The adb shell can start an AVF VM of its own with
+`/apex/com.android.virt/bin/vm run`, unrooted, on a user build. Use it to
+check a new phone, or a kernel or image change, without the app and without
+touching the app's VM. On the Pixel 8 Pro (GrapheneOS, Android 17) the
+example image boots this way to its autologin, and the console file shows
+u-boot, the EFI stub, the initrd and systemd.
+
+`vm` opens the config, the disk and the console file itself and hands
+virtmgr their descriptors, so all of them can live in `/data/local/tmp`.
+Push the image there in chunks (the USB trap in `AGENTS.md`), skipping the
+empty ones so it stays sparse:
+
+```bash
+nix build .#example-image
+img=$(echo result/*.raw) size=$(stat -L -c %s result/*.raw)
+d=/data/local/tmp/pn
+mib=32 # provision's chunkSize
+adb shell mkdir -p $d
+adb shell truncate -s "$size" $d/disk.img
+for ((i = 0; i * (mib << 20) < size; i++)); do
+  dd if="$img" of=/tmp/chunk bs=${mib}M skip=$i count=1 iflag=fullblock status=none
+  cmp -s -n "$(stat -c %s /tmp/chunk)" /tmp/chunk /dev/zero && continue
+  adb push -z zstd /tmp/chunk $d/chunk
+  adb shell dd if=$d/chunk of=$d/disk.img bs=1M seek=$((i * mib)) conv=notrunc
+done
+adb shell rm $d/chunk
+```
+
+Push this config as `$d/vm.json`:
+
+```json
+{
+  "platform_version": "~1.0",
+  "bootloader": "/apex/com.android.virt/etc/u-boot.bin",
+  "disks": [{"image": "/data/local/tmp/pn/disk.img", "writable": true}],
+  "memory_mib": 512
+}
+```
+
+Then boot it, read the console from another terminal, and clean up:
+
+```bash
+adb shell /apex/com.android.virt/bin/vm info   # an "Available OS list" line means shell reached virtmgr
+adb shell 'timeout 300 /apex/com.android.virt/bin/vm run --console /data/local/tmp/pn/console.txt /data/local/tmp/pn/vm.json < /dev/null'
+adb shell cat /data/local/tmp/pn/console.txt
+adb shell rm -r /data/local/tmp/pn
+```
+
+- The VM lives as long as `vm` does, so an adb drop ends it too. `timeout`
+  bounds it, and `adb shell 'kill $(pidof vm)'` ends it early without
+  touching the app's VM, which runs under no `vm` process.
+- `vm run` ignores the JSON keys it doesn't read, and some it does read
+  lose to its flags: the VM's name comes from `--name` (`vm list` shows
+  `VmRun` otherwise) and its CPUs from `--cpu-topology` (one by default).
+- The VM has no network, so the guest's DHCP client waits out its timeout.
+- The console here is output only. With `/dev/null` on stdin, crosvm logs
+  `console input thread exited with error: failed creating WaitContext:
+  Operation not permitted`, and the guest boots regardless. crosvm's own log
+  prints on `vm`'s output.
+- Pick `memory_mib` to fit beside the app's VM when one runs (`MemAvailable`
+  in `/proc/meminfo`).
+- The copy takes the phone's free storage, which a running app guest counts
+  as its own room, so delete it as soon as you're done.
+
 ## Run the app without a phone
 
 Debug builds can talk to an agent over TCP instead of booting a VM, so the UI
