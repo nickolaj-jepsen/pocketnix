@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nickolaj-jepsen/pocketnix/go/internal/adb"
 )
 
 // The test binary doubles as a fake adb: tests put a symlink named adb to it
@@ -185,7 +187,7 @@ func fakeADB(args []string) int {
 			}
 			return 1
 		}
-		line, ok := strings.CutSuffix(args[1], "; echo pocketnix-exit=$?")
+		line, ok := strings.CutSuffix(args[1], "; echo "+adb.ShellExitMarker+"$?")
 		if !ok {
 			fmt.Fprintln(os.Stderr, "fake adb: shell without exit marker")
 			return 1
@@ -199,7 +201,7 @@ func fakeADB(args []string) int {
 		}
 		out, status := fakeShell(state, line, logEvent)
 		fmt.Print(out)
-		fmt.Printf("pocketnix-exit=%d\n", status)
+		fmt.Printf("%s%d\n", adb.ShellExitMarker, status)
 	default:
 		fmt.Fprintln(os.Stderr, "fake adb: unknown command", args)
 		return 1

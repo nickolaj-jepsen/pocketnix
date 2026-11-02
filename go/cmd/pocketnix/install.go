@@ -194,7 +194,7 @@ func (o *installOpts) run() error {
 	prov := provider{dev: dev, authority: o.pkg() + ".provision"}
 	s := swap{backup: backup}
 	// pm exits 1 for a package that isn't installed; anything else could hide a running VM.
-	out, status, err := shellStatus(dev, "pm path "+o.pkg())
+	out, status, err := dev.ShellStatus("pm path " + o.pkg())
 	if err == nil && status > 1 {
 		err = fmt.Errorf("pm path exited %d", status)
 	}
@@ -306,7 +306,7 @@ func (o *installOpts) refuseDowngrade(incoming, installed int64, backup string) 
 // checkNoVM errors if a VM process runs for the app, or adb can't show the
 // processes. With none, an install has no VM to kill.
 func (o *installOpts) checkNoVM(dev adb.Device) error {
-	out, status, err := shellStatus(dev, vmProcessesCommand)
+	out, status, err := dev.ShellStatus(vmProcessesCommand)
 	if err == nil && (status != 0 || strings.TrimSpace(out) == "") {
 		err = fmt.Errorf("%s exited %d, printing %q", vmProcessesCommand, status, out)
 	}
@@ -342,7 +342,7 @@ func removeBackup(backup string) error {
 // unchanged one means the old build is still there, and the stop was all this
 // run did to it. Otherwise it's leftChanged's.
 func (o *installOpts) installFailed(dev adb.Device, prov provider, err error, s swap) error {
-	after, status, perr := shellStatus(dev, "pm path "+o.pkg())
+	after, status, perr := dev.ShellStatus("pm path " + o.pkg())
 	if perr != nil || status > 1 {
 		return o.leftChanged(err, s, "The phone doesn't say whether the build changed.")
 	}

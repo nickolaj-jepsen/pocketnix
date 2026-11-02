@@ -185,30 +185,9 @@ func probe(dev adb.Device, pkg string) doctorReport {
 	return r
 }
 
-// shellExitMarker is adb.Device.Shell's: what precedes a shell command's exit status.
-const shellExitMarker = "pocketnix-exit="
-
-// shellStatus runs cmdline in dev's shell and returns its stdout and exit
-// status; err is only adb's own failure.
-func shellStatus(dev adb.Device, cmdline string) (string, int, error) {
-	out, err := dev.Run("shell", cmdline+"; echo "+shellExitMarker+"$?")
-	if err != nil {
-		return "", -1, err
-	}
-	i := strings.LastIndex(out, shellExitMarker)
-	if i < 0 {
-		return "", -1, fmt.Errorf("adb shell %s: no exit status in output", cmdline)
-	}
-	status, err := strconv.Atoi(strings.TrimSpace(out[i+len(shellExitMarker):]))
-	if err != nil {
-		return "", -1, fmt.Errorf("adb shell %s: exit status %q", cmdline, out[i+len(shellExitMarker):])
-	}
-	return out[:i], status, nil
-}
-
 // shellOK is a command's trimmed output, nil unless it exited 0 printing some.
 func shellOK(dev adb.Device, cmdline string) *string {
-	out, status, err := shellStatus(dev, cmdline)
+	out, status, err := dev.ShellStatus(cmdline)
 	if out = strings.TrimSpace(out); err != nil || status != 0 || out == "" {
 		return nil
 	}
@@ -258,7 +237,7 @@ func probeDevice(dev adb.Device) doctorDevice {
 		d.SoC = &s
 	}
 	// pm path exits 1, printing nothing, for a package that isn't installed.
-	switch out, status, err := shellStatus(dev, "pm path "+grapheneOSPackage); {
+	switch out, status, err := dev.ShellStatus("pm path " + grapheneOSPackage); {
 	case err != nil:
 	case status == 0:
 		d.OS = osGrapheneOS
@@ -278,7 +257,7 @@ func probeAVF(dev adb.Device) doctorAVF {
 		VMInfo:               []string{},
 	}
 	// pm has-feature prints true or false, exiting 0 or 1.
-	if out, status, err := shellStatus(dev, "pm has-feature "+avfFeature); err == nil && (status == 0 || status == 1) {
+	if out, status, err := dev.ShellStatus("pm has-feature " + avfFeature); err == nil && (status == 0 || status == 1) {
 		a.Feature = propBool(ptr(strings.TrimSpace(out)))
 	}
 	if out := shellOK(dev, "pm list packages --apex-only --show-versioncode"); out != nil {
@@ -286,11 +265,11 @@ func probeAVF(dev adb.Device) doctorAVF {
 			a.ApexVersion = &m[1]
 		}
 	}
-	_, status, err := shellStatus(dev, "ls "+ubootPath)
+	_, status, err := dev.ShellStatus("ls " + ubootPath)
 	a.UBoot = err == nil && status == 0
 	// vm info exits non-zero after its sysprop lines when it can't reach
 	// virtmgr; those lines still count. 126 and 127 are the shell's own.
-	if out, status, err := shellStatus(dev, vmTool+" info"); err == nil && status != 126 && status != 127 {
+	if out, status, err := dev.ShellStatus(vmTool + " info"); err == nil && status != 126 && status != 127 {
 		for _, line := range strings.Split(out, "\n") {
 			if line = strings.TrimSpace(line); line != "" {
 				a.VMInfo = append(a.VMInfo, line)
@@ -304,7 +283,7 @@ var versionName = regexp.MustCompile(`(?m)^\s*versionName=(\S+)`)
 
 func probeApp(dev adb.Device, pkg string) doctorApp {
 	a := doctorApp{Package: pkg}
-	if _, status, err := shellStatus(dev, "pm path "+pkg); err != nil || status != 0 {
+	if _, status, err := dev.ShellStatus("pm path " + pkg); err != nil || status != 0 {
 		a.CapsError = "the app isn't installed"
 		return a
 	}
@@ -959,7 +938,7 @@ func (s *smoker) forward() smokeStep {
 	if _, err := strconv.Atoi(phone); err != nil {
 		return stepFail(name, "guest port %s is allowed, without a phone port (phone=%s)", port, phone)
 	}
-	out, _, err := shellStatus(s.dev, "timeout 10 nc 127.0.0.1 "+phone+" </dev/null")
+	out, _, err := s.dev.ShellStatus("timeout 10 nc 127.0.0.1 " + phone + " </dev/null")
 	if err != nil {
 		return stepFail(name, "connecting to phone port %s: %v", phone, err)
 	}
@@ -1123,7 +1102,7 @@ func (s *smoker) notify() smokeStep {
 	// Selects only this app's records and the token: other apps' text mustn't leave the phone.
 	cmdline := "dumpsys notification --noredact | grep -e " + adb.ShellQuote("NotificationRecord.*pkg="+s.pkg+" ") + " -e " + text
 	err = pollUntil(s.ctx, smokeTimes.notify, func() (bool, error) {
-		out, _, err := shellStatus(s.dev, cmdline)
+		out, _, err := s.dev.ShellStatus(cmdline)
 		return err == nil && notificationPosted(out, s.pkg, text), err
 	})
 	if err != nil {
@@ -1135,7 +1114,7 @@ func (s *smoker) notify() smokeStep {
 // wakeLock is whether the app with uids (appUID's) holds its wake lock.
 func (s *smoker) wakeLock(uids string) (bool, error) {
 	// grep exits 1 when no line matches.
-	out, status, err := shellStatus(s.dev, "dumpsys power | grep -F "+wakeLockTag)
+	out, status, err := s.dev.ShellStatus("dumpsys power | grep -F " + wakeLockTag)
 	if err != nil || status > 1 {
 		return false, fmt.Errorf("dumpsys power: %v (status %d)", err, status)
 	}

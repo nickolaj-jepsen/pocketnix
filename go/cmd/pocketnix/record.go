@@ -45,7 +45,7 @@ const (
 )
 
 // shellExit is a shell command's status at the end of its stdout.
-var shellExit = regexp.MustCompile(regexp.QuoteMeta(shellExitMarker) + `(\d+)\s*$`)
+var shellExit = regexp.MustCompile(regexp.QuoteMeta(adb.ShellExitMarker) + `(\d+)\s*$`)
 
 // tailWriter keeps the last max bytes written to it.
 type tailWriter struct {
@@ -223,7 +223,7 @@ func startRecording(parent string, dev adb.Device, smoke bool) (_ *recording, er
 // stdout ends in the marker: adb itself exits 0 then.
 func (r *recording) trace(argv []string, start time.Time, status int, stdout string) {
 	kind := "exit=" + strconv.Itoa(status)
-	if m := shellExit.FindStringSubmatch(stdout[max(0, len(stdout)-len(shellExitMarker)-16):]); m != nil && status == 0 {
+	if m := shellExit.FindStringSubmatch(stdout[max(0, len(stdout)-len(adb.ShellExitMarker)-16):]); m != nil && status == 0 {
 		kind = "exit=" + m[1]
 	}
 	r.logLine(start, kind, strings.Join(argv, " "))
