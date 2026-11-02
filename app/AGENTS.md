@@ -63,9 +63,21 @@ that cross directories.
   virtmgr the app's memfd (`avc: denied { read write } … /memfd:…`) and
   virtmgr dies, so `createVm` throws `DeadObjectException`, and so does every
   later start until the app's process restarts.
-- A 4 GiB VM on guest RAM that has touched all of it swap-thrashes an 11 GB
-  phone with other apps open: the phone stops answering. `GuestRam.PHONE_SHARE`
-  is the limit the app keeps to.
+- Android 17's `MemoryLimiter` (`com.android.server.am`) sets `memory.high` and
+  `memory.swap.max` on the app's process cgroup, which virtmgr and crosvm share,
+  so all guest memory counts, on either RAM path. `/vendor/etc/memory-limiter-config.xml`
+  holds the limits by RAM class: here 6 GiB while top, 3 GiB as a foreground
+  service, and a cached process keeps its last value. A guest that touches past
+  the limit with the app out of front seizes the phone: crosvm's RSS collapses,
+  the kernel takes most cores and ssh dies while adb stays up, and bringing the
+  app to the front recovers it in about 10 s. `system_server` logs `MemoryLimiter:
+  onLimitExceeded`. `GuestRam.PHONE_SHARE` picks the RAM path; it doesn't keep a
+  VM under the limit. By source, past memHigh plus swap the process is killed
+  (`MemoryLimiter:AnonSwap`).
+- `cmd activity memory-limiter` works from plain adb. `status` prints the limits.
+  `manual <app pid> <MiB>` sets both files, though its help says percent, and
+  `manual <pid> none` lifts nothing. `ignore <uid>` holds one uid until reboot
+  and, by source, drops later limits, `manual` included, so raise the limit first.
 - The host refuses crosvm's own `sched_setattr` and `sched_setaffinity` for
   its vCPUs ("Failed to boost vcpu util", "Failed to set CPU affinity":
   EPERM), so `--host-cpu-topology`'s pinning and `boostUclamp` do nothing; the

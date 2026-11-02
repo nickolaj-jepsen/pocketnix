@@ -25,6 +25,11 @@ in `docs/development.md`.
   (`pocketnix.guest.managed.cpuQuota`); start one only through the app.
 - Uninstalling the app, clearing its data or `provision --replace` deletes
   the VM's disk: never do it to a phone's working VM without asking.
+- Before a device experiment, read what the OS already says: system-wide
+  logcat, `dumpsys`, the device's config (`/vendor/etc`), the AOSP source of
+  its release branch, the Android version's behaviour-changes page and
+  `android --no-metrics docs search`. A soak comes last, and every run states
+  which hypothesis it rules out.
 
 ## Keeping docs and tests from drifting
 

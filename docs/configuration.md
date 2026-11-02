@@ -180,6 +180,12 @@ The app tells the guest about the phone:
   stops: AVF's memory balloon can't hand it back to Android. A bigger VM runs
   on crosvm's RAM, where free guest memory goes back through the balloon, and
   its windows' frames go over the stream. The memory setting says which.
+- Android 17 limits each app's memory by the phone's RAM
+  ([App memory limits](https://developer.android.com/about/versions/17/behavior-changes-all)),
+  and the VM counts as the app's on either kind of RAM. The limit is lower while
+  the app isn't in front, despite its foreground service: a guest that uses more
+  than that can freeze the phone until the app comes back to the front. On a
+  phone with limits, `/vendor/etc/memory-limiter-config.xml` holds them.
 
 ## What the module trims on AVF
 
