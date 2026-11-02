@@ -136,9 +136,14 @@ with `pocketnix ssh-proxy` as the ssh `ProxyCommand`:
 
 ```
 Host phone-usb
+  User alice
   HostKeyAlias phone
   ProxyCommand pocketnix ssh-proxy --port 2022
 ```
+
+`pocketnix deploy` runs plain `ssh phone-usb`, so it needs that `User`; without
+one, pass `--host alice@phone-usb`. For the compositor it has to be the guest's
+session user, since deploy goes through `systemctl --user`.
 
 nixos-rebuild copies the system as the ssh user, `--sudo` or not, and the
 guest's Nix trusts only root (`nix.settings.trusted-users`), so it refuses

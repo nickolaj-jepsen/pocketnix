@@ -234,7 +234,9 @@ pocketnix deploy --remove compositor
 - Only `pocketnix-agent` changes. The user units that run `pocketnix-guest`
   keep the system's package.
 - `--ssh-config <file>` hands `-F <file>` to every ssh and `nix copy` call, so
-  the host, user and ProxyCommand can come from a config of their own.
+  the host, user and ProxyCommand can come from a config of their own. Without a
+  `User` in the config, `--host <user>@phone-usb` names the user, which for the
+  compositor has to be the guest's session user (`systemctl --user`).
 
 ### The compositor's library rewrite
 
