@@ -154,12 +154,7 @@ func parseProvision(args []string) (*provisionOpts, error) {
 	return o, nil
 }
 
-func (o *provisionOpts) pkg() string {
-	if o.debug {
-		return releasePackage + ".debug"
-	}
-	return releasePackage
-}
+func (o *provisionOpts) pkg() string { return appPackage(o.debug) }
 
 func (o *provisionOpts) logf(format string, args ...any) {
 	fmt.Fprintf(o.log, "provision: "+format+"\n", args...)

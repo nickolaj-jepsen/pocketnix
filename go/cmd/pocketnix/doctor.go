@@ -99,12 +99,7 @@ func parseDoctor(args []string) (*doctorOpts, error) {
 	return o, nil
 }
 
-func (o *doctorOpts) pkg() string {
-	if o.debug {
-		return debugPackage
-	}
-	return releasePackage
-}
+func (o *doctorOpts) pkg() string { return appPackage(o.debug) }
 
 // runDoctor prints the report, and returns exitStatus(1) on a fail verdict, a
 // failed smoke step or a smoke run that couldn't start, so that main adds

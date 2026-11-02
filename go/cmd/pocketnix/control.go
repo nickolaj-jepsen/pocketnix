@@ -78,6 +78,14 @@ global flags:
 
 const debugPackage = releasePackage + ".debug"
 
+// appPackage is the package a command's --debug targets.
+func appPackage(debug bool) string {
+	if debug {
+		return debugPackage
+	}
+	return releasePackage
+}
+
 func runControl(args []string) error {
 	fs := flag.NewFlagSet("control", flag.ContinueOnError)
 	fs.Usage = func() { fmt.Fprint(os.Stderr, controlUsage) }
