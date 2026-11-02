@@ -137,8 +137,19 @@ func (o *installOpts) backupPath(dev adb.Device) (string, error) {
 	return filepath.Join(dir, "pocketnix", "backup", hex.EncodeToString(sum[:backupKeyBytes]), o.pkg()+".apk"), nil
 }
 
-// run never uninstalls the app: that deletes the VM's disk. A failure after
-// the VM was stopped leaves it stopped and keeps the backup.
+// swap is what a run knows before it installs: what a failure has to say and undo.
+type swap struct {
+	// backup is this phone's backup path; newBackup says this run wrote it.
+	backup    string
+	newBackup bool
+	// pmPath is pm path's answer about the build to replace, empty without one.
+	pmPath     string
+	wasRunning bool
+}
+
+// run never uninstalls the app: that deletes the VM's disk. An install that
+// fails having replaced nothing puts things back (installFailed); one that
+// replaced the app, or may have, leaves the VM stopped and keeps the backup.
 func (o *installOpts) run() error {
 	if !o.restore {
 		if err := checkAPKPackage(o.apk, o.pkg()); err != nil {
@@ -162,7 +173,7 @@ func (o *installOpts) run() error {
 	}
 
 	prov := provider{dev: dev, authority: o.pkg() + ".provision"}
-	wasRunning := false
+	s := swap{backup: backup}
 	// pm exits 1 for a package that isn't installed; anything else could hide a running VM.
 	out, status, err := shellStatus(dev, "pm path "+o.pkg())
 	if err == nil && status > 1 {
@@ -172,62 +183,118 @@ func (o *installOpts) run() error {
 		return fmt.Errorf("can't tell whether %s is installed, so not installing: %w", o.pkg(), err)
 	}
 	if status == 0 {
-		// Before the stop: a refused or failed pull leaves the VM as it was.
-		if !o.restore {
-			if err := o.backUp(dev, out, backup); err != nil {
-				return err
-			}
-		}
+		s.pmPath = out
 		st, err := prov.call("status", "")
 		if err != nil {
 			return fmt.Errorf("can't tell whether the VM is running, so not installing: %w", err)
 		}
-		wasRunning = st["running"] == "true"
+		s.wasRunning = st["running"] == "true"
+		// Before the stop: a refused or failed pull leaves the VM as it was.
+		if !o.restore {
+			if s.newBackup, err = o.backUp(dev, out, backup); err != nil {
+				return err
+			}
+		}
 	}
-	if wasRunning {
+	if s.wasRunning {
 		if err := o.stopVM(dev, prov); err != nil {
 			return err
 		}
 	}
 
-	fail := func(err error) error {
-		if _, serr := os.Stat(backup); serr == nil {
-			return fmt.Errorf("%w\nThe VM is stopped, and the replaced build is backed up: `%s` puts it back and starts the VM", err, o.restoreCommand())
-		}
-		return err
-	}
 	o.logf("installing %s", apk)
 	// -d: the backup, or an older dev build, may have a lower versionCode than the build it replaces.
 	if _, err := dev.Run("install", "-r", "-d", apk); err != nil {
-		return fail(fmt.Errorf("%w\n%s", err, signatureHint))
+		return o.installFailed(dev, prov, fmt.Errorf("%w\n%s", err, signatureHint), s)
 	}
 	for _, p := range avfPermissions {
 		if _, err := dev.Shell("pm grant " + o.pkg() + " " + p); err != nil {
-			return fail(err)
+			return o.leftChanged(err, s, "The build was replaced, but not all its permissions are granted.")
 		}
 	}
 	o.logf("granted %s", strings.Join(avfPermissions, ", "))
 	if o.restore {
-		if err := os.Remove(backup); err != nil {
+		if err := removeBackup(backup); err != nil {
 			return err
 		}
-		// The device's directory goes too, once it holds no other package's backup.
-		os.Remove(filepath.Dir(backup))
 		o.logf("restored the backup and removed it")
 	}
 
-	if o.noStart || !(wasRunning || o.restore) {
+	if o.noStart || !(s.wasRunning || o.restore) {
 		return nil
 	}
 	return o.startVM(dev, prov)
 }
 
+// removeBackup deletes a backup, and the device's directory once it holds no
+// other package's.
+func removeBackup(backup string) error {
+	if err := os.Remove(backup); err != nil {
+		return err
+	}
+	os.Remove(filepath.Dir(backup))
+	return nil
+}
+
+// installFailed is the error for an adb install that failed, having first put
+// things back if it replaced nothing: pm path changes with every install, so an
+// unchanged one means the old build is still there, and the stop was all this
+// run did to it. Otherwise it's leftChanged's.
+func (o *installOpts) installFailed(dev adb.Device, prov provider, err error, s swap) error {
+	after, status, perr := shellStatus(dev, "pm path "+o.pkg())
+	if perr != nil || status > 1 {
+		return o.leftChanged(err, s, "The phone doesn't say whether the build changed.")
+	}
+	if status != 0 {
+		after = ""
+	}
+	if strings.TrimSpace(after) != strings.TrimSpace(s.pmPath) {
+		return o.leftChanged(err, s, "The build was replaced.")
+	}
+	if s.pmPath == "" {
+		return fmt.Errorf("%w\nNothing was installed.", err)
+	}
+	if s.newBackup {
+		if rerr := removeBackup(s.backup); rerr != nil {
+			o.logf("couldn't remove this run's backup: %v", rerr)
+		}
+	}
+	const untouched = "Nothing was replaced: the installed build is untouched"
+	switch {
+	case !s.wasRunning:
+		return fmt.Errorf("%w\n%s.", err, untouched)
+	case o.noStart:
+		return fmt.Errorf("%w\n%s, and its VM stays stopped, as --no-start asks.", err, untouched)
+	}
+	if serr := o.startVM(dev, prov); serr != nil {
+		return fmt.Errorf("%w\n%s, but its VM was stopped and didn't start again: %v", err, untouched, serr)
+	}
+	return fmt.Errorf("%w\n%s, and its VM is running again.", err, untouched)
+}
+
+// leftChanged is the error for a run that leaves things as the failure did: the
+// VM down if it ran, and the backup, the way back. what says what's known of the build.
+func (o *installOpts) leftChanged(err error, s swap, what string) error {
+	vm := "The VM wasn't running"
+	if s.wasRunning {
+		vm = "The VM is stopped"
+	}
+	switch _, serr := os.Stat(s.backup); {
+	case serr != nil:
+		return fmt.Errorf("%w\n%s %s.", err, what, vm)
+	case o.restore:
+		return fmt.Errorf("%w\n%s %s, and the backup is kept: `%s` tries again and starts the VM.", err, what, vm, o.restoreCommand())
+	}
+	return fmt.Errorf("%w\n%s %s, and the build the phone had is backed up: `%s` puts it back and starts the VM.", err, what, vm, o.restoreCommand())
+}
+
 // backUp pulls the installed APK, which pmPath (pm path's answer) names, to
-// backup unless a backup exists: the first one is the owner's build.
-func (o *installOpts) backUp(dev adb.Device, pmPath, backup string) error {
+// backup unless a backup exists: the first one is the owner's build. It says
+// whether it wrote one.
+func (o *installOpts) backUp(dev adb.Device, pmPath, backup string) (bool, error) {
 	if _, err := os.Stat(backup); err == nil {
 		o.logf("keeping the earlier backup %s", backup)
-		return nil
+		return false, nil
 	}
 	var paths []string
 	for _, line := range strings.Split(pmPath, "\n") {
@@ -237,39 +304,39 @@ func (o *installOpts) backUp(dev adb.Device, pmPath, backup string) error {
 	}
 	switch len(paths) {
 	case 0:
-		return fmt.Errorf("pm path %s named no APK:\n%s", o.pkg(), pmPath)
+		return false, fmt.Errorf("pm path %s named no APK:\n%s", o.pkg(), pmPath)
 	case 1:
 	default:
-		return fmt.Errorf("%s is a split install (%d APKs), and install backs up only one; not installing", o.pkg(), len(paths))
+		return false, fmt.Errorf("%s is a split install (%d APKs), and install backs up only one; not installing", o.pkg(), len(paths))
 	}
 	remote := paths[0]
 	out, err := dev.Shell("stat -c %s " + adb.ShellQuote(remote))
 	if err != nil {
-		return err
+		return false, err
 	}
 	size, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
 	if err != nil {
-		return fmt.Errorf("size of %s: %q", remote, out)
+		return false, fmt.Errorf("size of %s: %q", remote, out)
 	}
 	if size > maxPull {
-		return fmt.Errorf("the installed APK is %d MiB, more than one adb pull can be trusted with (maxPull, %d MiB); not backing it up or installing", size>>20, maxPull>>20)
+		return false, fmt.Errorf("the installed APK is %d MiB, more than one adb pull can be trusted with (maxPull, %d MiB); not backing it up or installing", size>>20, maxPull>>20)
 	}
 	if err := os.MkdirAll(filepath.Dir(backup), 0o755); err != nil {
-		return err
+		return false, err
 	}
 	part := backup + ".part"
 	defer os.Remove(part)
 	if _, err := dev.Run("pull", remote, part); err != nil {
-		return err
+		return false, err
 	}
 	if fi, err := os.Stat(part); err != nil || fi.Size() != size {
-		return fmt.Errorf("pulled %s incompletely: want %d bytes", remote, size)
+		return false, fmt.Errorf("pulled %s incompletely: want %d bytes", remote, size)
 	}
 	if err := os.Rename(part, backup); err != nil {
-		return err
+		return false, err
 	}
 	o.logf("backed up the installed build to %s", backup)
-	return nil
+	return true, nil
 }
 
 // stopVM asks the app to stop the VM and waits until status says it has:
