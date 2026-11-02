@@ -65,7 +65,7 @@ func cannedPixel(d *fakeDevice) {
 	}
 	d.addPackages("app.grapheneos.apps")
 	d.addFile("/apex/com.android.virt/etc/u-boot.bin", []byte("u-boot"))
-	d.can("pm has-feature android.software.virtualization_framework", "true\n", 0)
+	d.can(avfFeatureCommand, "true\n", 0)
 	d.can("uname -r", "6.1.177-android14-11-ga001019bb34e\n", 0)
 	d.can("/apex/com.android.virt/bin/vm info", `Both protected and non-protected VMs are supported.
 Hypervisor version: kvm.arm-protected
@@ -141,7 +141,7 @@ func TestDoctorVerdicts(t *testing.T) {
 		}},
 		{name: "no-feature", level: levelFail, token: "virtualization_framework", setup: func(d *fakeDevice) {
 			cannedPixel(d)
-			d.can("pm has-feature android.software.virtualization_framework", "false\n", 1)
+			d.denyAVF()
 		}},
 		{name: "empty-props", level: levelWarn, token: "vm.supported", setup: func(d *fakeDevice) {
 			cannedPixel(d)
@@ -277,7 +277,7 @@ func TestDoctorApp(t *testing.T) {
 func TestDoctorText(t *testing.T) {
 	d := newFakeDevice(t)
 	cannedPixel(d)
-	d.can("pm has-feature android.software.virtualization_framework", "false\n", 1)
+	d.denyAVF()
 	out, err := stdoutOf(t, func() error { return runDoctor(nil) })
 	var status exitStatus
 	if !errors.As(err, &status) || status != 1 {
@@ -378,12 +378,8 @@ func fastSmoke(t *testing.T) {
 // cannedPath is the state path of the shell command's canned answer, for a reaction to write.
 func cannedPath(cmdline string) string { return filepath.Join("canned", fakeCannedKey(cmdline)) }
 
-const (
-	powerLocks  = "dumpsys power | grep -F pocketnix:guest"
-	wakefulness = "dumpsys power | grep -m1 mWakefulness="
-	// powerHistory is what dumpsys power keeps of a wake lock after its release, as a Pixel prints it.
-	powerHistory = "  11-02 16:59:16.878 - 10200 (dev.nickolaj.pocketnix.debug) - ACQ pocketnix:guest (partial)\n  11-02 17:00:12.971 - 10200 (dev.nickolaj.pocketnix.debug) - REL pocketnix:guest\n"
-)
+// powerHistory is what dumpsys power keeps of a wake lock after its release, as a Pixel prints it.
+const powerHistory = "  11-02 16:59:16.878 - 10200 (dev.nickolaj.pocketnix.debug) - ACQ pocketnix:guest (partial)\n  11-02 17:00:12.971 - 10200 (dev.nickolaj.pocketnix.debug) - REL pocketnix:guest\n"
 
 // writeCanned is a reaction's Write making cmdline answer out with status.
 func writeCanned(cmdline, out string, status int) map[string]string {
@@ -423,9 +419,9 @@ var (
 	reactUnnotify = fakeReaction{Typed: typedScript(unnotifyScript, "7"), Output: []string{"${1}-exit=0"},
 		Write: map[string]string{"notifications": ""}}
 	reactInhibit = fakeReaction{Typed: typedScript(inhibitScript), Output: []string{"${1}-pid=4242", "${1}-exit=0"},
-		Write: writeCanned(powerLocks, "    PARTIAL_WAKE_LOCK              'pocketnix:guest'                          ACQ=-1s2ms (uid=10200 pid=31337)\n", 0)}
+		Write: writeCanned(wakeLockCommand, "    PARTIAL_WAKE_LOCK              'pocketnix:guest'                          ACQ=-1s2ms (uid=10200 pid=31337)\n", 0)}
 	reactUninhibit = fakeReaction{Typed: typedScript(uninhibitScript, "4242"), Output: []string{"${1}-exit=0"},
-		Write: writeCanned(powerLocks, powerHistory, 0)}
+		Write: writeCanned(wakeLockCommand, powerHistory, 0)}
 	reactKill = fakeReaction{Typed: typedScript(killAppScript, `([^']+)`), Output: []string{"${1}-killed=1", "${1}-exit=0"},
 		Remove: []string{"control/windows/${2}"}}
 	reactReboot = fakeReaction{Typed: typedScript(rebootScript), Reboot: true}
@@ -445,11 +441,11 @@ func smokeDevice(t *testing.T, rs ...fakeReaction) *fakeDevice {
 	d.setGUI(smokeApps...)
 	putFile(filepath.Join(d.state, "control", "pages"), "")
 	d.react(rs...)
-	d.can(powerLocks, powerHistory, 0)
+	d.can(wakeLockCommand, powerHistory, 0)
 	// One uid per Android user, as on a phone with a work profile or Private space.
 	d.can("pm list packages -U dev.nickolaj.pocketnix.debug", "package:dev.nickolaj.pocketnix.debug uid:10200,1010200,1110200\n", 0)
-	d.can(wakefulness, "  mWakefulness=Awake\n", 0)
-	d.can("dumpsys window | grep -E 'mDreamingLockscreen=|isKeyguardShowing=|mShowingLockscreen=' || true", "    isKeyguardShowing=false\n", 0)
+	d.can(wakefulnessCommand, "  mWakefulness=Awake\n", 0)
+	d.can(keyguardCommand, "    isKeyguardShowing=false\n", 0)
 	d.can("date +%s", "1762000000\n", 0)
 	// An earlier boot's GPU failure, before smoke ran.
 	d.write("logcat", []byte("1761999000.000  4321  4400 E crosvm  : ResourceUnmapBlob: ErrUnspec\n"))
@@ -493,7 +489,7 @@ func leftovers(d *fakeDevice) []string {
 	if o := fakeOffers(d.state); o != "" {
 		left = append(left, "offer "+o)
 	}
-	if b, _ := os.ReadFile(filepath.Join(d.state, cannedPath(powerLocks))); strings.Contains(string(b), "WAKE_LOCK") {
+	if b, _ := os.ReadFile(filepath.Join(d.state, cannedPath(wakeLockCommand))); strings.Contains(string(b), "WAKE_LOCK") {
 		left = append(left, "wake lock")
 	}
 	if exists(filepath.Join(d.state, "control", "guest-pty")) {
@@ -1034,7 +1030,7 @@ func TestSmokeSkipsWithoutInputs(t *testing.T) {
 			os.Remove(filepath.Join(d.state, "control", "gui"))
 		}, tokens: map[string]string{"gpu": "GUI", "pages": "GUI"}},
 		{name: "locked", args: gpuApps, setup: func(d *fakeDevice) {
-			d.can(wakefulness, "  mWakefulness=Asleep\n", 0)
+			d.can(wakefulnessCommand, "  mWakefulness=Asleep\n", 0)
 		}, tokens: map[string]string{"gpu": "locked", "pages": "locked"}},
 		{name: "unknown-app", args: []string{"--gpu-apps", "org.example.Cube,org.example.Missing"}, tokens: map[string]string{"gpu": "org.example.Missing"}},
 		{name: "no-guest-ram", args: gpuApps, setup: func(d *fakeDevice) {

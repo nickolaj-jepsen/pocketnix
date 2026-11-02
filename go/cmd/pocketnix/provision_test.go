@@ -177,7 +177,7 @@ func TestProvisionChecksThePhoneFirst(t *testing.T) {
 		setup       func(d *fakeDevice)
 	}{
 		{"running", "running", func(d *fakeDevice) { d.setRunning(true) }},
-		{"disk", "--replace", func(d *fakeDevice) { d.write("app/files/disk.img", []byte("the guest")) }},
+		{"disk", "--replace", func(d *fakeDevice) { d.setDisk([]byte("the guest")) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := newFakeDevice(t)
@@ -217,7 +217,7 @@ func TestProvisionRefusesTheOtherPackage(t *testing.T) {
 // install, unless --force.
 func TestProvisionRefusesFailingDevice(t *testing.T) {
 	d := newFakeDevice(t)
-	d.can("pm has-feature android.software.virtualization_framework", "false\n", 1)
+	d.denyAVF()
 	img, _ := testImage(t)
 	apk := fakeAPKFile(t, "app.apk", "apk")
 	if err := provisionFor(t, "--image", img, "--apk", apk, "--no-start"); err == nil || !strings.Contains(err.Error(), "--force") {

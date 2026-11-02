@@ -405,15 +405,20 @@ func (p *phone) guest(cmdline string) (string, error) {
 	return string(out), nil
 }
 
+const (
+	wakefulnessCommand = "dumpsys power | grep -m1 mWakefulness="
+	keyguardCommand    = "dumpsys window | grep -E 'mDreamingLockscreen=|isKeyguardShowing=|mShowingLockscreen=' || true"
+)
+
 func (p *phone) locked() (bool, error) {
-	power, err := p.dev.Shell("dumpsys power | grep -m1 mWakefulness=")
+	power, err := p.dev.Shell(wakefulnessCommand)
 	if err != nil {
 		return false, err
 	}
 	if !strings.Contains(power, "Awake") {
 		return true, nil
 	}
-	win, err := p.dev.Shell("dumpsys window | grep -E 'mDreamingLockscreen=|isKeyguardShowing=|mShowingLockscreen=' || true")
+	win, err := p.dev.Shell(keyguardCommand)
 	if err != nil {
 		return false, err
 	}
