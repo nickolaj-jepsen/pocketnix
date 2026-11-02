@@ -78,6 +78,7 @@ for ((i = 0; i * (mib << 20) < size; i++)); do
   adb shell dd if=$d/chunk of=$d/disk.img bs=1M seek=$((i * mib)) conv=notrunc
 done
 adb shell rm $d/chunk
+rm /tmp/chunk
 ```
 
 Push this config as `$d/vm.json`:
@@ -270,8 +271,8 @@ it.
 rents real phones by the minute, billed to a Firebase project, and the
 devshell's `android` CLI reserves them. Use it to see how pocketnix does on a
 phone you don't own. A person runs these steps, or an agent whose current
-message from the owner says to; nothing automates a reservation. They haven't
-met a rented phone yet, so expect to correct them after the first session.
+message from the owner says to; nothing automates a reservation. None of them
+is verified on a rented phone, so read each one's output before trusting the next.
 
 Firebase gives each project 30 free minutes a month, then charges $0.15 a
 minute ([pricing](https://firebase.google.com/docs/test-lab/usage-quotas-pricing#device-streaming)).

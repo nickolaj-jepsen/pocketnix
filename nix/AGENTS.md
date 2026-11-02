@@ -59,7 +59,7 @@ that cross directories.
 - The CLI's pure-Go resolver asks DNS before /etc/hosts under NixOS's nsswitch
   order: in NixOS tests, connect by IP.
 - The Nix-built QEMU breaks if the shell leaks an `LD_LIBRARY_PATH` from a
-  newer glibc; `boot-example` unsets it.
+  newer glibc; `nix/qemu-machine.nix` unsets it for its users.
 - A NixOS test node that really switches (`switch`, not `test`) needs
   `boot.loader.grub.enable = false`: the test VM's GRUB can't install. Test
   VMs also boot without a system profile; create one before testing generations.
