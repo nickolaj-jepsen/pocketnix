@@ -341,15 +341,20 @@ rules the phone out:
    adb -s <serial> shell pm grant $pkg android.permission.POST_NOTIFICATIONS   # or the app asks, over everything else
    adb -s <serial> shell am start -n $pkg/dev.nickolaj.pocketnix.MainActivity
    adb -s <serial> shell am start -n $pkg/dev.nickolaj.pocketnix.ControlActivity -a dev.nickolaj.pocketnix.action.DEBUG_SETUP
-   until pocketnix control --serial <serial> dump | grep -e phase=Running -e setup=Failed; do sleep 5; done
+   for try in $(seq 120); do   # 10 minutes at most: the clock is running
+     dump=$(pocketnix control --serial <serial> dump --lines 1)
+     echo "$dump" | head -n 1  # the state line, where phase=AgentLate shows a boot that hangs
+     echo "$dump" | grep -q -e phase=Running -e phase=Failed -e phase=Refused -e setup=Failed && break
+     sleep 5
+   done
    ```
 
-   Setup fetches the release matching `VERSION`; for a `VERSION` not released
-   yet, see the end of [Releasing from a fork](#releasing-from-a-fork) and pass
-   the URL with `--es releaseUrl <url>`. A refused `pm grant` from `install` is
-   a finding too: it says rented phones can't run AVF apps this way. The first
-   connect also starts the guest's first rebuild, which `dump`'s `updates` lines
-   show, and smoke's timings then share the phone with it.
+   Only `phase=Running` goes on to step 3. The loop ending anywhere else, or
+   running out, is what this session came to find, so note it and go to the
+   end of this section. A refused `pm grant` from `install` is a finding too: it
+   says rented phones can't run AVF apps this way. The first connect also starts
+   the guest's first rebuild, which `dump`'s `updates` lines show, and smoke's
+   timings then share the phone with it.
 
 3. The smoke check, with the phone unlocked and pocketnix in front:
 
