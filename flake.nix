@@ -46,6 +46,9 @@
         pocketnix-cross-aarch64 = pkgs.pkgsCross.aarch64-multiplatform.callPackage ./nix/go.nix {
           subPackages = ["cmd/pocketnix-agent"];
         };
+        # `pocketnix deploy compositor`'s default. It links cross libraries the guest lacks:
+        # deploy rewrites it to the guest's own (nix/deploy-rewrite.nix).
+        pocketnix-compositor-cross-aarch64 = pkgs.pkgsCross.aarch64-multiplatform.callPackage ./nix/compositor.nix {};
       }
       // nixpkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "aarch64-linux") {
         avf-kernel = pkgs.callPackage ./nix/avf-kernel/package.nix {};
