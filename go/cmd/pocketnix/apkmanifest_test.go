@@ -93,13 +93,13 @@ func axmlStart(name int, attrs ...[]byte) []byte {
 // axmlSpec describes a compiled manifest: a package, then what the manifest and
 // application elements hold. A zero codeType leaves versionCode out.
 type axmlSpec struct {
-	pkg               string
-	code, major       uint32
-	codeType          byte
-	debuggable        *uint32
-	debuggableType    byte
-	noApplication     bool
-	blankAttrNames    bool
+	pkg            string
+	code, major    uint32
+	codeType       byte
+	debuggable     *uint32
+	debuggableType byte
+	noApplication  bool
+	blankAttrNames bool
 }
 
 // axmlManifestOf is the manifest spec describes, with attributes and resource
@@ -255,7 +255,7 @@ func TestManifestVersionAndDebuggable(t *testing.T) {
 	}
 }
 
-// A manifest compiled before this read versionCode as a string has none to give.
+// A versionCode that isn't an integer is unreadable, and the package still reads.
 func TestManifestWithoutTypedVersion(t *testing.T) {
 	m, err := parseManifest(axmlManifest(false, "package", debugPackage))
 	if err != nil || m.pkg != debugPackage || m.versionCode != nil {
