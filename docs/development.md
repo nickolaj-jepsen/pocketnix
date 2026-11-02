@@ -177,7 +177,10 @@ Before the first swap, `install` pulls the installed APK into Go's
 the phone's own serial, because adb's changes with the connection. Later
 installs leave that backup alone, so after any number of dev builds
 `--restore` brings back the one the phone started with, over USB or Wi-Fi.
-`--restore` reinstalls it, deletes it and starts the VM.
+`--restore` reinstalls it, deletes it and starts the VM. It works over a build
+too broken to answer: when the app's status call fails, it goes ahead unless
+adb can't reach the phone or a `crosvm` process runs for the app. A normal
+install refuses as soon as that call fails.
 
 When the install fails, `install` compares `pm path` before and after, which
 changes with every install. If it didn't change, nothing was replaced: `install`

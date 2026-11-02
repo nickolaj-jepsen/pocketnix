@@ -46,6 +46,14 @@ const (
 	backupKeyBytes = 8
 )
 
+const (
+	// vmProcessesCommand lists every process's uid and name; shell may see them all.
+	vmProcessesCommand = "ps -A -o UID=,NAME="
+	// vmProcessPrefix starts the VM's process's name, crosvm_ and AvfEngine.VM_NAME
+	// on a Pixel: virtmgr chooses it, so anything after this may differ elsewhere.
+	vmProcessPrefix = "crosvm"
+)
+
 // signatureHint follows a failed `adb install -r`: neither provision nor install ever uninstalls.
 const signatureHint = "A signature mismatch needs an uninstall first, which deletes the VM's disk image; do that by hand if you mean it"
 
@@ -185,10 +193,18 @@ func (o *installOpts) run() error {
 	if status == 0 {
 		s.pmPath = out
 		st, err := prov.call("status", "")
-		if err != nil {
+		switch {
+		case err == nil:
+			s.wasRunning = st["running"] == "true"
+		case o.restore:
+			// The build being replaced may be why it doesn't answer, so that can't block the way back.
+			if err := o.checkNoVM(dev); err != nil {
+				return err
+			}
+			o.logf("the installed build doesn't answer and no VM runs for it, so going ahead")
+		default:
 			return fmt.Errorf("can't tell whether the VM is running, so not installing: %w", err)
 		}
-		s.wasRunning = st["running"] == "true"
 		// Before the stop: a refused or failed pull leaves the VM as it was.
 		if !o.restore {
 			if s.newBackup, err = o.backUp(dev, out, backup); err != nil {
@@ -224,6 +240,30 @@ func (o *installOpts) run() error {
 		return nil
 	}
 	return o.startVM(dev, prov)
+}
+
+// checkNoVM errors if a VM process runs for the app, or adb can't show the
+// processes. With none, an install has no VM to kill.
+func (o *installOpts) checkNoVM(dev adb.Device) error {
+	out, status, err := shellStatus(dev, vmProcessesCommand)
+	if err == nil && (status != 0 || strings.TrimSpace(out) == "") {
+		err = fmt.Errorf("%s exited %d, printing %q", vmProcessesCommand, status, out)
+	}
+	if err != nil {
+		return fmt.Errorf("can't tell whether a VM is running, so not restoring: %w", err)
+	}
+	// Without the app's uid, any VM on the phone might be its own.
+	var uids []string
+	if uid, err := appUID(dev, o.pkg()); err == nil {
+		uids = strings.Split(uid, ",")
+	}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 2 && strings.HasPrefix(f[1], vmProcessPrefix) && (uids == nil || contains(uids, f[0])) {
+			return fmt.Errorf("the installed build doesn't answer, yet a VM process (%s) runs for it, so not restoring: that would kill the VM. Shut the guest down, then run this again", f[1])
+		}
+	}
+	return nil
 }
 
 // removeBackup deletes a backup, and the device's directory once it holds no
