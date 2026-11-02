@@ -35,9 +35,10 @@ const (
 	// recordModelLen caps the device's model in a bundle's name.
 	recordModelLen = 64
 
-	// A screen of mostly still text. The rate keeps a rented session's whole
-	// video under the volume that drops a bulk adb transfer (AGENTS.md's USB
-	// trap); the size and frame rate cut what the phone spends encoding.
+	// A screen of mostly still text; the size and frame rate cut what the phone
+	// spends encoding. The rate came to 912 kb/s (44 MB) in a Pixel 8 Pro's 6.5-minute
+	// smoke run. At that a 15-minute session is about 100 MB, the low end of what
+	// AGENTS.md's USB trap drops in a bulk transfer.
 	recordBitRate = "1M"
 	recordMaxSize = "1280"
 	recordMaxFPS  = "15"
@@ -111,7 +112,7 @@ func (l *redactLines) Close() error {
 	return errors.Join(err, l.w.Close())
 }
 
-// recording is one doctor run's bundle (C4), and the children filling it.
+// recording is one doctor run's bundle, and the children filling it.
 type recording struct {
 	// dev is the device to record through: its commands go into commands.log.
 	dev      adb.Device
@@ -184,7 +185,7 @@ func startRecording(parent string, dev adb.Device, smoke bool) (_ *recording, er
 		return nil, err
 	}
 	final := filepath.Join(parent, name)
-	// Only its owner may read it (B2).
+	// Only its owner may read it: it can show the screen and the phone's whole log.
 	if err := os.Mkdir(final, 0o700); err != nil {
 		return nil, err
 	}
