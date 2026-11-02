@@ -565,6 +565,50 @@ func ptyTab(d *fakeDevice) int {
 	return -1
 }
 
+// A device's strings can hold escape sequences, which reach a terminal only as text.
+func TestDoctorTextHasNoControlCharacters(t *testing.T) {
+	const hostile = "Pixel\x1b]52;c;aGk=\x07\x1b[2J\r\u009b8"
+	d := newFakeDevice(t)
+	cannedPixel(d)
+	d.setProp("ro.product.model", hostile)
+	d.can("/apex/com.android.virt/bin/vm info", "Only protected VMs are supported."+hostile+"\n", 0)
+	out, _ := stdoutOf(t, func() error { return runDoctor(nil) })
+	if strings.ContainsAny(out, "\x1b\x07\r\u009b") {
+		t.Errorf("the text holds control characters: %q", out)
+	}
+	if !strings.Contains(out, "Pixel]52;c;aGk=[2J8") {
+		t.Errorf("the text lost the model: %q", out)
+	}
+	r, _, _ := doctorJSON(t)
+	if r.Device.Model == nil || *r.Device.Model != hostile {
+		t.Errorf("the JSON changed the model: %v", r.Device.Model)
+	}
+
+	var smoke strings.Builder
+	printSmoke(&smoke, []smokeStep{{Name: "pty", Detail: "a\x1b[2Jb"}})
+	if strings.Contains(smoke.String(), "\x1b") || !strings.Contains(smoke.String(), "a[2Jb") {
+		t.Errorf("smoke's text: %q", smoke.String())
+	}
+
+	var log strings.Builder
+	o, err := parseProvision([]string{"--image", "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.log = &log
+	err = o.checkDevice(adb.Device{})
+	if err == nil || strings.ContainsAny(err.Error(), "\x1b\x07") {
+		t.Errorf("the refusal: %q", err)
+	}
+	o.force = true
+	if err := o.checkDevice(adb.Device{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(log.String(), "\x1b\x07") || !strings.Contains(log.String(), "protected") {
+		t.Errorf("provision's log: %q", log.String())
+	}
+}
+
 // Other apps' notifications stay on the phone: smoke's commands print nothing of them.
 func TestSmokeKeepsOtherAppsNotificationsOnThePhone(t *testing.T) {
 	d := smokeDevice(t, everyTool...)

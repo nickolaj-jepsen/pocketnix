@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/adb"
 )
@@ -429,8 +430,30 @@ func deref(s *string) string {
 	return *s
 }
 
+// plainText is s without control characters, but for newlines and tabs: a
+// device or guest picks its strings, and a terminal acts on an escape sequence.
+func plainText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// plainWriter writes through plainText.
+type plainWriter struct{ w io.Writer }
+
+func (p plainWriter) Write(b []byte) (int, error) {
+	if _, err := io.WriteString(p.w, plainText(string(b))); err != nil {
+		return 0, err
+	}
+	return len(b), nil
+}
+
 // printDoctor writes r for a person; an unreadable fact prints as "?".
 func printDoctor(w io.Writer, r doctorReport) {
+	w = plainWriter{w}
 	str := func(s *string) string {
 		if s == nil {
 			return "?"
@@ -485,6 +508,7 @@ func printDoctor(w io.Writer, r doctorReport) {
 
 // printSmoke writes smoke's results for a person, nothing when none ran.
 func printSmoke(w io.Writer, steps []smokeStep) {
+	w = plainWriter{w}
 	if steps != nil {
 		fmt.Fprintf(w, "smoke\n")
 	}
