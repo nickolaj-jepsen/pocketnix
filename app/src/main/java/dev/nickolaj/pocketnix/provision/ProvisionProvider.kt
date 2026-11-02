@@ -10,8 +10,11 @@ import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.system.Os
 import android.system.OsConstants
+import dev.nickolaj.pocketnix.BuildConfig
+import dev.nickolaj.pocketnix.engine.AvfReflect
 import dev.nickolaj.pocketnix.engine.DiskImage
 import dev.nickolaj.pocketnix.engine.VmState
+import dev.nickolaj.pocketnix.exemptHiddenApis
 import dev.nickolaj.pocketnix.vm
 import java.io.File
 import java.io.FileNotFoundException
@@ -27,6 +30,11 @@ import java.io.RandomAccessFile
  * - write `content://<authority>/disk?offset=<n>`: bytes at that offset
  * - call `commit`, arg `replace` to overwrite: the part file becomes the disk
  *
+ * and `pocketnix doctor` asks what this phone's AVF offers the app:
+ *
+ * - call `caps`: [capsAnswer]'s pairs, found by reflection alone, without
+ *   building a VM config or connecting to virtmgr
+ *
  * Errors come back as an `error` key rather than exceptions, which `content`
  * would only print as a stack trace.
  */
@@ -39,6 +47,23 @@ class ProvisionProvider : ContentProvider() {
     private fun running(): Boolean {
         val s = context!!.vm.state.value
         return s == VmState.Running || s == VmState.Starting
+    }
+
+    private fun caps(): Caps {
+        val ctx = context!!
+        // This call can beat PocketnixApp.onCreate's exemption.
+        exemptHiddenApis()
+        val mgr = runCatching { AvfReflect.manager(ctx) }.getOrNull()
+        val probe = AvfReflect.probe()
+        return Caps(
+            capabilities = mgr?.let { AvfReflect.capabilities(it) } ?: 0,
+            manager = mgr != null,
+            gpuFlagTypes = probe.gpuFlagTypes,
+            rawConfigBinder = probe.rawConfigBinder,
+            autoMemoryBalloon = probe.autoMemoryBalloon,
+            launched = ctx.vm.engine.value.launched,
+            appVersion = BuildConfig.VERSION_NAME
+        )
     }
 
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle {
@@ -69,6 +94,8 @@ class ProvisionProvider : ContentProvider() {
                     }
                     if (!part.renameTo(disk)) error("couldn't move the image into place")
                 }
+
+                "caps" -> for ((k, v) in capsAnswer(caps())) out.putString(k, v)
 
                 else -> error("unknown method $method")
             }
