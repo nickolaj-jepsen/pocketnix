@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -929,6 +930,44 @@ func TestSmokeReadsMarkerValues(t *testing.T) {
 		if (m != nil) != tc.ok || (m != nil && m[3] != tc.value) {
 			t.Errorf("%q: got %q", tc.row, m)
 		}
+	}
+}
+
+// The PTY script's status covers head, whose failure would otherwise be an
+// empty pipe that base64 turns into a clean exit. It runs here in a real sh.
+func TestSmokePTYScriptReportsAFailingHead(t *testing.T) {
+	failing := filepath.Join(t.TempDir(), "head")
+	if err := os.WriteFile(failing, []byte("#!/bin/sh\nexit 3\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		path, want string
+	}{
+		"head-works": {os.Getenv("PATH"), "smoke-1-exit=0"},
+		"head-fails": {filepath.Dir(failing) + string(os.PathListSeparator) + os.Getenv("PATH"), "smoke-1-exit=1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			times := filepath.Join(t.TempDir(), "times")
+			c := exec.Command("sh", "-c", strings.ReplaceAll(ptyScript(times, 3000), "@", "smoke-1"))
+			c.Env = append(os.Environ(), "PATH="+tc.path)
+			out, err := c.CombinedOutput()
+			if err != nil {
+				t.Fatalf("%v: %s", err, out)
+			}
+			if !strings.Contains(string(out), tc.want) {
+				t.Errorf("no %s in:\n%s", tc.want, out)
+			}
+			c = exec.Command("sh", "-c", strings.ReplaceAll(strings.ReplaceAll(ptyTimeScript, smokePTYFile, times), "@", "smoke-1"))
+			out, err = c.CombinedOutput()
+			if err != nil {
+				t.Fatalf("%v: %s", err, out)
+			}
+			for _, key := range []string{"start", "end"} {
+				if !regexp.MustCompile(`(?m)^smoke-1-` + key + `=\d+$`).Match(out) {
+					t.Errorf("no %s time in:\n%s", key, out)
+				}
+			}
+		})
 	}
 }
 

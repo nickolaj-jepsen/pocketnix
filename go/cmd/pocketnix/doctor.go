@@ -564,8 +564,8 @@ const (
 	smokeListenSecs = 120
 	// smokeTailBytes is how much of a tab's last lines a PTY failure quotes.
 	smokeTailBytes = 200
-	// smokePTYFile is where the PTY step's guest command keeps its start and
-	// end times, one epoch per line, apart from the transcript it's measuring.
+	// smokePTYFile is where the PTY step's guest command keeps its times, apart
+	// from the transcript it's measuring.
 	smokePTYFile = "/tmp/pocketnix-smoke-pty"
 	// smokeToken is what the listener answers.
 	smokeToken = "pocketnix-smoke-forward"
@@ -610,7 +610,8 @@ const (
 		`case "$u" in "app-pocketnix-$e-"*) pkill --cgroup "$(systemctl --user show -P ControlGroup "$u")" && n=$((n+1));; esac; done; ` +
 		`echo @-killed=$n; echo @-exit=0`
 	rebootScript   = `systemctl reboot || sudo -n systemctl reboot; echo @-exit=$?`
-	ptyTimeScript  = `set -- $(cat ` + smokePTYFile + ` 2>/dev/null); echo @-start=$1; echo @-end=$2; echo @-now=$(date +%s); echo @-exit=0`
+	// See ptyScript for the file's lines.
+	ptyTimeScript  = `set -- $(cat ` + smokePTYFile + ` 2>/dev/null); echo @-start=$1; echo @-end=$3; echo @-now=$(date +%s); echo @-exit=0`
 	ptyCleanScript = `rm -f ` + smokePTYFile + `; echo @-exit=$?`
 )
 
@@ -953,14 +954,20 @@ func (s *smoker) forward() smokeStep {
 	return stepOK(name, "%s on guest port %s answered on phone port %s", tool, port, phone)
 }
 
+// ptyScript is the guest command that prints n bytes of random data as base64.
+// file gets its start time, head's status and its end time, one per line.
+// base64 alone exits 0 on the empty pipe a failing head leaves it.
+func ptyScript(file string, n int) string {
+	return fmt.Sprintf(`date +%%s > %[1]s; { head -c %[2]d /dev/urandom; echo $? >> %[1]s; } | base64; s=$?; set -- $(cat %[1]s); [ "$2" = 0 ] || s=1; date +%%s >> %[1]s; echo @-exit=$s`, file, n)
+}
+
 // pty has a tab print smokePTYBytes of base64.
 func (s *smoker) pty() smokeStep {
 	const name = "pty"
 	p := s.marker()
 	start := time.Now()
 	// base64 makes 4 bytes of 3. Random lines differ, so outputState can see them move.
-	script := fmt.Sprintf(`date +%%s > %s; head -c %d /dev/urandom | base64; s=$?; date +%%s >> %s; echo @-exit=$s`, smokePTYFile, smokePTYBytes/4*3, smokePTYFile)
-	tab, err := s.start(p, script)
+	tab, err := s.start(p, ptyScript(smokePTYFile, smokePTYBytes/4*3))
 	if err != nil {
 		return stepFail(name, "opening a tab: %v", err)
 	}
