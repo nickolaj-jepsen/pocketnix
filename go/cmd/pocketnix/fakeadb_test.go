@@ -25,8 +25,18 @@ func TestMain(m *testing.M) {
 // fakeChunkCap models the USB drop: one push or pull may not exceed it.
 const fakeChunkCap = 64 << 20
 
-// fakeAPKPath is where the fake device keeps the installed app's APK.
-const fakeAPKPath = "/data/app/base.apk"
+// fakeStopLag is how many status calls still answer running=true after a
+// STOP: as on a phone, only polling shows the VM is down.
+const fakeStopLag = 2
+
+// fakeAPKPath is where the installed app's APK is. Like a phone's `pm path`,
+// it changes on every install.
+func fakeAPKPath(state string) string {
+	if b, err := os.ReadFile(filepath.Join(state, "apk-path")); err == nil {
+		return string(b)
+	}
+	return "/data/app/~~preinstalled==/base.apk"
+}
 
 // fakeSerial is what get-serialno answers when no -s is given.
 const fakeSerial = "FAKESERIAL0001"
@@ -61,16 +71,26 @@ func fakeADB(args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		os.MkdirAll(filepath.Dir(devPath(fakeAPKPath)), 0o755)
-		os.WriteFile(devPath(fakeAPKPath), b, 0o644)
+		os.RemoveAll(filepath.Dir(devPath(fakeAPKPath(state))))
+		events, _ := os.ReadFile(filepath.Join(state, "events"))
+		apk := fmt.Sprintf("/data/app/~~install%d==/base.apk", strings.Count(string(events), "\n"))
+		os.MkdirAll(filepath.Dir(devPath(apk)), 0o755)
+		os.WriteFile(devPath(apk), b, 0o644)
+		os.WriteFile(filepath.Join(state, "apk-path"), []byte(apk), 0o644)
 		os.WriteFile(filepath.Join(state, "installed"), nil, 0o644)
 		// As on a phone: replacing the app kills its process, and so a running VM.
+		if fakeRunning(state) {
+			logEvent("vm killed")
+		}
 		setFakeRunning(state, false)
 		fmt.Println("Success")
 	case "uninstall":
 		logEvent("uninstall %s", strings.Join(args[1:], " "))
 		os.Remove(filepath.Join(state, "installed"))
-		os.Remove(devPath(fakeAPKPath))
+		os.RemoveAll(filepath.Dir(devPath(fakeAPKPath(state))))
+		if fakeRunning(state) {
+			logEvent("vm killed")
+		}
 		setFakeRunning(state, false)
 	case "push":
 		local, remote := args[len(args)-2], args[len(args)-1]
@@ -133,13 +153,44 @@ func fakeRunning(state string) bool {
 }
 
 func setFakeRunning(state string, running bool) {
+	os.Remove(filepath.Join(state, "stopping"))
 	os.WriteFile(filepath.Join(state, "running"), []byte(strconv.FormatBool(running)), 0o644)
 }
 
-func fakeInstalled(state string) bool {
-	_, err := os.Stat(filepath.Join(state, "installed"))
+// fakeStatusRunning is what a status call sees, and it counts down a STOP's lag.
+func fakeStatusRunning(state string) bool {
+	p := filepath.Join(state, "stopping")
+	if b, err := os.ReadFile(p); err == nil {
+		n, _ := strconv.Atoi(string(b))
+		if n <= 1 {
+			setFakeRunning(state, false)
+		} else {
+			os.WriteFile(p, []byte(strconv.Itoa(n-1)), 0o644)
+		}
+	}
+	return fakeRunning(state)
+}
+
+// fakeInstalled reports whether pkg is installed: the "installed" state file
+// names one package, or is empty for either.
+func fakeInstalled(state, pkg string) bool {
 	// A running VM means the app is there.
-	return err == nil || fakeRunning(state)
+	if fakeRunning(state) {
+		return true
+	}
+	b, err := os.ReadFile(filepath.Join(state, "installed"))
+	return err == nil && (len(b) == 0 || string(b) == pkg)
+}
+
+// fakeProviderPackage is the app package of a content call's provider URI.
+func fakeProviderPackage(line string) string {
+	_, rest, _ := strings.Cut(line, "content://")
+	rest, _, _ = strings.Cut(rest, " ")
+	rest = strings.Trim(rest, "'")
+	if i := strings.LastIndex(rest, "."); i > 0 {
+		return rest[:i]
+	}
+	return rest
 }
 
 // fakeCannedKey names a canned answer's file: the command's words, as sh
@@ -178,17 +229,22 @@ func fakeShell(state, line string, logEvent func(string, ...any)) (string, int) 
 			return "stat: '" + w[3] + "': No such file or directory\n", 1
 		}
 		return strconv.FormatInt(fi.Size(), 10) + "\n", 0
+	case len(w) == 2 && w[0] == "ls":
+		if _, err := os.Stat(devPath(w[1])); err != nil {
+			return "ls: " + w[1] + ": No such file or directory\n", 1
+		}
+		return w[1] + "\n", 0
 	case len(f) == 4 && f[0] == "pm" && f[1] == "grant":
 		logEvent("grant %s %s", f[2], f[3])
 	case len(w) == 3 && w[0] == "pm" && w[1] == "path":
 		if w[2] == releasePackage || w[2] == debugPackage {
-			if !fakeInstalled(state) {
+			if !fakeInstalled(state, w[2]) {
 				return "", 1
 			}
 			if b, err := os.ReadFile(filepath.Join(state, "pm-path")); err == nil {
 				return string(b), 0
 			}
-			return "package:" + fakeAPKPath + "\n", 0
+			return "package:" + fakeAPKPath(state) + "\n", 0
 		}
 		if fakeHasPackage(state, w[2]) {
 			return "package:/system/priv-app/" + w[2] + "/base.apk\n", 0
@@ -208,10 +264,13 @@ func fakeShell(state, line string, logEvent func(string, ...any)) (string, int) 
 		if len(f) >= 8 {
 			arg = unquote(f[7])
 		}
+		if pkg := fakeProviderPackage(line); !fakeInstalled(state, pkg) {
+			return "Error while accessing provider:" + pkg + ".provision\n", 1
+		}
 		switch method {
 		case "status":
 			_, err := os.Stat(disk)
-			return fmt.Sprintf("Result: Bundle[{ok=true, disk=%t, running=%t}]\n", err == nil, fakeRunning(state)), 0
+			return fmt.Sprintf("Result: Bundle[{ok=true, disk=%t, running=%t}]\n", err == nil, fakeStatusRunning(state)), 0
 		case "caps":
 			b, err := os.ReadFile(filepath.Join(state, "caps"))
 			if err != nil {
@@ -265,7 +324,9 @@ func fakeShell(state, line string, logEvent func(string, ...any)) (string, int) 
 		// The app's ControlActivity; the action names mirror ControlActivity.ACTION_START and ACTION_STOP.
 		switch {
 		case strings.Contains(line, "-a dev.nickolaj.pocketnix.action.STOP"):
-			setFakeRunning(state, false)
+			if fakeRunning(state) {
+				os.WriteFile(filepath.Join(state, "stopping"), []byte(strconv.Itoa(fakeStopLag)), 0o644)
+			}
 		case strings.Contains(line, "-a dev.nickolaj.pocketnix.action.START"):
 			setFakeRunning(state, true)
 		}
@@ -326,6 +387,16 @@ func (d *fakeDevice) events() string {
 	return string(b)
 }
 
+// hasEvent reports whether any line of events starts with prefix.
+func hasEvent(events, prefix string) bool {
+	for _, line := range strings.Split(events, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func (d *fakeDevice) disk() []byte {
 	b, _ := os.ReadFile(filepath.Join(d.state, "app", "files", "disk.img"))
 	return b
@@ -335,20 +406,30 @@ func (d *fakeDevice) running() bool { return fakeRunning(d.state) }
 
 func (d *fakeDevice) setRunning(running bool) { setFakeRunning(d.state, running) }
 
-// installAPK puts an app build on the device as if installed before the test.
-func (d *fakeDevice) installAPK(b []byte) {
-	d.write(filepath.Join("device", fakeAPKPath), b)
-	d.write("installed", nil)
+// installAPK puts an app build on the device as if installed before the
+// test, as either package.
+func (d *fakeDevice) installAPK(b []byte) { d.installAPKAs("", b) }
+
+// installAPKAs installs b as pkg only; the other package isn't installed.
+func (d *fakeDevice) installAPKAs(pkg string, b []byte) {
+	d.write(filepath.Join("device", fakeAPKPath(d.state)), b)
+	d.write("installed", []byte(pkg))
 }
 
 // installedAPK is the installed app's APK, nil when there's none.
 func (d *fakeDevice) installedAPK() []byte {
-	b, _ := os.ReadFile(filepath.Join(d.state, "device", fakeAPKPath))
+	b, _ := os.ReadFile(filepath.Join(d.state, "device", fakeAPKPath(d.state)))
 	return b
 }
 
 // failInstalls makes every adb install fail with msg (pm's "Failure [...]" line).
 func (d *fakeDevice) failInstalls(msg string) { d.write("install-fails", []byte(msg)) }
+
+// allowInstalls undoes failInstalls.
+func (d *fakeDevice) allowInstalls() { os.Remove(filepath.Join(d.state, "install-fails")) }
+
+// addFile puts a file on the device, e.g. /apex/com.android.virt/etc/u-boot.bin.
+func (d *fakeDevice) addFile(path string, b []byte) { d.write(filepath.Join("device", path), b) }
 
 // setPMPath overrides `pm path` for the app, e.g. with a split install's lines.
 func (d *fakeDevice) setPMPath(out string) { d.write("pm-path", []byte(out)) }

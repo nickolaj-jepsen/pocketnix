@@ -48,10 +48,8 @@ func parseDoctor(args []string) (*doctorOpts, error) {
 		return nil
 	})
 	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil, errUsage
-		}
-		return nil, err
+		// flag has printed the error, or the usage for -h.
+		return nil, errUsage
 	}
 	if fs.NArg() > 0 {
 		fs.Usage()

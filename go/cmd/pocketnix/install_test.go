@@ -51,6 +51,13 @@ func TestInstallSwapsRunningVM(t *testing.T) {
 	if strings.Contains(ev, "uninstall") {
 		t.Errorf("uninstalled the app; events:\n%s", ev)
 	}
+	if strings.Contains(ev, "vm killed\n") {
+		t.Errorf("installed over a running VM instead of stopping it; events:\n%s", ev)
+	}
+	stop := strings.Index(ev, "-a dev.nickolaj.pocketnix.action.STOP")
+	if stop < 0 || stop > strings.Index(ev, "install -r -d") {
+		t.Errorf("no STOP before the install; events:\n%s", ev)
+	}
 	if b := d.backups(); len(b) != 1 {
 		t.Errorf("backups = %v, want one", b)
 	}

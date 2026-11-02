@@ -35,10 +35,8 @@ func parseInstall(args []string) (*installOpts, error) {
 	fs.BoolVar(&o.noStart, "no-start", false, "")
 	fs.BoolVar(&o.restore, "restore", false, "")
 	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil, errUsage
-		}
-		return nil, err
+		// flag has printed the error, or the usage for -h.
+		return nil, errUsage
 	}
 	switch {
 	case o.restore && fs.NArg() == 0:
