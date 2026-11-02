@@ -18,7 +18,7 @@ import (
 )
 
 // doctorJSON runs doctor --json with args and decodes its report, and the
-// same JSON untyped, to check C2's field names.
+// same JSON untyped, to check its field names.
 func doctorJSON(t *testing.T, args ...string) (doctorReport, map[string]any, error) {
 	t.Helper()
 	out, err := stdoutOf(t, func() error { return runDoctor(append([]string{"--json"}, args...)) })
@@ -211,7 +211,7 @@ VFIO-platform is not supported.
 	}
 }
 
-// B1: the serial reaches neither the report nor the text.
+// The serial reaches neither the report nor the text.
 func TestDoctorLeavesOutTheSerial(t *testing.T) {
 	const serial = "TESTSERIAL123"
 	d := newFakeDevice(t)
@@ -227,6 +227,48 @@ func TestDoctorLeavesOutTheSerial(t *testing.T) {
 			t.Errorf("doctor %v printed the serial, or nothing:\n%s", args, out)
 		}
 	}
+
+	// A phone that drops mid-run has adb name it in the errors the report quotes.
+	for _, tc := range []struct {
+		name, serial, env string
+		args              []string
+		// match is the command adb fails.
+		match string
+	}{
+		{name: "flag", serial: serial, args: []string{"--serial", serial}, match: "--method caps"},
+		{name: "env", serial: serial, env: serial, match: "--method caps"},
+		{name: "transport", serial: fakeSerial, match: "--method caps"},
+		{name: "smoke", serial: serial, args: []string{"--serial", serial, "--smoke"}, match: "--method tab"},
+	} {
+		for _, mode := range [][]string{{"--json"}, nil} {
+			t.Run(fmt.Sprintf("%s %v", tc.name, mode), func(t *testing.T) {
+				d := smokeDevice(t, everyTool...)
+				d.installAPK([]byte("apk"))
+				d.setCaps(pixelCaps)
+				t.Setenv("ANDROID_SERIAL", tc.env)
+				d.drop(tc.match, "", "adb: device '"+tc.serial+"' not found\n")
+				out, _ := stdoutOf(t, func() error { return runDoctor(append(slices.Clone(mode), tc.args...)) })
+				if !strings.Contains(out, "not found") {
+					t.Errorf("the report lost adb's complaint:\n%s", out)
+				}
+				if strings.Contains(out, tc.serial) {
+					t.Errorf("the report holds the serial:\n%s", out)
+				}
+			})
+		}
+	}
+
+	t.Run("record", func(t *testing.T) {
+		d := recordDevice(t)
+		d.installAPK([]byte("apk"))
+		d.drop("--method caps", "", "adb: device '"+recordSerial+"' not found\n")
+		dir := t.TempDir()
+		out, _ := stdoutOf(t, func() error { return runDoctor([]string{"--json", "--serial", recordSerial, "--record", dir}) })
+		if !strings.Contains(out, "not found") || strings.Contains(out, recordSerial) {
+			t.Errorf("stdout under --record:\n%s", out)
+		}
+		assertNoSerial(t, onlyBundle(t, dir))
+	})
 }
 
 func TestDoctorApp(t *testing.T) {
