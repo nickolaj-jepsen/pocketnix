@@ -168,6 +168,7 @@ public final class TerminalRow {
         mHasNonOneWidthOrSurrogateChars = false;
         mHasTerminalBitmap = false;
         mLinks = null;
+        mLineWrap = false;
     }
 
     /** Writes an unlinked cell; see {@link #setChar(int, int, long, String)}. */

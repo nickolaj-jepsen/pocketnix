@@ -62,4 +62,16 @@ public class ScreenBufferTest extends TerminalTestCase {
 		assertEquals("", mTerminal.getScreen().getWordAtLocation(1, 2));
 		assertEquals("", mTerminal.getScreen().getWordAtLocation(2, 2));
 	}
+
+	public void testARowReusedAfterAWrappedLineDoesNotJoinTheNext() {
+		// Three rows in all, so "d" lands on the row that held the wrapped "a".
+		TerminalBuffer screen = new TerminalBuffer(3, 3, 1);
+		screen.setChar(0, 0, 'a', 0);
+		screen.setLineWrap(0);
+		for (char c : "bcde".toCharArray()) {
+			screen.scrollDownOneLine(0, 1, 0);
+			screen.setChar(0, 0, c, 0);
+		}
+		assertEquals("c\nd\ne", screen.getTranscriptText());
+	}
 }
