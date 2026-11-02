@@ -48,7 +48,9 @@ app on the phone:
    sh rish -c 'pm grant dev.nickolaj.pocketnix android.permission.USE_CUSTOM_VIRTUAL_MACHINE'
    ```
 
-The grants last as long as the adb ones; Shizuku can be stopped afterwards.
+The grants last as long as the adb ones. Stop Shizuku afterwards: while it runs,
+an app holding its permission acts as the adb shell, which can replace the VM's
+disk.
 
 ## Requirements
 
