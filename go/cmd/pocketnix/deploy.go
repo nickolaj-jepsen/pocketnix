@@ -53,10 +53,6 @@ const (
 	// trusts only root (nix.settings.trusted-users), and -n fails instead of prompting.
 	// %20 separates its words in a store URL; + doesn't.
 	deployRemoteProgram = "sudo%20-n%20/run/current-system/sw/bin/nix-daemon"
-	// deployReconnect bounds the wait for the unit after a restart, which for the
-	// agent cuts ssh: ssh rides the agent's port forward.
-	deployReconnect = 90 * time.Second
-	deployRetry     = 2 * time.Second
 	// deployAttempt bounds one ssh call; deployConnectSecs is ssh's ConnectTimeout.
 	deployAttempt     = 30 * time.Second
 	deployConnectSecs = 10
@@ -64,6 +60,18 @@ const (
 	// adb, whose bulk USB transfers drop the device after ~100–200 MB, and a big
 	// closure can swap a small guest.
 	deployMaxCopy = 64 << 20
+)
+
+// The wait after a restart; tests shorten these.
+var (
+	// deployReconnect bounds the wait for the unit after a restart, which for the
+	// agent cuts ssh: ssh rides the agent's port forward.
+	deployReconnect = 90 * time.Second
+	deployRetry     = 2 * time.Second
+	// deploySettle is how long a restarted unit must stay up, and what every deploy
+	// and --remove spends on it. The agent's RestartSec is a second and the
+	// compositor has no Restart=, so a binary that dies at start shows within it.
+	deploySettle = 5 * time.Second
 )
 
 // deployGuestRoot prefixes the guest paths deploy reads or names itself (the
@@ -251,8 +259,8 @@ printf %%s %[6]s | %[4]stee %[7]s >/dev/null
 	if _, err := g.run(script); err != nil && !errors.Is(err, errGuestUnreachable) {
 		return err
 	}
-	if err := g.awaitRestart(c, st.invocation, exe); err != nil {
-		return err
+	if err := g.awaitRestart(c, st, exe); err != nil {
+		return fmt.Errorf("%w\nIf ssh still reaches it, pocketnix deploy --remove %s brings back the system's build.", err, c.name)
 	}
 	fmt.Fprintf(o.log, "%s: %s runs %s until the guest reboots; pocketnix deploy --remove %s ends it\n", o.host, c.unit, exe, c.name)
 	return nil
@@ -559,7 +567,7 @@ func removeDeploy(o *deployOpts, g deployGuest, c deployComponent) error {
 		return err
 	}
 	system, _, _ := strings.Cut(st.execStart, " ")
-	if err := g.awaitRestart(c, st.invocation, system); err != nil {
+	if err := g.awaitRestart(c, st, system); err != nil {
 		return err
 	}
 	fmt.Fprintf(o.log, "%s: %s runs the system's %s again\n", o.host, c.unit, system)
@@ -726,6 +734,8 @@ type deployState struct {
 	execStart string
 	// invocation is the unit's InvocationID, which a restart changes.
 	invocation string
+	// restarts is the unit's NRestarts, nil when it can't be read.
+	restarts *int64
 }
 
 func (g deployGuest) state(c deployComponent) (deployState, error) {
@@ -736,6 +746,7 @@ func (g deployGuest) state(c deployComponent) (deployState, error) {
 	fmt.Fprintf(&b, `frag=$(%[1]s show -P FragmentPath %[2]s)
 [ -z "$frag" ] || grep '^ExecStart=' "$frag" | sed 's/^ExecStart=/execstart /'
 echo "invocation $(%[1]s show -P InvocationID %[2]s)"
+echo "restarts $(%[1]s show -P NRestarts %[2]s)"
 `, c.systemctl(), adb.ShellQuote(c.unit))
 	out, err := g.run(b.String())
 	if err != nil {
@@ -756,6 +767,8 @@ echo "invocation $(%[1]s show -P InvocationID %[2]s)"
 			}
 		case "invocation":
 			st.invocation = val
+		case "restarts":
+			st.restarts = parseRestarts(val)
 		}
 	}
 	if len(execStarts) > 1 {
@@ -770,19 +783,45 @@ echo "invocation $(%[1]s show -P InvocationID %[2]s)"
 // deployRecovery is the way back when a restart leaves the guest out of ssh's reach.
 const deployRecovery = "If ssh no longer reaches the guest, restart the VM from the app, or reboot from its console tab: the drop-in lives in /run, so the guest's own system comes back."
 
+// parseRestarts is an NRestarts value, nil when the guest's systemd doesn't give one.
+func parseRestarts(val string) *int64 {
+	n, err := strconv.ParseInt(val, 10, 64)
+	if err != nil {
+		return nil
+	}
+	return &n
+}
+
+// crashed is the error for a unit that started exe and went down again.
+func (c deployComponent) crashed(exe, why string) error {
+	scope := ""
+	if c.user {
+		scope = "--user "
+	}
+	return fmt.Errorf("%s started %s but didn't stay up: %s; journalctl %s-u %s says why\n%s", c.unit, exe, why, scope, c.unit, deployRecovery)
+}
+
 // awaitRestart waits until the unit runs a new invocation of exe, reconnecting
-// while the restart has cut ssh.
-func (g deployGuest) awaitRestart(c deployComponent, before, exe string) error {
-	script := fmt.Sprintf("%[1]s show -P ExecStart %[2]s\necho \"invocation $(%[1]s show -P InvocationID %[2]s)\"\necho \"state $(%[1]s show -P ActiveState %[2]s)\"\n",
+// while the restart has cut ssh, and that invocation stays active for
+// deploySettle without the unit's NRestarts going up where it can be read.
+func (g deployGuest) awaitRestart(c deployComponent, before deployState, exe string) error {
+	script := fmt.Sprintf("%[1]s show -P ExecStart %[2]s\necho \"invocation $(%[1]s show -P InvocationID %[2]s)\"\necho \"state $(%[1]s show -P ActiveState %[2]s)\"\necho \"restarts $(%[1]s show -P NRestarts %[2]s)\"\n",
 		c.systemctl(), adb.ShellQuote(c.unit))
 	deadline := time.Now().Add(deployReconnect)
+	// settling is the invocation first found active, which must last until settled.
+	var settling string
+	var settled time.Time
+	// fewest is the lowest count seen: a manual restart can flush the counter.
+	fewest := before.restarts
 	for {
+		wait := deployRetry
 		out, err := g.run(script)
 		if err != nil && !errors.Is(err, errGuestUnreachable) {
 			return err
 		}
 		if err == nil {
 			var path, invocation, state string
+			var restarts *int64
 			if m := execStartPath.FindStringSubmatch(out); m != nil {
 				path = m[1]
 			}
@@ -791,19 +830,40 @@ func (g deployGuest) awaitRestart(c deployComponent, before, exe string) error {
 					invocation = v
 				} else if v, ok := strings.CutPrefix(line, "state "); ok {
 					state = v
+				} else if v, ok := strings.CutPrefix(line, "restarts "); ok {
+					restarts = parseRestarts(v)
 				}
 			}
 			if path != exe {
 				return fmt.Errorf("%s's ExecStart runs %q, not %s", c.unit, path, exe)
 			}
-			if invocation != before && state == "active" {
-				return nil
+			active := invocation != before.invocation && state == "active"
+			if settling != "" && (!active || invocation != settling) {
+				return c.crashed(exe, fmt.Sprintf("invocation %s gave way to %s, which is %s", settling, invocation, state))
+			}
+			if active {
+				if restarts != nil {
+					if fewest != nil && *restarts > *fewest {
+						return c.crashed(exe, fmt.Sprintf("NRestarts went from %d to %d", *fewest, *restarts))
+					}
+					fewest = restarts
+				}
+				switch {
+				case settling == "":
+					settling, settled, wait = invocation, time.Now().Add(deploySettle), deploySettle
+					// A unit that came up at the last moment still gets to prove itself.
+					if t := settled.Add(deployRetry); t.After(deadline) {
+						deadline = t
+					}
+				case !time.Now().Before(settled):
+					return nil
+				}
 			}
 			err = fmt.Errorf("%s is %s, invocation %s", c.unit, state, invocation)
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("%s didn't come back running %s in %s: %w\n%s", c.unit, exe, deployReconnect, err, deployRecovery)
 		}
-		time.Sleep(deployRetry)
+		time.Sleep(wait)
 	}
 }
