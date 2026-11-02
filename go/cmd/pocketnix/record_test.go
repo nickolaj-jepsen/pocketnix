@@ -36,7 +36,8 @@ const (
 
 // fakeScrcpy models scrcpy: it writes its video until SIGINT, and only then
 // the end that makes it playable. Its state files are under $FAKE_ADB_STATE:
-// scrcpy-help is its --help, and with scrcpy-fails it fails at the start.
+// scrcpy-help is its --help, and scrcpy-fails makes it exit with that status at
+// once, having written scrcpy-video's bytes (nothing at all without that file).
 func fakeScrcpy(args []string) int {
 	state := os.Getenv("FAKE_ADB_STATE")
 	if slices.Contains(args, "--help") {
@@ -55,10 +56,13 @@ func fakeScrcpy(args []string) int {
 			video = v
 		}
 	}
-	if _, err := os.Stat(filepath.Join(state, "scrcpy-fails")); err == nil {
-		os.WriteFile(video, []byte("partial"), 0o644)
+	if b, err := os.ReadFile(filepath.Join(state, "scrcpy-fails")); err == nil {
+		if frames, err := os.ReadFile(filepath.Join(state, "scrcpy-video")); err == nil {
+			os.WriteFile(video, frames, 0o644)
+		}
 		fmt.Fprintln(os.Stderr, "ERROR: Server connection failed")
-		return 1
+		status, _ := strconv.Atoi(string(b))
+		return status
 	}
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
@@ -396,20 +400,40 @@ func TestRecordWithoutScrcpy(t *testing.T) {
 	assertGone(t, d.state, "logcat.pid")
 }
 
+// A video exists only where scrcpy wrote some of it, whatever status it ended with.
 func TestRecordScrcpyFails(t *testing.T) {
-	d := recordDevice(t)
-	d.write("scrcpy-fails", nil)
-	dir := t.TempDir()
-	if _, err := stdoutOf(t, func() error { return runDoctor([]string{"--record", dir}) }); err != nil {
-		t.Errorf("a failing scrcpy failed the run: %v", err)
-	}
-	bundle := onlyBundle(t, dir)
-	if exists(filepath.Join(bundle, "screen.mp4")) {
-		t.Error("a failed scrcpy left a screen.mp4")
-	}
-	log := readBundle(t, bundle, "commands.log")
-	if !regexp.MustCompile(`(?m) exit=1 scrcpy `).MatchString(log) || !regexp.MustCompile(`(?m) note .*Server connection failed`).MatchString(log) {
-		t.Errorf("no note about scrcpy's failure in commands.log:\n%s", log)
+	for _, tc := range []struct {
+		name, status string
+		video        *string
+		kept         bool
+	}{
+		{name: "before-the-file", status: "1"},
+		{name: "with-an-empty-file", status: "1", video: new("")},
+		{name: "after-some-frames", status: "1", video: new("frames"), kept: true},
+		{name: "phone-gone-after-some-frames", status: "2", video: new("frames"), kept: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := recordDevice(t)
+			d.write("scrcpy-fails", []byte(tc.status))
+			if tc.video != nil {
+				d.write("scrcpy-video", []byte(*tc.video))
+			}
+			dir := t.TempDir()
+			if _, err := stdoutOf(t, func() error { return runDoctor([]string{"--record", dir}) }); err != nil {
+				t.Errorf("a failing scrcpy failed the run: %v", err)
+			}
+			bundle := onlyBundle(t, dir)
+			if got := exists(filepath.Join(bundle, "screen.mp4")); got != tc.kept {
+				t.Errorf("screen.mp4 exists = %t, want %t", got, tc.kept)
+			}
+			log := readBundle(t, bundle, "commands.log")
+			if !regexp.MustCompile(`(?m) exit=` + tc.status + ` scrcpy `).MatchString(log) || !regexp.MustCompile(`(?m) note .*Server connection failed`).MatchString(log) {
+				t.Errorf("no note about scrcpy's failure in commands.log:\n%s", log)
+			}
+			if tc.kept && !regexp.MustCompile(`(?m) note .*cut short`).MatchString(log) {
+				t.Errorf("no note that the kept video may be cut short:\n%s", log)
+			}
+		})
 	}
 }
 
