@@ -530,8 +530,8 @@ func printSmoke(w io.Writer, steps []smokeStep) {
 	}
 }
 
-// smokeTimes bounds smoke's waits; tests shorten them.
-var smokeTimes = struct {
+// smokeWaits bounds smoke's waits.
+type smokeWaits struct {
 	// cmd is a short guest command's output, and a tab's agent.
 	cmd time.Duration
 	// pty is the big output's end marker: a Pixel 8 Pro's debug build, in front,
@@ -551,7 +551,10 @@ var smokeTimes = struct {
 	forward time.Duration
 	// reboot is the VM going down after systemctl reboot, and boot its agent answering again.
 	reboot, boot time.Duration
-}{
+}
+
+// smokeTimes are smoke's waits; tests shorten them.
+var smokeTimes = smokeWaits{
 	cmd: 60 * time.Second, pty: 6 * time.Minute, ptyPoll: 20 * time.Second, offer: 20 * time.Second,
 	notify: 20 * time.Second, wake: 20 * time.Second,
 	window: 60 * time.Second, frames: 20 * time.Second, gone: 20 * time.Second,

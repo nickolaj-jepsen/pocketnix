@@ -83,13 +83,12 @@ func writePID(state, name string) {
 }
 
 // fakeDoctorProcess is `pocketnix doctor`, for tests that signal the process.
-// Its smoke runs with short waits, except for the PTY step, which they interrupt.
+// Its smoke runs with short waits, except for the PTY step's, which has to last
+// until they interrupt it.
 func fakeDoctorProcess(args []string) int {
-	controlPoll = 5 * time.Millisecond
-	s := time.Second
-	smokeTimes.cmd, smokeTimes.offer, smokeTimes.notify, smokeTimes.wake = s, s, s, s
-	smokeTimes.window, smokeTimes.frames, smokeTimes.gone, smokeTimes.forward = s, s, s, s
-	smokeTimes.exit, smokeTimes.ptyPoll = 50*time.Millisecond, 5*time.Millisecond
+	pty := smokeTimes.pty
+	shortenSmoke()
+	smokeTimes.pty = pty
 	err := runDoctor(args)
 	var status exitStatus
 	switch {
