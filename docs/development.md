@@ -186,29 +186,37 @@ before stopping anything, a split install and an APK too big for one pull
 
 ## Deploying a dev build to a phone guest
 
-`pocketnix deploy` runs this checkout's agent in a phone guest without a new
-system (`pocketnix deploy -h`). It builds on the desktop, copies the result
-into the guest's store over ssh, and points the unit at it with a runtime
-drop-in, so the guest's own system comes back when it reboots:
+`pocketnix deploy` runs this checkout's agent or compositor in a phone guest
+without a new system (`pocketnix deploy -h`). It builds on the desktop, copies
+the result into the guest's store over ssh, and points the unit at it with a
+runtime drop-in, so the guest's own system comes back when it reboots:
 
 ```bash
-pocketnix deploy agent            # over ssh to phone-usb (pocketnix ssh-proxy -h)
-pocketnix deploy --remove agent   # the system's agent again, without a reboot
+pocketnix deploy agent                 # over ssh to phone-usb (pocketnix ssh-proxy -h)
+pocketnix deploy --remove agent        # the system's agent again, without a reboot
+pocketnix deploy compositor
+pocketnix deploy --remove compositor
 ```
 
-- The default build is `pocketnix-cross-aarch64`, a static agent
+- The agent's default build is `pocketnix-cross-aarch64`, a static agent
   cross-compiled on x86_64, which rebuilds in seconds after a change.
   `--native` deploys the flake's own aarch64 package instead, which an
   aarch64 desktop needs. For a commit CI built it comes from the Cachix cache
   when Nix accepts the flake's config (`accept-flake-config`); otherwise it
-  builds under binfmt, for minutes.
+  builds under binfmt, for minutes (the compositor's, much longer).
 - The ssh user needs passwordless sudo in the guest, and deploy refuses
   without it. The copy runs the guest's `nix-daemon` as root and skips
   signature checks, since the guest's Nix trusts only root and nothing built
   here is signed; for a user who can already be root that grants nothing new.
-- The drop-in lives under `/run/systemd/system/pocketnix-agent.service.d/`
-  and the deployed path's GC root under `/run/pocketnix-deploy/`; a reboot
-  clears both. `--remove` deletes them and restarts the unit.
+- Before copying, deploy asks the guest which paths of the closure it lacks,
+  prints their size, and refuses when they add up to more than
+  `deployMaxCopy`: the copy rides adb, which drops the phone on big transfers
+  (the root `AGENTS.md`'s USB trap). A guest whose system comes from another
+  nixpkgs than this flake's lacks most of a native package's closure.
+- The agent's drop-in lives under `/run/systemd/system/pocketnix-agent.service.d/`,
+  the compositor's under the user's `/run/user/<uid>/systemd/user/`, and the
+  deployed paths' GC roots under `/run/pocketnix-deploy/`; a reboot clears
+  them all. `--remove` deletes them and restarts the unit.
 - The drop-in copies the unit's ExecStart arguments as they were at deploy
   time, so until a reboot or `--remove` a switch that changes them doesn't
   show (the trap in `nix/AGENTS.md`). Every deploy warns about that, and about
@@ -220,6 +228,38 @@ pocketnix deploy --remove agent   # the system's agent again, without a reboot
   keep the system's package.
 - `--ssh-config <file>` hands `-F <file>` to every ssh and `nix copy` call, so
   the host, user and ProxyCommand can come from a config of their own.
+
+### The compositor's library rewrite
+
+The cross-built compositor, `pocketnix-compositor-cross-aarch64`, links the
+cross toolchain's glibc, libxkbcommon and gcc libraries, which no guest has:
+copied as it is, its closure is several times the compositor's own size. So
+deploy rewrites it to load the guest's libraries instead:
+
+1. It reads the binaries' loader and sonames (`DT_NEEDED`) on the desktop.
+2. It lists the lib directories of the closure of the guest's system
+   compositor, the package the unit's own ExecStart runs.
+3. For each soname it picks the directory that has it, preferring the
+   loader's own glibc, and builds `nix/deploy-rewrite.nix`, which sets the
+   binaries' interpreter and RPATH to those guest paths with patchelf.
+4. The result refers to no store path, so the copy holds the compositor's
+   own output alone. Deploy checks that before copying.
+5. In the guest, the guest's loader resolves each binary (`ld.so --list`)
+   before the unit restarts.
+
+When the guest has no library with a soname the cross build linked, or its
+loader refuses a binary (an older glibc than the cross one, say), deploy says
+why and deploys the flake's native `pocketnix-compositor` instead, under the
+same size check. `--native` skips the rewrite.
+
+The rewritten binaries name the guest's library paths, but Nix doesn't see
+those as references, so deploy also roots the system compositor they come
+from, until a reboot or `--remove` (the trap in `nix/AGENTS.md`).
+
+The drop-in points ExecStart at the deployed package, so `pocketnix bench`
+runs its `pocketnix-gui-bench` with no flag. Restarting the compositor closes
+the guest's GUI windows, and restarts `pocketnix-clipboard`, which is bound to
+it.
 
 ## Benchmarks
 
