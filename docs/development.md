@@ -312,7 +312,12 @@ The clock starts at `create`, and everything here is free:
 nix run .#gradle -- assembleDebug   # --smoke's cleanup needs a build from this tree
 pocketnix doctor --json             # the tooling works, against a phone of your own
 android device remote models        # pick <codename>/<api>
+gh release view "v$(cat VERSION)"   # setup fetches this release's base image
 ```
+
+For a `VERSION` not released yet, serve the image first, as the end of
+[Releasing from a fork](#releasing-from-a-fork) says, and add
+`--es releaseUrl <url>` to step 2's `DEBUG_SETUP`.
 
 Choose a directory for the bundles (`<dir>` below), and take your own phone off
 adb, so that no command can reach its VM.
