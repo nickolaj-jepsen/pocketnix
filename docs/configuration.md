@@ -174,11 +174,12 @@ The app tells the guest about the phone:
   --what=sleep ...`) makes the app hold a wake lock, named in its notification.
   `power.wakeLocks.ignore` lists daemons to disregard; the app has a setting
   to refuse wake locks altogether.
-- Memory the guest touches stays the app's until the VM stops: the guest
-  runs on RAM the app maps ([Guest RAM](gui-protocol.md#guest-ram)), which
-  AVF's memory balloon can't hand back to Android. Size the VM's memory for the
-  most the guest will use. Where the app can't map guest RAM, free guest
-  memory goes back through the balloon.
+- A VM with at most a quarter of the phone's RAM (`GuestRam.PHONE_SHARE`)
+  runs on RAM the app maps ([Guest RAM](gui-protocol.md#guest-ram)), so its
+  windows draw fast, but what the guest touches stays the app's until the VM
+  stops: AVF's memory balloon can't hand it back to Android. A bigger VM runs
+  on crosvm's RAM, where free guest memory goes back through the balloon, and
+  its windows' frames go over the stream. The memory setting says which.
 
 ## What the module trims on AVF
 

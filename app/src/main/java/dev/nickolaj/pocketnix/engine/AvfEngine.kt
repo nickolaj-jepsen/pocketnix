@@ -185,6 +185,12 @@ class AvfEngine(private val context: Context) : VmEngine {
             return false
         }
         val bytes = settings.memoryMb.toLong() shl 20
+        if (!GuestRam.fits(bytes, GuestRam.phoneRam(context))) {
+            // On crosvm's RAM the balloon hands free memory back; a big VM on guest RAM can starve the phone.
+            Log.i(TAG, "guest RAM stays in crosvm: ${settings.memoryMb} MiB is over ${GuestRam.maxMib(context)} MiB")
+            AvfReflect.editRawConfig(null)
+            return false
+        }
         val fd = runCatching { GuestRam.create(bytes) }.getOrElse {
             Log.w(TAG, "guest RAM stays in crosvm", it)
             AvfReflect.editRawConfig(null)

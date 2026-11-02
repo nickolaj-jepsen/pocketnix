@@ -59,7 +59,13 @@ that cross directories.
   the VM with it. App-made guest RAM and the AVF speaker exclude each other.
 - The balloon's free-page reporting fails on app-made (ashmem) guest RAM
   ("failed to handle the inflate balloon event … I/O error"), so with it the
-  guest keeps the memory it touched.
+  guest keeps the memory it touched. A memfd isn't a way out: sepolicy denies
+  virtmgr the app's memfd (`avc: denied { read write } … /memfd:…`) and
+  virtmgr dies, so `createVm` throws `DeadObjectException`, and so does every
+  later start until the app's process restarts.
+- A 4 GiB VM on guest RAM that has touched all of it swap-thrashes an 11 GB
+  phone with other apps open: the phone stops answering. `GuestRam.PHONE_SHARE`
+  is the limit the app keeps to.
 - The host refuses crosvm's own `sched_setattr` and `sched_setaffinity` for
   its vCPUs ("Failed to boost vcpu util", "Failed to set CPU affinity":
   EPERM), so `--host-cpu-topology`'s pinning and `boostUclamp` do nothing; the
