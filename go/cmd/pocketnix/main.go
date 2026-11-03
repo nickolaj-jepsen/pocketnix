@@ -23,6 +23,7 @@ commands:
   ssh-proxy   an ssh ProxyCommand to the guest's sshd over adb
   control     drive a debug build's tabs over adb and read them back
   bench       benchmark the GUI pipeline on a phone or the desktop
+  lab         test a phone's memory limit with paired guest fills
   version     print the CLI and protocol versions
 `
 
@@ -53,6 +54,8 @@ func main() {
 		err = runControl(os.Args[2:])
 	case "bench":
 		err = runBench(os.Args[2:])
+	case "lab":
+		err = runLab(os.Args[2:])
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)

@@ -171,6 +171,21 @@ pocketnix control lift-limit --restore
 - The command underneath is the limiter's own test support, so an Android
   update may take it away.
 
+To test the limit itself, `pocketnix lab memory` (`pocketnix lab -h`) runs the
+same guest memory fill with the limit lifted and then at the limit, and says
+which one the guest stopped answering in:
+
+```bash
+pocketnix lab memory
+pocketnix lab memory --limit 2000   # for a VM that fits under the phone's limit
+```
+
+It takes a few minutes, with the phone locked and no one moving the app, so try
+it before a soak. A breaker over adb raises the limit when the guest stalls, and
+that ends a freeze in seconds. On guest RAM the VM restarts between the arms,
+which ends what runs in the guest. A limit lower than the phone's own hasn't
+been compared with a real one, so check a surprise at the phone's limit.
+
 ## Swapping an app build
 
 `provision` sets up a phone. To put another build of the app on a phone that

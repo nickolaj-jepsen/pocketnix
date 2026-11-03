@@ -588,7 +588,14 @@ func fakeLimiter(state, line string, w []string) (out string, status int, ok boo
 		return fakeAppUID(state) + "\n", 0, true
 	}
 	if strings.HasPrefix(line, "p=$(pidof ") {
-		return "state=4 (FGS)\nhigh=" + read("limiter-high") + "\nswapMax=max\ncurrent=1\npeak=1\nhighEvents=0\n", 0, true
+		or := func(name, fallback string) string {
+			if v := read(name); v != "" {
+				return v
+			}
+			return fallback
+		}
+		return "state=" + or("limiter-state", "4 (FOREGROUND_SERVICE)") + "\nhigh=" + read("limiter-high") + "\nswapMax=max\ncurrent=" + or("limiter-current", "1") +
+			"\npeak=1\nhighEvents=" + or("limiter-events", "0") + "\navail=" + or("limiter-avail", "2000000") + "\nscan=0\nsteal=0\nsys=10\n", 0, true
 	}
 	if !strings.HasPrefix(line, "cmd activity memory-limiter ") {
 		return "", 0, false

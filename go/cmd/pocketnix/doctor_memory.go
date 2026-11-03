@@ -103,13 +103,19 @@ func parseLimiter(status string) *doctorLimiter {
 	return l
 }
 
-func parseAppMemory(out string) *doctorAppMemory {
+// keyValues reads key=value lines.
+func keyValues(out string) map[string]string {
 	values := map[string]string{}
 	for _, line := range strings.Split(out, "\n") {
 		if k, v, ok := strings.Cut(strings.TrimSpace(line), "="); ok {
 			values[k] = v
 		}
 	}
+	return values
+}
+
+func parseAppMemory(out string) *doctorAppMemory {
+	values := keyValues(out)
 	return &doctorAppMemory{
 		State:      values["state"],
 		High:       values["high"],
