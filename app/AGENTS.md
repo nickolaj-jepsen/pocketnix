@@ -71,8 +71,7 @@ that cross directories.
   the limit with the app out of front seizes the phone: crosvm's RSS collapses,
   the kernel takes most cores and ssh dies while adb stays up, and bringing the
   app to the front recovers it in about 10 s. `system_server` logs `MemoryLimiter:
-  onLimitExceeded`. `GuestRam.PHONE_SHARE` picks the RAM path; it doesn't keep a
-  VM under the limit. By source, past memHigh plus swap the process is killed
+  onLimitExceeded`. By source, past memHigh plus swap the process is killed
   (`MemoryLimiter:AnonSwap`).
 - `cmd activity memory-limiter` works from plain adb. `status` prints the limits.
   `manual <app pid> <MiB>` sets both files, though its help says percent, and
