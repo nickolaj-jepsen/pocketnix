@@ -13,7 +13,7 @@ import (
 
 // limiterOverheadMiB is roughly what the app and crosvm hold beside guest RAM,
 // in the limit's cgroup: a 2867 MiB VM rode a Pixel 8 Pro's 3072 MiB limit
-// without freezing the phone.
+// without freezing the phone. The app's MemoryLimit.OVERHEAD_MIB is the same.
 const limiterOverheadMiB = 200
 
 const limiterStatus = "cmd activity memory-limiter status"

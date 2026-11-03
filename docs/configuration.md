@@ -184,7 +184,8 @@ The app tells the guest about the phone:
   and the VM counts as the app's on either kind of RAM. The limit is lower while
   the app isn't in front, despite its foreground service: a guest that uses more
   than that can freeze the phone until the app comes back to the front. On a
-  phone with limits, `/vendor/etc/memory-limiter-config.xml` holds them.
+  phone with limits, `/vendor/etc/memory-limiter-config.xml` holds them, and the
+  memory setting warns of a VM over them.
 
 ## What the module trims on AVF
 

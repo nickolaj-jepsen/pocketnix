@@ -22,6 +22,7 @@ import dev.nickolaj.pocketnix.engine.AvfEngine
 import dev.nickolaj.pocketnix.engine.BootMenu
 import dev.nickolaj.pocketnix.engine.ConsoleLog
 import dev.nickolaj.pocketnix.engine.DiskImage
+import dev.nickolaj.pocketnix.engine.MemoryLimit
 import dev.nickolaj.pocketnix.engine.TcpEngine
 import dev.nickolaj.pocketnix.engine.VmEngine
 import dev.nickolaj.pocketnix.engine.VmState
@@ -371,6 +372,9 @@ class Vm(private val app: Context) {
         if (bootMenu && e.ownsGuest) {
             tabs.select(tabs.console.id)
             BootMenu(console, scope).tap()
+        }
+        if (e.ownsGuest) {
+            MemoryLimit.read(app)?.warning(settings.memoryMb)?.let { console.append("\r\n[pocketnix: $it]\r\n") }
         }
         // The engine claims Starting first, so the service never starts into a Stopped state and quits.
         e.start(settings::vm, console)

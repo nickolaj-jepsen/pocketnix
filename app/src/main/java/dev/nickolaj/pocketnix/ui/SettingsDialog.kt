@@ -18,11 +18,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import dev.nickolaj.pocketnix.BuildConfig
 import dev.nickolaj.pocketnix.Settings
 import dev.nickolaj.pocketnix.Vm
+import dev.nickolaj.pocketnix.engine.MemoryLimit
 import dev.nickolaj.pocketnix.engine.VmState
 
 /** The set-once hardware; changes apply at the next start. */
@@ -48,7 +50,9 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!stopped) Text("Changes apply when the VM next starts or the guest reboots.")
-                NumberField("Memory (MB)", memory, memoryError) { memory = it }
+                val context = LocalContext.current
+                val limit = remember { MemoryLimit.read(context) }
+                NumberField("Memory (MB)", memory, memoryError, hint = memory.toIntOrNull()?.let { limit?.warning(it) }) { memory = it }
                 Toggle("One vCPU per host core", allCpus) { allCpus = it }
                 Toggle("Network", network) { network = it }
                 Toggle("Start when the phone boots", onBoot) { onBoot = it }
@@ -85,14 +89,14 @@ fun SettingsDialog(vm: Vm, onDismiss: () -> Unit) {
 private const val MIN_MEMORY_MB = 512
 
 @Composable
-private fun NumberField(label: String, value: String, error: String?, onChange: (String) -> Unit) {
+private fun NumberField(label: String, value: String, error: String?, hint: String? = null, onChange: (String) -> Unit) {
     OutlinedTextField(
         value,
         { v -> onChange(v.filter(Char::isDigit).take(9)) },
         label = { Text(label) },
         singleLine = true,
         isError = error != null,
-        supportingText = error?.let { { Text(it) } },
+        supportingText = (error ?: hint)?.let { { Text(it) } },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
     )
 }
