@@ -25,7 +25,7 @@ import (
 	"github.com/nickolaj-jepsen/pocketnix/go/internal/adb"
 )
 
-const doctorUsage = `usage: pocketnix doctor [--serial <s>] [--debug] [--json] [--smoke] [--gpu-apps <id>,<id>] [--record <dir>]
+var doctorUsage = `usage: pocketnix doctor [--serial <s>] [--debug] [--json] [--smoke] [--steps <name>,<name>] [--gpu-apps <id>,<id>] [--record <dir>]
 
 Probes a phone for what pocketnix needs (AVF, its kernel, u-boot, the app,
 Android's memory limit) and prints a verdict: ok, warn or fail. Without --smoke it exits 1 only on
@@ -41,6 +41,11 @@ flags:
                      A failing check also exits 1, and so does a run where none
                      could start (the app missing or silent, its VM not running);
                      a single check that doesn't apply is reported and exits 0
+  --steps <names>    with --smoke, run only these steps, in smoke's own order, and
+                     report the rest as not selected. The steps are
+                     ` + strings.Join(smokeSteps, ", ") + `.
+                     cleanup always runs, and reboot only when named, so the guest
+                     stays up otherwise. gpu and pages share one launch, which either runs
   --gpu-apps <ids>   two app ids from pocketnix control dump's apps=, for the GPU step
   --record <dir>     record the run into a new bundle under dir: the screen (with
                      scrcpy, if it's on PATH), logcat, every command and the report.
@@ -66,6 +71,8 @@ type doctorOpts struct {
 	serial, record     string
 	debug, json, smoke bool
 	gpuApps            []string
+	// steps are the smoke steps --steps named; nil without the flag, never empty with it.
+	steps []string
 }
 
 func parseDoctor(args []string) (*doctorOpts, error) {
@@ -85,6 +92,11 @@ func parseDoctor(args []string) (*doctorOpts, error) {
 		}
 		return nil
 	})
+	fs.Func("steps", "", func(v string) error {
+		names, err := parseSmokeSteps(v)
+		o.steps = append(o.steps, names...)
+		return err
+	})
 	if err := fs.Parse(args); err != nil {
 		// flag has printed the error, or the usage for -h.
 		return nil, errUsage
@@ -93,10 +105,34 @@ func parseDoctor(args []string) (*doctorOpts, error) {
 		fs.Usage()
 		return nil, errUsage
 	}
+	if o.steps != nil && !o.smoke {
+		fmt.Fprintln(os.Stderr, "doctor: --steps needs --smoke")
+		fs.Usage()
+		return nil, errUsage
+	}
 	if o.smoke {
 		o.debug = true
 	}
 	return o, nil
+}
+
+// parseSmokeSteps reads --steps' comma-separated names. It refuses a name that
+// isn't in smokeSteps, and a value naming none, as a run without a filter reboots the guest.
+func parseSmokeSteps(v string) ([]string, error) {
+	var names []string
+	for _, name := range strings.Split(v, ",") {
+		if name = strings.TrimSpace(name); name == "" {
+			continue
+		}
+		if !slices.Contains(smokeSteps, name) {
+			return nil, fmt.Errorf("unknown step %q: the steps are %s", name, strings.Join(smokeSteps, ", "))
+		}
+		names = append(names, name)
+	}
+	if names == nil {
+		return nil, errors.New("it names no step")
+	}
+	return names, nil
 }
 
 func (o *doctorOpts) pkg() string { return appPackage(o.debug) }
@@ -134,12 +170,12 @@ func runDoctor(args []string) error {
 	smokeRan := true
 	if o.smoke {
 		if rec != nil {
-			r.Smoke, smokeRan = runSmoke(rec.ctx, dev, o.pkg(), o.gpuApps, rec.smokeProgress())
+			r.Smoke, smokeRan = runSmoke(rec.ctx, dev, o.pkg(), o.gpuApps, o.steps, rec.smokeProgress())
 		} else {
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 			// After the first interrupt smoke cleans up; a second one kills it as usual.
 			context.AfterFunc(ctx, stop)
-			r.Smoke, smokeRan = runSmoke(ctx, dev, o.pkg(), o.gpuApps, os.Stderr)
+			r.Smoke, smokeRan = runSmoke(ctx, dev, o.pkg(), o.gpuApps, o.steps, os.Stderr)
 			stop()
 		}
 	}
@@ -664,16 +700,28 @@ func stepSkip(name, format string, args ...any) smokeStep {
 // smokeSteps are runSmoke's step names, in its order.
 var smokeSteps = []string{"forward", "pty", "notification", "inhibitor", "gpu", "pages", "cleanup", "reboot"}
 
+// stepNotSelected is the reason of a step --steps left out.
+const stepNotSelected = "not selected by --steps"
+
 // runSmoke runs the end-to-end checks against pkg's running VM, printing
-// progress to progress. Cleanup runs even once ctx is done (an interrupt),
-// and the guest reboot comes last. It returns every step, and false when the
-// app or its VM wasn't there to run any of them on.
-func runSmoke(ctx context.Context, dev adb.Device, pkg string, gpuApps []string, progress io.Writer) ([]smokeStep, bool) {
+// progress to progress. Only the steps in only run, or all of them when it's
+// nil, always in smokeSteps' order; the rest are reported as skipped. Cleanup
+// runs whatever only holds, even once ctx is done (an interrupt), and the guest
+// reboot comes last. It returns every step, and false when the app or its VM
+// wasn't there to run any of them on.
+func runSmoke(ctx context.Context, dev adb.Device, pkg string, gpuApps, only []string, progress io.Writer) ([]smokeStep, bool) {
 	s := &smoker{ctx: ctx, dev: dev, pkg: pkg, ctl: control{provider{dev: dev, authority: pkg + ".control"}}, gpuApps: gpuApps, util: -1, ptyTab: -1}
+	selected := func(name string) bool {
+		return only == nil || name == "cleanup" || slices.Contains(only, name)
+	}
 	skipAll := func(format string, args ...any) ([]smokeStep, bool) {
 		var steps []smokeStep
 		for _, name := range smokeSteps {
-			steps = append(steps, stepSkip(name, format, args...))
+			if selected(name) {
+				steps = append(steps, stepSkip(name, format, args...))
+			} else {
+				steps = append(steps, stepSkip(name, stepNotSelected))
+			}
 		}
 		return steps, false
 	}
@@ -686,16 +734,25 @@ func runSmoke(ctx context.Context, dev adb.Device, pkg string, gpuApps []string,
 	}
 	var steps []smokeStep
 	run := func(names []string, f func() []smokeStep) {
-		if s.ctx.Err() != nil {
+		running := slices.DeleteFunc(slices.Clone(names), func(name string) bool { return !selected(name) })
+		if len(running) == 0 || s.ctx.Err() != nil {
 			for _, name := range names {
-				steps = append(steps, stepSkip(name, "interrupted"))
+				if selected(name) {
+					steps = append(steps, stepSkip(name, "interrupted"))
+				} else {
+					steps = append(steps, stepSkip(name, stepNotSelected))
+				}
 			}
 			return
 		}
-		fmt.Fprintf(progress, "smoke: %s\n", strings.Join(names, ", "))
+		fmt.Fprintf(progress, "smoke: %s\n", strings.Join(running, ", "))
 		for _, st := range f() {
 			if s.ctx.Err() != nil && st.OK != nil && !*st.OK {
 				st.Detail = "interrupted: " + st.Detail
+			}
+			if !selected(st.Name) {
+				// It shares a run with a selected step, and may hold why that one has no result.
+				st = stepSkip(st.Name, "%s; the run it shares said: %s", stepNotSelected, st.Detail)
 			}
 			steps = append(steps, st)
 		}

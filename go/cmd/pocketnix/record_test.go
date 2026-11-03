@@ -379,6 +379,23 @@ func TestRecordSmoke(t *testing.T) {
 	logIndex(t, log, "logcat", "main,system,crash", "--uid=")
 }
 
+func TestRecordSmokeSteps(t *testing.T) {
+	d := smokeDevice(t, everyTool...)
+	addFakeBin(t, "scrcpy")
+	dir := t.TempDir()
+	if _, err := stdoutOf(t, func() error {
+		return runDoctor([]string{"--serial", recordSerial, "--smoke", "--steps", "notification", "--record", dir})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var r doctorReport
+	if err := json.Unmarshal([]byte(readBundle(t, onlyBundle(t, dir), "doctor.json")), &r); err != nil {
+		t.Fatal(err)
+	}
+	wantSelected(t, r.Smoke, "notification", "cleanup")
+	wantNoReboot(t, d)
+}
+
 func TestRecordWithoutScrcpy(t *testing.T) {
 	d := newFakeDevice(t)
 	cannedPixel(d)

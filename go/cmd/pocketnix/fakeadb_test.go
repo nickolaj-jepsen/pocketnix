@@ -68,8 +68,12 @@ const fakeDiskFile = "app/files/disk.img"
 // fakeSerial is what get-serialno answers when no -s is given.
 const fakeSerial = "FAKESERIAL0001"
 
+// fakeADBCalled is the state file that marks any adb command having run.
+const fakeADBCalled = "adb-called"
+
 func fakeADB(args []string) int {
 	state := os.Getenv("FAKE_ADB_STATE")
+	os.WriteFile(filepath.Join(state, fakeADBCalled), nil, 0o644)
 	logEvent := func(format string, a ...any) {
 		f, _ := os.OpenFile(filepath.Join(state, "events"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		fmt.Fprintf(f, format+"\n", a...)
@@ -696,6 +700,9 @@ func (d *fakeDevice) write(name string, b []byte) {
 	os.MkdirAll(filepath.Dir(p), 0o755)
 	os.WriteFile(p, b, 0o644)
 }
+
+// adbCalled is whether any adb command has run against the device.
+func (d *fakeDevice) adbCalled() bool { return exists(filepath.Join(d.state, fakeADBCalled)) }
 
 func (d *fakeDevice) events() string {
 	b, _ := os.ReadFile(filepath.Join(d.state, "events"))

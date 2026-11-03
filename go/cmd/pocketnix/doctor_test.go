@@ -624,7 +624,7 @@ func TestSmokeKeepsOtherAppsNotificationsOnThePhone(t *testing.T) {
 	d.write("notifications", []byte("  NotificationRecord(0x0def5678: pkg=org.example.sms user=UserHandle{0} id=3 tag=thread-4512345678 importance=4 key=0|org.example.sms|3|x|10300: Notification(channel=sms))\n        android.title=String (Mum)\n        android.text=String (your code is 123456)\n"))
 	var printed strings.Builder
 	dev := adb.Device{Trace: func(_ []string, _ time.Time, _ int, stdout string) { printed.WriteString(stdout) }}
-	steps, _ := runSmoke(context.Background(), dev, debugPackage, nil, io.Discard)
+	steps, _ := runSmoke(context.Background(), dev, debugPackage, nil, nil, io.Discard)
 	if st, _ := stepNamed(steps, "notification"); st.OK == nil || !*st.OK {
 		t.Errorf("notification: %+v", st)
 	}
@@ -730,7 +730,7 @@ func TestSmokeInterruptCleansUp(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cancelOnTyped(ctx, cancel, d, reactPTY.matches)
-	steps, _ := runSmoke(ctx, adb.Device{}, debugPackage, smokeApps, io.Discard)
+	steps, _ := runSmoke(ctx, adb.Device{}, debugPackage, smokeApps, nil, io.Discard)
 	for _, name := range []string{"notification", "inhibitor", "gpu", "pages", "reboot"} {
 		if st, _ := stepNamed(steps, name); st.OK != nil || !strings.Contains(st.Detail, "interrupted") {
 			t.Errorf("step %s after the interrupt: %+v", name, st)
@@ -777,7 +777,7 @@ func TestSmokeInterruptDuringCleanupSkipsTheReboot(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cancelOnTyped(ctx, cancel, d, isExit)
-	steps, _ := runSmoke(ctx, adb.Device{}, debugPackage, nil, io.Discard)
+	steps, _ := runSmoke(ctx, adb.Device{}, debugPackage, nil, nil, io.Discard)
 	if st, _ := stepNamed(steps, "reboot"); st.OK != nil || !strings.Contains(st.Detail, "interrupted") {
 		t.Errorf("reboot: %+v, want it skipped", st)
 	}
@@ -801,7 +801,7 @@ func TestSmokeInterruptEndsTheRebootsWait(t *testing.T) {
 	cancelOnTyped(ctx, cancel, d, isReboot)
 	done := make(chan []smokeStep)
 	go func() {
-		steps, _ := runSmoke(ctx, adb.Device{}, debugPackage, nil, io.Discard)
+		steps, _ := runSmoke(ctx, adb.Device{}, debugPackage, nil, nil, io.Discard)
 		done <- steps
 	}()
 	select {
@@ -846,7 +846,7 @@ func TestSmokeFailedRebootClosesItsTab(t *testing.T) {
 			if tc.interrupt {
 				cancelOnTyped(ctx, cancel, d, isReboot)
 			}
-			steps, _ := runSmoke(ctx, adb.Device{}, debugPackage, nil, io.Discard)
+			steps, _ := runSmoke(ctx, adb.Device{}, debugPackage, nil, nil, io.Discard)
 			if st, _ := stepNamed(steps, "reboot"); st.OK == nil || *st.OK {
 				t.Errorf("reboot: %+v, want a failure", st)
 			}
@@ -912,7 +912,7 @@ func TestSmokeInterruptDuringInhibitEndsIt(t *testing.T) {
 			}
 		}
 	}()
-	steps, _ := runSmoke(ctx, adb.Device{}, debugPackage, nil, io.Discard)
+	steps, _ := runSmoke(ctx, adb.Device{}, debugPackage, nil, nil, io.Discard)
 	if st, _ := stepNamed(steps, "cleanup"); st.OK == nil || !*st.OK {
 		t.Errorf("cleanup: %+v", st)
 	}
@@ -929,7 +929,7 @@ func TestSmokeCleanupWatchesAForwardWhoseAllowFailed(t *testing.T) {
 	d := smokeDevice(t, append(without(everyTool, reactListen), allowedAtOnce)...)
 	smokeTimes.forward = 50 * time.Millisecond
 	d.drop("answer:s:allow", "", "error: closed\n")
-	steps, _ := runSmoke(context.Background(), adb.Device{}, debugPackage, nil, io.Discard)
+	steps, _ := runSmoke(context.Background(), adb.Device{}, debugPackage, nil, nil, io.Discard)
 	if st, _ := stepNamed(steps, "forward"); st.OK == nil || *st.OK {
 		t.Errorf("forward: %+v, want a failure", st)
 	}
@@ -943,7 +943,7 @@ func TestSmokeIgnoresATypedLinesMarkerText(t *testing.T) {
 	wrapped := reactInhibit
 	wrapped.Output = []string{"${1}-exit=0; exit; }; systemd-inhibit --what=sleep --who=pocket"}
 	smokeDevice(t, append(without(everyTool, reactInhibit), wrapped)...)
-	steps, _ := runSmoke(context.Background(), adb.Device{}, debugPackage, nil, io.Discard)
+	steps, _ := runSmoke(context.Background(), adb.Device{}, debugPackage, nil, nil, io.Discard)
 	if st, _ := stepNamed(steps, "inhibitor"); st.OK == nil || *st.OK || !strings.Contains(st.Detail, "printed no") {
 		t.Errorf("inhibitor: %+v, want a failure saying it saw no exit line", st)
 	}
@@ -1174,5 +1174,333 @@ func TestSmokePTYFindsAJoinedMarker(t *testing.T) {
 				t.Errorf("pty: %q, want it to say %q", st.Detail, tc.want)
 			}
 		})
+	}
+}
+
+// wantSelected checks a report's steps: those in ran passed, and every other
+// reads as skipped for not being selected.
+func wantSelected(t *testing.T, steps []smokeStep, ran ...string) {
+	t.Helper()
+	for _, name := range smokeSteps {
+		st, ok := stepNamed(steps, name)
+		switch {
+		case !ok:
+			t.Errorf("the report lacks step %s", name)
+		case slices.Contains(ran, name):
+			if st.OK == nil || !*st.OK {
+				t.Errorf("step %s: %+v, want it to pass", name, st)
+			}
+		case !notSelected(st):
+			t.Errorf("step %s: %+v, want ok null saying it wasn't selected", name, st)
+		}
+	}
+}
+
+func notSelected(st smokeStep) bool {
+	return st.OK == nil && strings.Contains(st.Detail, "not selected")
+}
+
+func wantNoReboot(t *testing.T, d *fakeDevice) {
+	t.Helper()
+	if typedInto(d, isReboot) || fakeReboots(d.state) != 0 {
+		t.Errorf("the guest was told to reboot, and rebooted %d times", fakeReboots(d.state))
+	}
+}
+
+func TestSmokeStepsRunsOneStepAndCleansUp(t *testing.T) {
+	scripts := map[string]fakeReaction{"forward": reactListen, "pty": reactPTY, "notification": reactNotify, "inhibitor": reactInhibit}
+	for name := range scripts {
+		t.Run(name, func(t *testing.T) {
+			d := smokeDevice(t, everyTool...)
+			r, _, err := doctorJSON(t, "--smoke", "--steps", name)
+			if err != nil {
+				t.Errorf("doctor --smoke --steps %s: %v", name, err)
+			}
+			wantSelected(t, r.Smoke, name, "cleanup")
+			for other, script := range scripts {
+				if ran := typedInto(d, script.matches); ran != (other == name) {
+					t.Errorf("step %s's script typed: %v", other, ran)
+				}
+			}
+			exitedEveryTab(t, d)
+			if left := leftovers(d); len(left) > 0 {
+				t.Errorf("smoke left %q", left)
+			}
+			wantNoReboot(t, d)
+		})
+	}
+}
+
+func TestSmokeStepsCleanupAlone(t *testing.T) {
+	d := smokeDevice(t, everyTool...)
+	r, _, err := doctorJSON(t, "--smoke", "--steps", "cleanup")
+	if err != nil {
+		t.Errorf("doctor --smoke --steps cleanup: %v", err)
+	}
+	wantSelected(t, r.Smoke, "cleanup")
+	if len(d.typed()) > 0 {
+		t.Errorf("nothing to clean up, yet typed %v", d.typed())
+	}
+}
+
+func TestSmokeStepsRebootsWhenNamed(t *testing.T) {
+	d := smokeDevice(t, everyTool...)
+	r, _, err := doctorJSON(t, "--smoke", "--steps", "reboot")
+	if err != nil {
+		t.Errorf("doctor --smoke --steps reboot: %v", err)
+	}
+	wantSelected(t, r.Smoke, "reboot", "cleanup")
+	if fakeReboots(d.state) != 1 {
+		t.Errorf("the guest rebooted %d times, want once", fakeReboots(d.state))
+	}
+	if left := leftovers(d); len(left) > 0 {
+		t.Errorf("smoke left %q", left)
+	}
+}
+
+// Tab ids count up, so they tell the order steps opened theirs. A run's tabs
+// close before the reboot, or exitedEveryTab would find no exit in them.
+func TestSmokeStepsRunInTheirOwnOrder(t *testing.T) {
+	for name, args := range map[string][]string{
+		"given-out-of-order": {"--smoke", "--steps", "reboot,pty,forward"},
+		"no-filter":          {"--smoke"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := smokeDevice(t, everyTool...)
+			r, _, err := doctorJSON(t, args...)
+			if err != nil {
+				t.Errorf("doctor %v: %v", args, err)
+			}
+			var got []string
+			for _, st := range r.Smoke {
+				got = append(got, st.Name)
+			}
+			if !slices.Equal(got, smokeSteps) {
+				t.Errorf("the report's order is %q, want %q", got, smokeSteps)
+			}
+			tabOf := func(match func(string) bool) int {
+				for tab, lines := range d.typed() {
+					if match(lines[0]) {
+						return tab
+					}
+				}
+				t.Errorf("a step opened no tab: %v", d.typed())
+				return -1
+			}
+			forward, pty, reboot := tabOf(reactListen.matches), tabOf(reactPTY.matches), tabOf(isReboot)
+			if forward >= pty || pty >= reboot {
+				t.Errorf("tabs opened as forward %d, pty %d, reboot %d", forward, pty, reboot)
+			}
+			exitedEveryTab(t, d)
+		})
+	}
+}
+
+// launchReactions are every tool, plus marks of the launches, after rs.
+func launchReactions(rs ...fakeReaction) []fakeReaction {
+	rs = append(rs, everyTool...)
+	for _, app := range smokeApps {
+		rs = append(rs, fakeReaction{Launch: app, Write: map[string]string{"launched/" + app: ""}})
+	}
+	return rs
+}
+
+// reactErrUnspec has crosvm log the GPU failure as the second app launches.
+var reactErrUnspec = fakeReaction{Launch: smokeApps[1], Append: map[string]string{
+	"logcat": "1762000005.000  4321  4400 E crosvm  : ResourceUnmapBlob: ErrUnspec\n",
+}}
+
+func wantBothLaunchedAndEnded(t *testing.T, d *fakeDevice) {
+	t.Helper()
+	for _, app := range smokeApps {
+		if !exists(filepath.Join(d.state, "launched", app)) {
+			t.Errorf("%s was never launched:\n%s", app, d.events())
+		}
+	}
+	if left := leftovers(d); len(left) > 0 {
+		t.Errorf("smoke left %q", left)
+	}
+}
+
+func TestSmokeStepsSharedLaunch(t *testing.T) {
+	for _, tc := range []struct {
+		name, steps string
+		reactions   []fakeReaction
+		ran         []string
+	}{
+		{name: "gpu-alone", steps: "gpu", reactions: launchReactions(), ran: []string{"gpu", "cleanup"}},
+		{name: "pages-alone", steps: "pages", reactions: launchReactions(), ran: []string{"pages", "cleanup"}},
+		{name: "both", steps: "pages,gpu", reactions: launchReactions(), ran: []string{"gpu", "pages", "cleanup"}},
+		// gpu fails here, but wasn't selected.
+		{name: "pages-alone-gpu-failing", steps: "pages", reactions: launchReactions(reactErrUnspec), ran: []string{"pages", "cleanup"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := smokeDevice(t, tc.reactions...)
+			r, _, err := doctorJSON(t, "--smoke", "--steps", tc.steps, "--gpu-apps", strings.Join(smokeApps, ","))
+			if err != nil {
+				t.Errorf("run: %v", err)
+			}
+			wantSelected(t, r.Smoke, tc.ran...)
+			wantBothLaunchedAndEnded(t, d)
+			wantNoReboot(t, d)
+		})
+	}
+}
+
+func TestSmokeStepsSelectedGPUFailureExits1(t *testing.T) {
+	d := smokeDevice(t, launchReactions(reactErrUnspec)...)
+	r, _, err := doctorJSON(t, "--smoke", "--steps", "gpu", "--gpu-apps", strings.Join(smokeApps, ","))
+	var status exitStatus
+	if !errors.As(err, &status) || status != 1 {
+		t.Errorf("run: %v, want exit status 1", err)
+	}
+	if st, _ := stepNamed(r.Smoke, "gpu"); st.OK == nil || *st.OK {
+		t.Errorf("gpu: %+v, want a failure", st)
+	}
+	if st, _ := stepNamed(r.Smoke, "pages"); !notSelected(st) {
+		t.Errorf("pages: %+v, want it not selected", st)
+	}
+	wantBothLaunchedAndEnded(t, d)
+}
+
+// A launch that fails only fails gpu, so a run of pages alone passes, and its
+// report still has to say why pages saw no frame.
+func TestSmokeStepsPagesAloneKeepsTheLaunchsProblem(t *testing.T) {
+	const silent = "org.example.Silent"
+	d := smokeDevice(t, append(slices.Clone(everyTool), fakeReaction{Launch: silent, Remove: []string{"control/windows/" + silent}})...)
+	smokeTimes.window = 50 * time.Millisecond
+	d.setGUI(silent, smokeApps[0])
+	r, _, err := doctorJSON(t, "--smoke", "--steps", "pages", "--gpu-apps", silent+","+smokeApps[0])
+	if err != nil {
+		t.Errorf("run: %v", err)
+	}
+	if st, _ := stepNamed(r.Smoke, "pages"); st.OK != nil {
+		t.Errorf("pages: %+v, want ok null", st)
+	}
+	if st, _ := stepNamed(r.Smoke, "gpu"); !notSelected(st) || !strings.Contains(st.Detail, silent) {
+		t.Errorf("gpu: %+v, want it not selected, naming the app", st)
+	}
+}
+
+func TestSmokeStepsSharedLaunchNeedsGPUApps(t *testing.T) {
+	for name, other := range map[string]string{"gpu": "pages", "pages": "gpu"} {
+		t.Run(name, func(t *testing.T) {
+			smokeDevice(t, everyTool...)
+			r, _, err := doctorJSON(t, "--smoke", "--steps", name)
+			if err != nil {
+				t.Errorf("run: %v", err)
+			}
+			if st, _ := stepNamed(r.Smoke, name); st.OK != nil || !strings.Contains(st.Detail, "--gpu-apps") {
+				t.Errorf("%s: %+v, want ok null naming --gpu-apps", name, st)
+			}
+			if st, _ := stepNamed(r.Smoke, other); !notSelected(st) {
+				t.Errorf("%s: %+v, want it not selected", other, st)
+			}
+		})
+	}
+}
+
+func TestSmokeStepsFailingStepExits1AndCleansUp(t *testing.T) {
+	d := smokeDevice(t, without(everyTool, reactPTY)...)
+	r, _, err := doctorJSON(t, "--smoke", "--steps", "pty")
+	var status exitStatus
+	if !errors.As(err, &status) || status != 1 {
+		t.Errorf("a failed step returned %v, want exit status 1", err)
+	}
+	if st, _ := stepNamed(r.Smoke, "pty"); st.OK == nil || *st.OK {
+		t.Errorf("pty: %+v, want a failure", st)
+	}
+	if st, _ := stepNamed(r.Smoke, "cleanup"); st.OK == nil || !*st.OK {
+		t.Errorf("cleanup: %+v", st)
+	}
+	if left := leftovers(d); len(left) > 0 {
+		t.Errorf("smoke left %q", left)
+	}
+	wantNoReboot(t, d)
+}
+
+// A run that can't start exits 1, filtered or not; what it left out still says so.
+func TestSmokeStepsNeedARunningVM(t *testing.T) {
+	d := smokeDevice(t, everyTool...)
+	d.setHead("state=Stopped phase=Stopped link=Down host=null\nengine launched=none audio=off")
+	r, _, err := doctorJSON(t, "--smoke", "--steps", "forward")
+	var status exitStatus
+	if !errors.As(err, &status) || status != 1 {
+		t.Errorf("run: %v, want exit status 1, as nothing ran", err)
+	}
+	for _, name := range []string{"forward", "cleanup"} {
+		if st, _ := stepNamed(r.Smoke, name); st.OK != nil || !strings.Contains(st.Detail, "Stopped") {
+			t.Errorf("step %s: %+v, want ok null naming the phase", name, st)
+		}
+	}
+	if st, _ := stepNamed(r.Smoke, "reboot"); !notSelected(st) {
+		t.Errorf("reboot: %+v, want it not selected", st)
+	}
+	if len(d.typed()) > 0 {
+		t.Errorf("smoke typed into tabs of a stopped VM: %v", d.typed())
+	}
+}
+
+// An interrupt skips the selected steps left, and leaves the others not selected.
+func TestSmokeStepsInterrupted(t *testing.T) {
+	d := smokeDevice(t, without(everyTool, reactPTY)...)
+	smokeTimes.pty = time.Minute
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cancelOnTyped(ctx, cancel, d, reactPTY.matches)
+	steps, _ := runSmoke(ctx, adb.Device{}, debugPackage, nil, []string{"pty", "notification"}, io.Discard)
+	if st, _ := stepNamed(steps, "notification"); st.OK != nil || !strings.Contains(st.Detail, "interrupted") {
+		t.Errorf("notification: %+v, want it interrupted", st)
+	}
+	for _, name := range []string{"forward", "inhibitor", "gpu", "pages", "reboot"} {
+		if st, _ := stepNamed(steps, name); !notSelected(st) {
+			t.Errorf("%s: %+v, want it not selected", name, st)
+		}
+	}
+	if st, _ := stepNamed(steps, "cleanup"); st.OK == nil || !*st.OK {
+		t.Errorf("cleanup: %+v", st)
+	}
+	if left := leftovers(d); len(left) > 0 {
+		t.Errorf("smoke left %q", left)
+	}
+	wantNoReboot(t, d)
+}
+
+func TestSmokeStepsUsageErrorsComeBeforeThePhone(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		// token is in what it prints.
+		token string
+	}{
+		{name: "unknown", args: []string{"--smoke", "--steps", "warp"}, token: "warp"},
+		{name: "unknown-among-known", args: []string{"--smoke", "--steps", "forward,warp"}, token: "warp"},
+		{name: "unknown-without-smoke", args: []string{"--steps", "warp"}, token: "warp"},
+		{name: "without-smoke", args: []string{"--steps", "forward"}},
+		// Reading these as no filter would reboot the guest.
+		{name: "empty", args: []string{"--smoke", "--steps", ""}},
+		{name: "only-commas", args: []string{"--smoke", "--steps", ","}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := smokeDevice(t, everyTool...)
+			var err error
+			printed, _ := stderrOf(t, func() error {
+				_, err = stdoutOf(t, func() error { return runDoctor(tc.args) })
+				return nil
+			})
+			if !errors.Is(err, errUsage) {
+				t.Errorf("doctor %q: %v, want a usage error", tc.args, err)
+			}
+			if !strings.Contains(printed, tc.token) {
+				t.Errorf("it printed no %q:\n%s", tc.token, printed)
+			}
+			if d.adbCalled() {
+				t.Errorf("doctor %q called adb", tc.args)
+			}
+		})
+	}
+	d := smokeDevice(t, everyTool...)
+	if _, _, err := doctorJSON(t, "--smoke", "--steps", "cleanup"); err != nil || !d.adbCalled() {
+		t.Errorf("a valid run: %v, adb called: %v", err, d.adbCalled())
 	}
 }
