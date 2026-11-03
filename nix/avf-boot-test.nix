@@ -36,8 +36,6 @@ runCommand "pocketnix-${name}" {nativeBuildInputs = [expect];} ''
   step "sudo systemctl is-system-running --wait || { systemctl --failed --no-pager; false; }" STATE
   step "systemd-analyze --no-pager; systemd-analyze blame --no-pager | head -n 15" ANALYZE
   step "grep -q zram /proc/swaps" ZRAM
-  # Google's kernel must have the controllers: without them the daemon's limits do nothing, silently.
-  step "sudo systemctl start nix-daemon.service && grep -vqx max /sys/fs/cgroup/system.slice/nix-daemon.service/memory.high && grep -vq '^max ' /sys/fs/cgroup/system.slice/nix-daemon.service/cpu.max" DAEMON
   step "sudo /run/current-system/bin/switch-to-configuration switch" SWITCH
   step "sudo test -e /boot/EFI/systemd/systemd-bootaa64.efi -a -e /boot/EFI/BOOT/BOOTAA64.EFI && sudo ls /boot/loader/entries" ESP
   send "sudo systemctl poweroff\r"

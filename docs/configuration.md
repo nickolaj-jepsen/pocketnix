@@ -199,10 +199,6 @@ To keep the image small and idle wake-ups rare, the module's AVF settings
 - zram swap on, systemd-oomd off.
 - The store hard-links identical files (`nix.settings.auto-optimise-store`),
   and coredumps keep a small `MaxUse`.
-- The Nix daemon runs at idle priority with limits on its CPU, memory and
-  parallel downloads (`systemd.services.nix-daemon.serviceConfig`,
-  `nix.settings.max-substitution-jobs`), because a guest's load is the
-  phone's. Big copies take longer.
 
 ## Other hypervisors
 

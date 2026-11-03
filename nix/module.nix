@@ -637,7 +637,7 @@ in {
       cpuQuota = mkOption {
         type = types.strMatching "[0-9]+%";
         default = "200%";
-        description = "CPU that evaluating and building the guest's system may use (systemd's `CPUQuota=`, 100% per core): the guest's vCPUs are the phone's. Without `managed.enable`, an AVF guest's Nix daemon still defaults to it.";
+        description = "CPU that evaluating and building the guest's system may use (systemd's `CPUQuota=`, 100% per core): the guest's vCPUs are the phone's.";
       };
     };
 
@@ -1061,16 +1061,6 @@ in {
       systemd.coredump.settings.Coredump.MaxUse = mkDefault "128M";
       # Generations share most files under new store paths: hard-link them.
       nix.settings.auto-optimise-store = mkDefault true;
-      # The guest's CPU is the phone's, and the memory it touches can stay the
-      # phone's loss until the VM stops: a big copy or rebuild must not take it all.
-      nix.settings.max-substitution-jobs = mkDefault 2;
-      nix.daemonCPUSchedPolicy = mkDefault "idle";
-      nix.daemonIOSchedClass = mkDefault "idle";
-      systemd.services.nix-daemon.serviceConfig = {
-        CPUQuota = mkDefault mgd.cpuQuota;
-        # Its page cache counts, so a big copy evicts its own cache instead of filling RAM.
-        MemoryHigh = mkDefault "50%";
-      };
       # No display: a login on tty1 is a session nobody sees.
       systemd.services."getty@tty1".enable = false;
       systemd.services."autovt@tty1".enable = false;
@@ -1135,6 +1125,8 @@ in {
         keep-derivations = mkDefault false;
       };
       # Builds run in the daemon; the agent runs evaluation under the same quota.
+      nix.daemonCPUSchedPolicy = mkDefault "idle";
+      nix.daemonIOSchedClass = mkDefault "idle";
       systemd.services.nix-daemon.serviceConfig.CPUQuota = mgd.cpuQuota;
       # `nixpkgs#…` is the system's own nixpkgs, fetched by rev rather than kept
       # in the closure: what the app's package index lists, and what the cache has.
