@@ -264,10 +264,7 @@ func runLab(args []string) error {
 
 // run tests the limit in two arms and leaves the limiter as it found it.
 func (r *labRig) run(ctx context.Context) (err error) {
-	var l *doctorLimiter
-	if status := shellOK(r.dev, limiterStatus); status != nil {
-		l = parseLimiter(*status)
-	}
+	l := probeLimiter(r.dev, r.pkg)
 	if l == nil || !l.Enabled || !l.Limits {
 		return errors.New("this phone has no working memory limiter to test")
 	}
@@ -428,7 +425,7 @@ func (r *labRig) free(ctx context.Context, vm labVM, limit int) error {
 		s, ok := r.sample()
 		return ok && s.Current < target, nil
 	}); err != nil {
-		return fmt.Errorf("memory stayed over %d MiB, so the limit can't come down: %w", limit-labRoomMiB, err)
+		return fmt.Errorf("memory stayed over %d MiB, so a %d MiB limit can't safely go on: pass a higher --limit: %w", limit-labRoomMiB, limit, err)
 	}
 	return nil
 }
@@ -454,14 +451,15 @@ func (r *labRig) lower(ctx context.Context, pid string, limit int) error {
 
 // restore leaves the limiter as it was, never lowering a limit.
 func (r *labRig) restore(was *doctorLimiter) error {
+	// A proc state change while the limiter wasn't ignoring has reapplied a limit,
+	// so a lifted app needs lifting again, not just ignoring again.
 	if was.AppIgnored {
 		return liftLimit(context.Background(), r.dev, r.pkg, io.Discard)
 	}
-	target := "none"
 	if was.Ignored != "" {
-		target = was.Ignored
+		return limiter(r.dev, "ignore", was.Ignored)
 	}
-	if err := limiter(r.dev, "ignore", target); err != nil {
+	if err := limiter(r.dev, "ignore", "none"); err != nil {
 		return err
 	}
 	fmt.Fprintln(r.w, "lab: the app's limit stays raised until it next moves in or out of front")

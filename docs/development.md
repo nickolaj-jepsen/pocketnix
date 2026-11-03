@@ -177,7 +177,7 @@ which one the guest stopped answering in:
 
 ```bash
 pocketnix lab memory
-pocketnix lab memory --limit 2000   # for a VM that fits under the phone's limit
+pocketnix lab memory --limit 2800   # for a VM that fits under the phone's limit
 ```
 
 It takes a few minutes, with the phone locked and no one moving the app, so try

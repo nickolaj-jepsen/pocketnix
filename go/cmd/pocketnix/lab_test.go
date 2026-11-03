@@ -262,16 +262,24 @@ func TestLabNeverLowersALimitOverMemory(t *testing.T) {
 }
 
 func TestLabRestoresAnAppItFoundLifted(t *testing.T) {
-	p := newLabPhone(t, labVM{running: true, memoryMiB: 4096})
+	p := newLabPhone(t, labVM{running: true, guestRAM: true, memoryMiB: 4096})
 	p.d.write("limiter-ignored", []byte("10200"))
-	if err := p.rig(t, labOpts{}).run(context.Background()); err != nil {
+	r := p.rig(t, labOpts{})
+	// As on a phone: a proc state change reapplies the class's limit unless ignored.
+	r.restartVM = func(context.Context) error {
+		if p.d.limiterFile("limiter-ignored") != "10200" {
+			p.d.write("limiter-high", []byte("3221225472"))
+		}
+		return nil
+	}
+	if err := r.run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if got := p.d.limiterFile("limiter-ignored"); got != "10200" {
 		t.Errorf("ignored = %s", got)
 	}
-	if p.atLimit() {
-		t.Error("left the limit down")
+	if got, want := p.d.limiterFile("limiter-high"), strconv.FormatInt(liftedLimitMiB<<20, 10); got != want {
+		t.Errorf("memory.high = %s, want it lifted again", got)
 	}
 }
 
