@@ -178,8 +178,19 @@ class Vm(private val app: Context) {
     val sharedFolders = SharedFolders(app)
     val hostFolders = HostFolderLinks(control, appVersion) { SafFolder(app.contentResolver, android.net.Uri.parse(it.uri)) }
 
+    /** The limiter kill this process told the user of, for the debug dump. */
+    @Volatile private var limiterKill: LimiterKills.Exit? = null
+
     init {
         settings.terminalColors?.let { applyColors(it, "saved") }
+        scope.launch(Dispatchers.IO) {
+            LimiterKills.newest(LimiterKills.read(app), settings.limiterKillSeen)?.let { kill ->
+                settings.limiterKillSeen = kill.timestamp
+                limiterKill = kill
+                console.append("\r\n[pocketnix: ${LimiterKills.MESSAGE}]\r\n")
+                LimiterKills.notify(app)
+            }
+        }
         tabs.alerts = TabAlerts(app) { control.config.value?.hostname }
         gui.selectTab = tabs::selectWindow
         scope.launch { gui.tabWindows.collect { ws -> tabs.windowsChanged(ws.map { it.id }) } }
@@ -620,6 +631,7 @@ class Vm(private val app: Context) {
         add("setup=${managed.setup.value} managed=${control.config.value?.managedFlake}")
         add("${engineLine(_engine.value.launched)} audio=${audio.status.name.lowercase()}")
         add("guest reboots=${_engine.value.guestReboots}")
+        limiterKill?.let { add("limiter kill at=${it.timestamp} description=${it.description}") }
         updates.value?.let { u ->
             add("updates state=${u.state} op=${u.op} available=${u.available} plan=${u.plan} blocked=${u.blocked} error=${u.error}")
             add("updates packages=${u.packages} run=${u.run} generations=${u.generations.map { "${it.number}${if (it.current) "*" else ""}" }}")

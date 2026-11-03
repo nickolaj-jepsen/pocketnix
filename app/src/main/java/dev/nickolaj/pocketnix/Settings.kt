@@ -13,6 +13,11 @@ class Settings(context: Context) {
         get() = prefs.getInt("memoryMb", 2048)
         set(v) = prefs.edit { putInt("memoryMb", v) }
 
+    /** When the last Android memory limiter kill the user was told of happened, in ms since the epoch. */
+    var limiterKillSeen: Long
+        get() = prefs.getLong("limiterKillSeen", 0)
+        set(v) = prefs.edit { putLong("limiterKillSeen", v) }
+
     /** 1, or 0 for one vCPU per host core. */
     var cpus: Int
         get() = prefs.getInt("cpus", 0)

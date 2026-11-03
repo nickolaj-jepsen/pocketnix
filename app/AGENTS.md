@@ -72,7 +72,7 @@ that cross directories.
   the kernel takes most cores and ssh dies while adb stays up, and bringing the
   app to the front recovers it in about 10 s. `system_server` logs `MemoryLimiter:
   onLimitExceeded`. By source, past memHigh plus swap the process is killed
-  (`MemoryLimiter:AnonSwap`).
+  (`MemoryLimiter:AnonSwap`, in `ApplicationExitInfo`'s description; `LimiterKills`).
 - `cmd activity memory-limiter` works from plain adb. `status` prints the limits.
   `manual <app pid> <MiB>` sets both files, though its help says percent, and
   `manual <pid> none` lifts nothing. `ignore <uid>` holds one uid until reboot
