@@ -364,6 +364,8 @@ func shortenSmoke() {
 	// Unkeyed, so that a new wait doesn't compile until it's shortened here too.
 	smokeTimes = smokeWaits{s, s, s, s, s, s, s, s, s, s, s, s, s}
 	smokeTimes.ptyPoll = controlPoll
+	// A busy CI runner can spend a second on the fake's dumps; a test of these waits running out sets its own.
+	smokeTimes.reboot, smokeTimes.boot = time.Minute, time.Minute
 	// outputState waits this long once, between its two reads.
 	smokeTimes.exit = 50 * time.Millisecond
 }
