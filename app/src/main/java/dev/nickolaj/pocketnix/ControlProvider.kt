@@ -142,6 +142,8 @@ class ControlProvider : ContentProvider() {
 
                 "offers" -> out.putString("offers", encode(vm.offers.value.describe()))
 
+                "hog" -> MemoryHog.hold(arg?.toIntOrNull()?.takeIf { it >= 0 } ?: error("hog needs a size in MiB"))
+
                 "self-limiter" -> out.putString(
                     "output",
                     URLEncoder.encode(
