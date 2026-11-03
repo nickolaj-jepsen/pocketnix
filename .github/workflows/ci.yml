@@ -60,9 +60,9 @@ jobs:
       - uses: cachix/cachix-action@v16
         with:
           name: pocketnix
-          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
-          # The Android SDK is unfree: keep it out of a public cache.
-          pushFilter: android-sdk|androidsdk|androidenv
+          # The Android SDK and NDK are unfree, with no redistribution, and a pushed path takes its
+          # closure with it, whatever a pushFilter says: gradle's closure holds them.
+          skipPush: true
       # The JVM tests run against the real agent, compositor and foot; assembleRelease
       # (unsigned here) runs R8, whose rules only a release build exercises.
       - run: nix run .#gradle -- assembleDebug assembleRelease testDebugUnitTest lintDebug --console=plain
