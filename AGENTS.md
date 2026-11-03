@@ -37,6 +37,10 @@ in `docs/development.md`.
   step: batch the changes, test on a cheaper rung between builds, and see what a build
   would rebuild with `nix build --dry-run`. `--builders ''` keeps a build local, under
   binfmt.
+- The owner's Pixel is shared between sessions. Before any adb call, get a go from each
+  session working on pocketnix. A go names who stopped what, and is re-checked just before
+  the first change, because a stopped-looking agent can resume and an earlier go goes
+  stale. Stop your own finished subagents before you release the phone.
 
 ## Keeping docs and tests from drifting
 
